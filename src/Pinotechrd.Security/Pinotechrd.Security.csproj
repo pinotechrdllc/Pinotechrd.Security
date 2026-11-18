@@ -22,4 +22,9 @@
     <ProjectReference Include="..\Pinotechrd.Security.Abstractions\Pinotechrd.Security.Abstractions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Lets the repository's tests exercise the tenant-isolation internals (session-change scanner, search_path binder) directly. -->
+    <InternalsVisibleTo Include="Pinotechrd.Security.Tests" />
+  </ItemGroup>
+
 </Project>

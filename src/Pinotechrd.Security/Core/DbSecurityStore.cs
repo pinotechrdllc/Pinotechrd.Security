@@ -33,7 +33,8 @@ public class DbSecurityStore : ISecurityStore
     public async Task<bool> IsModuleActiveAsync(string tenantId, string moduleCode)
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        
+        if (!SecurityCodes.TryNormalize(moduleCode, out var code)) return false;
+
         // EF Core 10 optimizes this hierarchical join across schemas
         return await (from sub in _db.SystemSubscriptions
                       join map in _db.SubscriptionPlanModules on sub.PlanId equals map.PlanId
@@ -41,7 +42,7 @@ public class DbSecurityStore : ISecurityStore
                       where sub.TenantName == tenantId
                             && sub.IsActive
                             && sub.StartDate <= today && (!sub.EndDate.HasValue || sub.EndDate >= today)
-                            && mod.Code == moduleCode
+                            && mod.Code == code
                             && mod.IsActive
                       select mod.Id)
                       .AnyAsync();

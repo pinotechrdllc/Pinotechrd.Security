@@ -13,7 +13,8 @@ namespace Pinotechrd.Security.Models;
 /// <param name="Permissions">Flattened permission list for the authenticated user.</param>
 /// <param name="RequiresTwoFactor">Indicates whether a second factor is required to continue.</param>
 /// <param name="TwoFactorProviders">Available 2FA providers when second factor is required.</param>
-/// <param name="TwoFactorToken">Temporary token used to continue a 2FA flow.</param>
+/// <param name="TwoFactorToken">Opaque, short-lived token used to continue a 2FA flow. It is bound to the user and the tenant
+/// and is not the user identifier. Return it to the client only, and do not log it.</param>
 /// <param name="User">Optional user projection returned by the authentication flow.</param>
 public record AuthResult(
     bool Succeeded,
