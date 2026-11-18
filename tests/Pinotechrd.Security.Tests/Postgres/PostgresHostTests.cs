@@ -203,6 +203,80 @@ public class PostgresHostTests(PostgresFixture postgres) : IAsyncLifetime
         (await api.PostAsync("/api/auth/login", new LoginRequest(email, TenantDatabaseApi.Password), "a")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task DeleteUserAsync_ShouldBlockRefresh_WhenTheUserIsDeleted(TenantSchemaMode mode)
+    {
+        var api = Api(mode);
+        var email = "del-" + Guid.NewGuid().ToString("N")[..6] + "@a.test";
+        await api.InTenantAsync("a", async sp =>
+        {
+            var created = await sp.GetRequiredService<UserManager<HostUser>>().CreateAsync(
+                new HostUser { UserName = email, Email = email, EmailConfirmed = true }, TenantDatabaseApi.Password);
+            created.Succeeded.Should().BeTrue();
+            return 0;
+        });
+        var (_, refresh) = await api.LoginAsync(email, "a");
+
+        var deleted = await api.InTenantAsync("a", async sp =>
+        {
+            var user = await sp.GetRequiredService<UserManager<HostUser>>().FindByEmailAsync(email);
+            return await sp.GetRequiredService<IPinotechrdSecurityManager<HostUser, HostRole>>().DeleteUserAsync(user!.Id.ToString());
+        });
+
+        deleted.Should().BeTrue();
+        (await api.InTenantAsync("a", sp => sp.GetRequiredService<IRefreshTokenStore>().ValidateAsync(refresh))).IsValid.Should().BeFalse();
+        (await RefreshAsync(api, refresh, "a")).Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task DeleteUserAsync_ShouldRevokeTokens_WhenTheIdIsGivenInUpperCase(TenantSchemaMode mode)
+    {
+        var api = Api(mode);
+        var (email, refresh) = await NewLoggedInUserAsync(api);
+
+        var deleted = await api.InTenantAsync("a", async sp =>
+        {
+            var user = await sp.GetRequiredService<UserManager<HostUser>>().FindByEmailAsync(email);
+            return await sp.GetRequiredService<IPinotechrdSecurityManager<HostUser, HostRole>>().DeleteUserAsync(user!.Id.ToString().ToUpperInvariant());
+        });
+
+        deleted.Should().BeTrue();
+        (await api.InTenantAsync("a", sp => sp.GetRequiredService<IRefreshTokenStore>().ValidateAsync(refresh))).IsValid.Should().BeFalse();
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task SetUserActiveStatusAsync_ShouldRevokeTokens_WhenDeactivatingWithTheIdInUpperCase(TenantSchemaMode mode)
+    {
+        var api = Api(mode);
+        var (email, refresh) = await NewLoggedInUserAsync(api);
+
+        var ok = await api.InTenantAsync("a", async sp =>
+        {
+            var user = await sp.GetRequiredService<UserManager<HostUser>>().FindByEmailAsync(email);
+            return await sp.GetRequiredService<IPinotechrdSecurityManager<HostUser, HostRole>>().SetUserActiveStatusAsync(user!.Id.ToString().ToUpperInvariant(), false);
+        });
+
+        ok.Should().BeTrue();
+        (await api.InTenantAsync("a", sp => sp.GetRequiredService<IRefreshTokenStore>().ValidateAsync(refresh))).IsValid.Should().BeFalse();
+    }
+
+    private static async Task<(string Email, string Refresh)> NewLoggedInUserAsync(TenantDatabaseApi api)
+    {
+        var email = "case-" + Guid.NewGuid().ToString("N")[..6] + "@a.test";
+        await api.InTenantAsync("a", async sp =>
+        {
+            var created = await sp.GetRequiredService<UserManager<HostUser>>().CreateAsync(
+                new HostUser { UserName = email, Email = email, EmailConfirmed = true }, TenantDatabaseApi.Password);
+            created.Succeeded.Should().BeTrue();
+            return 0;
+        });
+        var (_, refresh) = await api.LoginAsync(email, "a");
+        return (email, refresh);
+    }
+
     // ---- Tenant binding of authenticated requests --------------------------------------------
 
     [Theory]
