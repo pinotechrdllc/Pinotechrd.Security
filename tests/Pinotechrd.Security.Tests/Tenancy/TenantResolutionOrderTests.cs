@@ -143,6 +143,51 @@ public class TenantResolutionOrderTests
         error.Should().BeNull();
     }
 
+    private static async Task<Exception?> InvokeWithAuthorizationAsync(bool withFeature, TenantSources sources)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        WithDefaultScheme(services);
+        var context = new DefaultHttpContext { RequestServices = services.BuildServiceProvider() };
+        context.Request.Path = "/api/x";
+        context.Request.Headers["Authorization"] = "Bearer abc";
+        context.Response.Body = new MemoryStream();
+        if (withFeature) context.Features.Set<IAuthenticationFeature>(new FakeAuthenticationFeature());
+        var middleware = new TenantResolutionMiddleware(
+            _ => Task.CompletedTask,
+            new TenantResolutionOptions { Sources = sources },
+            Substitute.For<ILogger<TenantResolutionMiddleware>>());
+        try
+        {
+            await middleware.InvokeAsync(context, new TenantContext(), Substitute.For<ITenantStore>());
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex;
+        }
+    }
+
+    [Theory]
+    [InlineData(TenantSources.Claim | TenantSources.Header)]
+    [InlineData(TenantSources.Claim)]
+    [InlineData(TenantSources.None)]
+    public async Task InvokeAsync_ShouldThrowNamingUseAuthentication_WhenAnAuthorizationHeaderArrivesBeforeAuthentication(TenantSources sources)
+    {
+        var error = await InvokeWithAuthorizationAsync(withFeature: false, sources);
+
+        error.Should().BeOfType<InvalidOperationException>();
+        error!.Message.Should().Contain("UseAuthentication");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldNotThrowForAnAuthorizationHeader_WhenAuthenticationAlreadyRan()
+    {
+        var error = await InvokeWithAuthorizationAsync(withFeature: true, TenantSources.Claim | TenantSources.Header);
+
+        error.Should().BeNull();
+    }
+
     // ---- Real pipeline with a real JWT bearer scheme -----------------------------------------
 
     private static string BearerToken(string tenant)
@@ -228,13 +273,14 @@ public class TenantResolutionOrderTests
     }
 
     [Fact]
-    public async Task Pipeline_ShouldTreatAnInvalidBearerTokenAsAnonymous_AndUseTheHeader()
+    public async Task Pipeline_ShouldUseTheHeader_WhenTheBearerTokenIsInvalid()
     {
         await using var host = await StartAsync(authenticationFirst: true);
 
         var response = await host.Client.SendAsync(Get(header: "tenant-b", bearer: BearerToken("tenant-a") + "x"));
 
-        // A token that fails validation does not authenticate: the request is anonymous, so only the header applies.
+        // A token that fails validation does not authenticate, so the request takes its tenant from the header.
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
         (await response.Content.ReadAsStringAsync()).Should().Be("tenant-b");
     }
 }

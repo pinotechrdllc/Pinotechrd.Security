@@ -18,4 +18,13 @@ public interface ITwoFactorAttemptStore
     /// <param name="expiresAt">When the challenge expires; the count may be dropped after it.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<int> RegisterAttemptAsync(string challengeId, DateTimeOffset expiresAt, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Marks a challenge as having used all its attempts: every later <see cref="RegisterAttemptAsync"/> for it
+    /// must return <see cref="int.MaxValue"/>. Used when a failed attempt could not be recorded elsewhere.
+    /// </summary>
+    /// <param name="challengeId">Random identifier of the two-factor token.</param>
+    /// <param name="expiresAt">When the challenge expires; the mark may be dropped after it.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task ExhaustAsync(string challengeId, DateTimeOffset expiresAt, CancellationToken cancellationToken = default);
 }

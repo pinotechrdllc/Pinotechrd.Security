@@ -6,10 +6,40 @@ namespace Pinotechrd.Security.Interfaces;
 /// Stores and validates opaque refresh tokens bound to user and tenant context.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Tokens belong to a family: the first token of a sign-in starts one, and every token issued by rotating it
 /// joins the same family. Presenting a token that was already consumed is treated as theft (RFC 9700,
 /// section 4.14.2): the store revokes the whole family. Implementations must make
 /// <see cref="ConsumeAsync"/> atomic, so that of two concurrent calls with the same token exactly one succeeds.
+/// </para>
+/// <para>Rules every implementation must follow:</para>
+/// <list type="bullet">
+/// <item><description>A revoked family stays revoked. A token saved into it later must never be consumed
+/// (store it revoked, or refuse it), including a token saved by a rotation that raced the revocation.</description></item>
+/// <item><description><see cref="ConsumeAsync"/> decides in this order: unknown token, <see cref="RefreshTokenConsumeStatus.NotFound"/>;
+/// token of another tenant, <see cref="RefreshTokenConsumeStatus.TenantMismatch"/> (nothing changes); family
+/// revoked, <see cref="RefreshTokenConsumeStatus.Revoked"/>; token already consumed,
+/// <see cref="RefreshTokenConsumeStatus.Reused"/> and the family is revoked, even when the token has also expired
+/// or was revoked on its own; token revoked, <see cref="RefreshTokenConsumeStatus.Revoked"/>; token expired,
+/// <see cref="RefreshTokenConsumeStatus.Expired"/>; otherwise it is consumed.</description></item>
+/// <item><description>Expiry is decided by the store's own clock against the <c>expiresAtUtc</c> given to
+/// <see cref="SaveAsync"/>: an injected <see cref="TimeProvider"/> for an in-process store, the database
+/// clock (<c>now()</c>) for a database store. Keep application and database clocks synchronised; the
+/// comparison happens where the atomic consume happens.</description></item>
+/// <item><description>Saving a token value that already exists must not reset its state; refuse it.</description></item>
+/// <item><description>Store a hash of the token (for example SHA-256), never the token itself.</description></item>
+/// </list>
+/// <para>
+/// PostgreSQL sketch of the atomic consume (one statement; zero rows means "not consumed", and a second,
+/// non-critical query classifies why and revokes the family on reuse):
+/// </para>
+/// <code>
+/// UPDATE refresh_tokens t SET consumed_at = now()
+/// WHERE t.token_hash = @hash AND t.tenant_id = @tenant
+///   AND t.consumed_at IS NULL AND t.revoked_at IS NULL AND t.expires_at &gt; now()
+///   AND NOT EXISTS (SELECT 1 FROM refresh_token_families f WHERE f.family_id = t.family_id AND f.revoked_at IS NOT NULL)
+/// RETURNING t.user_id, t.tenant_id, t.family_id, t.security_stamp;
+/// </code>
 /// </remarks>
 public interface IRefreshTokenStore
 {
@@ -23,6 +53,7 @@ public interface IRefreshTokenStore
     /// <param name="familyId">Family the token joins. <see langword="null"/> starts a new family.</param>
     /// <param name="securityStamp">Security stamp of the user when the token was issued, if the user store has one.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="InvalidOperationException">The token value is already stored (implementations should refuse duplicates).</exception>
     Task SaveAsync(
         string userId,
         string tenantId,

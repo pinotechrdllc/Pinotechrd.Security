@@ -9,11 +9,22 @@ namespace Pinotechrd.Security.Core;
 /// In-memory refresh token store intended as secure baseline behavior.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Thread safe: <see cref="ConsumeAsync"/> lets exactly one of several concurrent calls with the same token succeed.
-/// Tokens are lost on restart and are not shared between instances. Expired entries are not purged.
+/// Follows the rules of <see cref="IRefreshTokenStore"/>; expiry is decided by the injected <see cref="TimeProvider"/>.
+/// Tokens are lost on restart and are not shared between instances.
+/// </para>
+/// <para>
+/// When more than 10,000 tokens are held, saving a token first drops the tokens of every family whose tokens
+/// have all expired, and every revoked family past its latest expiry; the next purge waits until the store has
+/// doubled. A consumed or expired token is kept while its family still has a live token, so its replay is
+/// still <see cref="RefreshTokenConsumeStatus.Reused"/> and revokes the family.
+/// </para>
 /// </remarks>
 public class InMemoryRefreshTokenStore : IRefreshTokenStore
 {
+    private const int MinimumPurgeThreshold = 10_000;
+
     private sealed class RefreshTokenEntry
     {
         public required string UserId { get; init; }
@@ -26,8 +37,14 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
     }
 
     private readonly ConcurrentDictionary<string, RefreshTokenEntry> _tokens = new();
-    private readonly ConcurrentDictionary<string, byte> _revokedFamilies = new();
+    // Revoked family id -> latest expiry of its tokens; kept until that expiry so late saves stay refused.
+    private readonly ConcurrentDictionary<string, DateTime> _revokedFamilies = new();
+    // Family id -> latest expiry of any token saved into it. A token is kept until its whole family has expired,
+    // so replaying an old, consumed token is still recognised as reuse while the family has live tokens.
+    private readonly ConcurrentDictionary<string, DateTime> _familyExpiry = new();
     private readonly TimeProvider _timeProvider;
+    private readonly object _purgeLock = new();
+    private int _purgeThreshold = MinimumPurgeThreshold;
 
     /// <summary>
     /// Initializes the store with the system clock.
@@ -44,7 +61,10 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
         _timeProvider = timeProvider;
     }
 
+    private DateTime UtcNow => _timeProvider.GetUtcNow().UtcDateTime;
+
     /// <inheritdoc />
+    /// <exception cref="InvalidOperationException">The token value is already stored.</exception>
     public Task SaveAsync(
         string userId,
         string tenantId,
@@ -54,17 +74,35 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
         string? securityStamp = null,
         CancellationToken cancellationToken = default)
     {
+        PurgeIfLarge();
+
         var family = familyId ?? Guid.NewGuid().ToString("N");
-        _tokens[HashToken(refreshToken)] = new RefreshTokenEntry
+        var entry = new RefreshTokenEntry
         {
             UserId = userId,
             TenantId = tenantId,
             FamilyId = family,
             SecurityStamp = securityStamp,
-            ExpiresAtUtc = expiresAtUtc,
-            // A token saved into a family revoked meanwhile (for example by a concurrent reuse) is born revoked.
-            Revoked = _revokedFamilies.ContainsKey(family)
+            ExpiresAtUtc = expiresAtUtc
         };
+
+        if (!_tokens.TryAdd(HashToken(refreshToken), entry))
+        {
+            throw new InvalidOperationException("This refresh token is already stored.");
+        }
+
+        _familyExpiry.AddOrUpdate(family, expiresAtUtc, (_, existing) => existing > expiresAtUtc ? existing : expiresAtUtc);
+
+        // A token saved into a family revoked meanwhile (for example by a concurrent reuse) is born revoked.
+        if (_revokedFamilies.TryGetValue(family, out var familyExpiry))
+        {
+            lock (entry)
+            {
+                entry.Revoked = true;
+            }
+
+            _revokedFamilies[family] = familyExpiry > expiresAtUtc ? familyExpiry : expiresAtUtc;
+        }
 
         return Task.CompletedTask;
     }
@@ -89,7 +127,7 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
                 return Task.FromResult(new RefreshTokenValidationResult(false, Reason: "Refresh token already used"));
             }
 
-            if (entry.ExpiresAtUtc <= _timeProvider.GetUtcNow().UtcDateTime)
+            if (entry.ExpiresAtUtc <= UtcNow)
             {
                 return Task.FromResult(new RefreshTokenValidationResult(false, Reason: "Refresh token expired"));
             }
@@ -111,38 +149,38 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
             return Task.FromResult(new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.TenantMismatch));
         }
 
-        bool reused;
         lock (entry)
         {
-            if (entry.Revoked || _revokedFamilies.ContainsKey(entry.FamilyId))
+            if (_revokedFamilies.ContainsKey(entry.FamilyId))
             {
                 return Task.FromResult(new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.Revoked));
             }
 
-            reused = entry.Consumed;
-            if (!reused)
+            if (!entry.Consumed)
             {
-                if (entry.ExpiresAtUtc <= _timeProvider.GetUtcNow().UtcDateTime)
+                if (entry.Revoked)
+                {
+                    return Task.FromResult(new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.Revoked));
+                }
+
+                if (entry.ExpiresAtUtc <= UtcNow)
                 {
                     return Task.FromResult(new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.Expired));
                 }
 
                 entry.Consumed = true;
+                return Task.FromResult(new RefreshTokenConsumeResult(
+                    RefreshTokenConsumeStatus.Consumed,
+                    entry.UserId,
+                    entry.TenantId,
+                    entry.FamilyId,
+                    entry.SecurityStamp));
             }
         }
 
-        if (reused)
-        {
-            RevokeFamily(entry.FamilyId);
-            return Task.FromResult(new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.Reused));
-        }
-
-        return Task.FromResult(new RefreshTokenConsumeResult(
-            RefreshTokenConsumeStatus.Consumed,
-            entry.UserId,
-            entry.TenantId,
-            entry.FamilyId,
-            entry.SecurityStamp));
+        // Already consumed: reuse, even if the token has expired or was revoked on its own since.
+        RevokeFamily(entry.FamilyId);
+        return Task.FromResult(new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.Reused));
     }
 
     /// <inheritdoc />
@@ -162,16 +200,16 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
     /// <inheritdoc />
     public Task RevokeAllForUserAsync(string userId, CancellationToken cancellationToken = default)
     {
-        foreach (var entry in _tokens.Values)
-        {
-            if (!string.Equals(entry.UserId, userId, StringComparison.Ordinal)) continue;
+        var families = _tokens.Values
+            .Where(entry => string.Equals(entry.UserId, userId, StringComparison.Ordinal))
+            .Select(entry => entry.FamilyId)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
 
-            // Revoking the family also covers a token a concurrent rotation saves after this loop.
-            _revokedFamilies.TryAdd(entry.FamilyId, 0);
-            lock (entry)
-            {
-                entry.Revoked = true;
-            }
+        // Revoking the families also covers a token a concurrent rotation saves after this call.
+        foreach (var family in families)
+        {
+            RevokeFamily(family);
         }
 
         return Task.CompletedTask;
@@ -179,7 +217,9 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
 
     private void RevokeFamily(string familyId)
     {
-        _revokedFamilies.TryAdd(familyId, 0);
+        var latestExpiry = UtcNow;
+        _revokedFamilies.AddOrUpdate(familyId, latestExpiry, (_, existing) => existing);
+
         foreach (var entry in _tokens.Values)
         {
             if (!string.Equals(entry.FamilyId, familyId, StringComparison.Ordinal)) continue;
@@ -187,6 +227,43 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
             {
                 entry.Revoked = true;
             }
+
+            if (entry.ExpiresAtUtc > latestExpiry) latestExpiry = entry.ExpiresAtUtc;
+        }
+
+        _revokedFamilies.AddOrUpdate(familyId, latestExpiry, (_, existing) => existing > latestExpiry ? existing : latestExpiry);
+    }
+
+    private void PurgeIfLarge()
+    {
+        if (_tokens.Count + _revokedFamilies.Count <= Volatile.Read(ref _purgeThreshold)) return;
+        if (!Monitor.TryEnter(_purgeLock)) return;
+        try
+        {
+            var now = UtcNow;
+            foreach (var (hash, entry) in _tokens)
+            {
+                // Only when the whole family has expired; a consumed token of a live family must stay to detect reuse.
+                var familyExpiry = _familyExpiry.TryGetValue(entry.FamilyId, out var latest) ? latest : entry.ExpiresAtUtc;
+                if (familyExpiry <= now) _tokens.TryRemove(hash, out _);
+            }
+
+            foreach (var (family, expiry) in _familyExpiry)
+            {
+                if (expiry <= now) _familyExpiry.TryRemove(family, out _);
+            }
+
+            foreach (var (family, expiry) in _revokedFamilies)
+            {
+                if (expiry <= now) _revokedFamilies.TryRemove(family, out _);
+            }
+
+            Volatile.Write(ref _purgeThreshold, Math.Max(MinimumPurgeThreshold, 2 * (_tokens.Count + _revokedFamilies.Count)));
+            // _familyExpiry has at most one entry per family with stored tokens, so it shrinks with _tokens.
+        }
+        finally
+        {
+            Monitor.Exit(_purgeLock);
         }
     }
 

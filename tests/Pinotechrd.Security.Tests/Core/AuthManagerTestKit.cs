@@ -63,6 +63,7 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
     /// <param name="withAttemptStore">False builds the manager without a two-factor attempt store.</param>
     /// <param name="timeProvider">Clock; defaults to a fake clock the test can advance.</param>
     /// <param name="refreshStore">Refresh token store; defaults to a substitute.</param>
+    /// <param name="identityValidator">Optional host validator run when tokens are issued.</param>
     public AuthManagerTestKit(
         bool withDataProtection = true,
         IPinotechrdMessageService? messageService = null,
@@ -70,7 +71,8 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
         bool withTenantContext = true,
         bool withAttemptStore = true,
         FakeTimeProvider? timeProvider = null,
-        IRefreshTokenStore? refreshStore = null)
+        IRefreshTokenStore? refreshStore = null,
+        IIdentityValidator<TUser>? identityValidator = null)
     {
         Time = timeProvider ?? new FakeTimeProvider();
         if (withTenantContext)
@@ -146,7 +148,7 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
                     Audience = "pinotechrd-tests"
                 }
             }),
-            customValidator: null,
+            customValidator: identityValidator,
             messageService: messageService,
             dataProtectionProvider: DataProtection,
             tenantContext: TenantContext,

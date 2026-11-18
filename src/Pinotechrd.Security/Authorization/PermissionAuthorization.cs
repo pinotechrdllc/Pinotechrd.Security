@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
+using Pinotechrd.Security.Core;
 using Pinotechrd.Security.Interfaces;
+using Pinotechrd.Security.Tenancy;
 using System.Security.Claims;
 
 namespace Pinotechrd.Security.Authorization;
@@ -29,19 +31,25 @@ public class PermissionRequirement : IAuthorizationRequirement
     /// <summary>
     /// Initializes a permission requirement from a policy string.
     /// </summary>
+    /// <remarks>
+    /// <see cref="ModuleCode"/> and <see cref="Permission"/> are normalised (trimmed, upper case), as stored codes are,
+    /// so <c>Sales.View</c> and <c>SALES.VIEW</c> are the same requirement. A name without a dot is the permission
+    /// of module <c>GLOBAL</c>, and only the code <c>GLOBAL.NAME</c> grants it.
+    /// </remarks>
+    /// <exception cref="ArgumentException">A part is empty or has characters outside <c>A-Z a-z 0-9 _ . -</c>.</exception>
     public PermissionRequirement(string fullName)
     {
         FullName = fullName;
         var parts = fullName.Split('.', 2);
         if (parts.Length == 2)
         {
-            ModuleCode = parts[0];
-            Permission = parts[1];
+            ModuleCode = SecurityCodes.Normalize(parts[0]);
+            Permission = SecurityCodes.Normalize(parts[1]);
         }
         else
         {
-            ModuleCode = "Global"; // Default or fallback
-            Permission = fullName;
+            ModuleCode = "GLOBAL"; // Default or fallback
+            Permission = SecurityCodes.Normalize(fullName);
         }
     }
 }
@@ -49,16 +57,34 @@ public class PermissionRequirement : IAuthorizationRequirement
 /// <summary>
 /// Handler for validating permission requirements using the SecurityEngine.
 /// </summary>
+/// <remarks>
+/// Before asking the engine, the handler requires an authenticated principal whose tenant claim
+/// (<see cref="TenantResolutionOptions.ClaimType"/>) equals the tenant resolved for the request
+/// (<see cref="TenantContext"/>). A missing claim, two authenticated identities with different tenants, an
+/// unresolved tenant or a difference fails the requirement. Claims of unauthenticated identities are ignored.
+/// This catches a principal authenticated by a scheme the tenant middleware did not see.
+/// </remarks>
 public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionRequirement>
 {
     private readonly ISecurityEngine _securityEngine;
+    private readonly TenantContext? _tenantContext;
+    private readonly string _claimType;
 
     /// <summary>
     /// Initializes the authorization handler.
     /// </summary>
-    public PermissionAuthorizationHandler(ISecurityEngine securityEngine)
+    /// <remarks>
+    /// Without <paramref name="tenantContext"/> every requirement fails, because the tenant cannot be checked.
+    /// <c>AddPinotechrdSecurity</c> registers both optional services.
+    /// </remarks>
+    public PermissionAuthorizationHandler(
+        ISecurityEngine securityEngine,
+        TenantContext? tenantContext = null,
+        TenantResolutionOptions? tenantOptions = null)
     {
         _securityEngine = securityEngine;
+        _tenantContext = tenantContext;
+        _claimType = tenantOptions?.ClaimType ?? new TenantResolutionOptions().ClaimType;
     }
 
     /// <summary>
@@ -66,6 +92,16 @@ public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionReq
     /// </summary>
     protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, PermissionRequirement requirement)
     {
+        var resolvedTenant = _tenantContext?.TenantId;
+        var status = TenantClaims.Read(context.User, _claimType, out var claimTenant);
+        if (string.IsNullOrEmpty(resolvedTenant)
+            || status != TenantClaimStatus.Single
+            || !string.Equals(resolvedTenant, claimTenant, StringComparison.Ordinal))
+        {
+            context.Fail(new AuthorizationFailureReason(this, "The tenant of the principal does not match the tenant of the request."));
+            return;
+        }
+
         // The engine handles: Subscription Check -> Module Check -> User/Role Permission Check
         if (await _securityEngine.CanAccessAsync(requirement.ModuleCode, requirement.Permission))
         {

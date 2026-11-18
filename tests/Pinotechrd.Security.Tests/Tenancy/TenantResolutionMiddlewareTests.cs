@@ -173,23 +173,52 @@ public class TenantResolutionMiddlewareTests
         await tenantStore.Received(1).TenantExistsAsync("tenant-claim");
     }
 
-    [Fact]
-    public async Task InvokeAsync_ShouldIgnoreUnauthenticatedBearerPayload()
+    // A request whose user is not authenticated when the middleware runs takes its tenant from the header, whatever the
+    // Authorization header says: a scheme that authenticates later is checked against that tenant before the endpoint runs.
+    [Theory]
+    [InlineData(MissingTenantBehavior.Reject)]
+    [InlineData(MissingTenantBehavior.Continue)]
+    public async Task InvokeAsync_ShouldUseTheTenantHeader_WhenAuthorizationIsSentButNobodyIsAuthenticated(
+        MissingTenantBehavior onMissing)
     {
-        RequestDelegate next = _ => Task.CompletedTask;
-
-        var middleware = CreateMiddleware(next);
+        var wasNextCalled = false;
+        var middleware = CreateMiddleware(
+            _ => { wasNextCalled = true; return Task.CompletedTask; },
+            new TenantResolutionOptions { OnMissingTenant = onMissing });
 
         var context = new DefaultHttpContext();
         context.Request.Path = "/api/secure";
         context.Response.Body = new MemoryStream();
         context.Request.Headers["Authorization"] = "Bearer eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJzcG9vZi10ZW5hbnQifQ.";
+        context.Request.Headers["TenantId"] = "tenant-b";
 
         var tenantContext = new TenantContext();
         var tenantStore = Substitute.For<ITenantStore>();
+        tenantStore.TenantExistsAsync("tenant-b").Returns(true);
 
         await middleware.InvokeAsync(context, tenantContext, tenantStore);
 
+        wasNextCalled.Should().BeTrue();
+        context.Response.StatusCode.Should().Be(200);
+        tenantContext.TenantId.Should().Be("tenant-b");
+        await tenantStore.Received(1).TenantExistsAsync("tenant-b");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldNotTrustTheTenantInsideAnUnverifiedBearerPayload()
+    {
+        var middleware = CreateMiddleware(_ => Task.CompletedTask);
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/api/secure";
+        context.Response.Body = new MemoryStream();
+        context.Request.Headers["Authorization"] = "Bearer eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJzcG9vZi10ZW5hbnQifQ.";
+        var tenantContext = new TenantContext();
+        var tenantStore = Substitute.For<ITenantStore>();
+        tenantStore.TenantExistsAsync("spoof-tenant").Returns(true);
+
+        await middleware.InvokeAsync(context, tenantContext, tenantStore);
+
+        // No tenant header, and the payload of an unverified token is never read: the request needs a tenant and has none.
         context.Response.StatusCode.Should().Be(400);
         tenantContext.TenantId.Should().BeNull();
         await tenantStore.DidNotReceiveWithAnyArgs().TenantExistsAsync(default!);

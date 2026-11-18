@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Pinotechrd.Security.Interfaces;
@@ -92,13 +93,29 @@ public class TenantResolutionOptions
     /// Sources anonymous requests may use. Default: <see cref="TenantSources.Claim"/> and <see cref="TenantSources.Header"/>.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// An authenticated principal is resolved from its claim only; the header is never read for it, so a header
     /// naming another tenant is ignored and causes no rejection. An authenticated principal without the claim
     /// gets <see cref="TenantResolutionErrorCodes.TenantInvalid"/> on a path that requires a tenant. The claim
     /// comes from a token whose signature was validated, while the header is caller-supplied; RFC 9700 and
-    /// OWASP ASVS treat the validated token as the only authority for the caller's context. The header only
-    /// serves anonymous requests, such as login, and the tenant it names is checked against
-    /// <see cref="ITenantStore"/> before it is used.
+    /// OWASP ASVS treat the validated token as the only authority for the caller's context. The header serves
+    /// requests whose principal is not authenticated when the middleware runs, such as login and refresh, and
+    /// the tenant it names is checked against <see cref="ITenantStore"/> before it is used.
+    /// </para>
+    /// <para>
+    /// Exact rule: the tenant claim is read from authenticated identities only (a claim on an unauthenticated
+    /// identity is ignored); if two authenticated identities carry different tenants, the request is rejected
+    /// with <see cref="TenantResolutionErrorCodes.TenantInvalid"/>. If no identity is authenticated when the
+    /// middleware runs, the request may name its tenant in the header, whatever other headers it carries (an
+    /// expired bearer token, or a gateway's <c>Authorization: Basic</c>).
+    /// </para>
+    /// <para>
+    /// An endpoint can authenticate with its own schemes after this middleware has run. So, before any endpoint of
+    /// the request runs (after authorization), an authenticated user must carry exactly one tenant claim equal to
+    /// the resolved tenant; otherwise the request gets <c>400</c> <see cref="TenantResolutionErrorCodes.TenantInvalid"/>.
+    /// This also applies to an authenticated user without the claim on a path that does not require a tenant.
+    /// Skip paths are not checked.
+    /// </para>
     /// </remarks>
     public TenantSources Sources { get; set; } = TenantSources.Claim | TenantSources.Header;
 
@@ -130,7 +147,8 @@ public class TenantResolutionOptions
 }
 
 /// <summary>
-/// Middleware to resolve the current tenant from the authenticated claim or, for anonymous requests, a header.
+/// Middleware to resolve the current tenant from the authenticated claim or, for requests not authenticated
+/// when it runs, a header (see <see cref="TenantResolutionOptions.Sources"/> for the exact rule).
 /// </summary>
 /// <remarks>
 /// Rejections are written through <see cref="IProblemDetailsService"/> when one is registered
@@ -149,6 +167,7 @@ public class TenantResolutionMiddleware
     private readonly RequestDelegate _next;
     private readonly TenantResolutionOptions _options;
     private readonly ILogger<TenantResolutionMiddleware> _logger;
+    private readonly TenantConsistencyCheck _consistency;
 
     /// <summary>
     /// Initializes the tenant resolution middleware.
@@ -161,6 +180,7 @@ public class TenantResolutionMiddleware
         _next = next;
         _options = options;
         _logger = logger;
+        _consistency = new TenantConsistencyCheck(options, logger);
     }
 
     /// <summary>
@@ -178,18 +198,62 @@ public class TenantResolutionMiddleware
             return;
         }
 
+        // Every endpoint this request runs gets the tenant consistency check, whether routing ran before this
+        // middleware or runs after it: the endpoint feature wraps any endpoint set on the request from now on.
+        context.Features.Set<IEndpointFeature>(new ConsistencyEndpointFeature(context.Features.Get<IEndpointFeature>(), _consistency));
+        context.Items[TenantResolutionRanKey] = true;
+
+        await ResolveAsync(context, tenantContext, tenantStore, path);
+    }
+
+    /// <summary>Key of the <see cref="HttpContext.Items"/> entry set once this middleware has resolved the request.</summary>
+    internal const string TenantResolutionRanKey = "Pinotechrd.Security.TenantResolutionRan";
+
+    /// <summary>
+    /// Endpoint feature that hands out only wrapped endpoints. Routing and re-execution (exception handler, status
+    /// code pages) set the endpoint through <see cref="IEndpointFeature"/>, and the endpoint middleware reads it from
+    /// there, so no endpoint of this request can run without the check.
+    /// </summary>
+    private sealed class ConsistencyEndpointFeature : IEndpointFeature
+    {
+        private readonly TenantConsistencyCheck _check;
+        private Endpoint? _endpoint;
+
+        public ConsistencyEndpointFeature(IEndpointFeature? previous, TenantConsistencyCheck check)
+        {
+            _check = check;
+            _endpoint = previous?.Endpoint is { } current ? check.Wrap(current) : null;
+        }
+
+        public Endpoint? Endpoint
+        {
+            get => _endpoint;
+            set => _endpoint = value == null ? null : _check.Wrap(value);
+        }
+    }
+
+    private async Task ResolveAsync(HttpContext context, TenantContext tenantContext, ITenantStore tenantStore, PathString path)
+    {
         var required = MatchesPrefix(path, _options.RequiredPathPrefix);
         string? tenantId = null;
 
-        if (context.User?.Identity?.IsAuthenticated == true)
+        var claimStatus = TenantClaims.Read(context.User, _options.ClaimType, out var claimTenant);
+        if (claimStatus == TenantClaimStatus.Conflict)
         {
-            // 1. Authenticated principal: the verified claim is the only source.
-            tenantId = context.User.FindFirstValue(_options.ClaimType);
+            // Two authenticated identities name different tenants: neither can be trusted.
+            await RejectAsync(context, _logger, TenantResolutionErrorCodes.TenantInvalid, "Invalid tenant", $"Invalid {_options.HeaderName}.");
+            return;
+        }
+
+        if (claimStatus != TenantClaimStatus.NotAuthenticated)
+        {
+            // 1. Authenticated principal: the verified claim of its authenticated identities is the only source.
+            tenantId = claimTenant;
             if (string.IsNullOrEmpty(tenantId))
             {
                 if (required)
                 {
-                    await RejectAsync(context, TenantResolutionErrorCodes.TenantInvalid, "Invalid tenant", $"Invalid {_options.HeaderName}.");
+                    await RejectAsync(context, _logger, TenantResolutionErrorCodes.TenantInvalid, "Invalid tenant", $"Invalid {_options.HeaderName}.");
                     return;
                 }
 
@@ -197,18 +261,24 @@ public class TenantResolutionMiddleware
                 return;
             }
         }
-        else if (_options.Sources.HasFlag(TenantSources.Header))
+        else
         {
-            // 2. Anonymous request: the header, only once authentication has had its chance to run.
-            await EnsureAuthenticationRanAsync(context);
+            // 2. Not authenticated when this middleware runs: the header, once authentication has had its chance.
+            //    Endpoint-specific schemes that authenticate later are checked by the consistency step.
+            var useHeader = _options.Sources.HasFlag(TenantSources.Header);
+            if (useHeader || context.Request.Headers.ContainsKey("Authorization"))
+            {
+                await EnsureAuthenticationRanAsync(context);
+            }
 
-            if (context.Request.Headers.TryGetValue(_options.HeaderName, out var headerValue))
+            if (useHeader && context.Request.Headers.TryGetValue(_options.HeaderName, out var headerValue))
             {
                 tenantId = headerValue.FirstOrDefault();
             }
         }
 
         // 3. Validation: format first, so a malformed value never reaches the store.
+        //    The store is asked before any tenant-scoped context or model exists.
         if (!string.IsNullOrEmpty(tenantId))
         {
             if (TenantIdentifier.IsValid(tenantId) && await tenantStore.TenantExistsAsync(tenantId))
@@ -218,20 +288,20 @@ public class TenantResolutionMiddleware
                 return;
             }
 
-            await RejectAsync(context, TenantResolutionErrorCodes.TenantInvalid, "Invalid tenant", $"Invalid {_options.HeaderName}.");
+            await RejectAsync(context, _logger, TenantResolutionErrorCodes.TenantInvalid, "Invalid tenant", $"Invalid {_options.HeaderName}.");
             return;
         }
 
         if (required && _options.OnMissingTenant == MissingTenantBehavior.Reject)
         {
-            await RejectAsync(context, TenantResolutionErrorCodes.TenantRequired, "Tenant required", $"{_options.HeaderName} is required.");
+            await RejectAsync(context, _logger, TenantResolutionErrorCodes.TenantRequired, "Tenant required", $"{_options.HeaderName} is required.");
             return;
         }
 
         await _next(context);
     }
 
-    private static bool MatchesPrefix(PathString path, string? prefix)
+    internal static bool MatchesPrefix(PathString path, string? prefix)
     {
         if (string.IsNullOrEmpty(prefix)) return false;
 
@@ -254,9 +324,9 @@ public class TenantResolutionMiddleware
             "app.UseTenantResolution(), so the tenant of an authenticated user comes from its verified claim.");
     }
 
-    private async Task RejectAsync(HttpContext context, string code, string title, string plainTextMessage)
+    internal static async Task RejectAsync(HttpContext context, ILogger logger, string code, string title, string plainTextMessage)
     {
-        _logger.LogDebug("Tenant resolution rejected the request with code {Code}.", code);
+        logger.LogDebug("Tenant resolution rejected the request with code {Code}.", code);
 
         context.Response.StatusCode = StatusCodes.Status400BadRequest;
 

@@ -33,8 +33,23 @@ public static class SecurityExtensions
     /// <param name="configure">Optional options delegate for security settings.</param>
     /// <returns>The same service collection for chaining.</returns>
     /// <remarks>
+    /// <para>
     /// The JWT settings are not checked here. They are validated when the host starts, and the host fails to
     /// start with an <see cref="OptionsValidationException"/> that names each missing or weak setting.
+    /// </para>
+    /// <para>
+    /// Bearer options: in a <c>PostConfigure</c> step, which runs after every <c>Configure</c>, the library sets on
+    /// the final <see cref="TokenValidationParameters"/> (creating it if the application set it to null):
+    /// issuer, audience, lifetime and signing-key validation on; signed tokens and expiration required; the
+    /// configured issuer, audience and key; HMAC-SHA256 as the only algorithm. Every other property the
+    /// application configures, even by replacing the whole object, is kept. Only a <c>PostConfigure</c>
+    /// registered after this call could change these settings.
+    /// </para>
+    /// <para>
+    /// Tenant resolution: <c>UseTenantResolution</c> also checks, right before each endpoint runs, that an
+    /// authenticated user's tenant claim equals the resolved tenant, wherever routing sits in the pipeline.
+    /// Place it after <c>UseAuthentication</c>.
+    /// </para>
     /// </remarks>
     public static IServiceCollection AddPinotechrdSecurity<TContext, TUser, TRole>(
         this IServiceCollection services,
@@ -49,7 +64,19 @@ public static class SecurityExtensions
         // JWT settings are validated when the host starts (or on first use), not here, so tools that build
         // the host without configuration (for example OpenAPI generation at build time) still work.
         services.AddOptions<PinotechrdSecurityOptions>()
-            .Configure(o => o.Jwt = options.Jwt)
+            .Configure(o =>
+            {
+                o.Jwt = options.Jwt;
+                // Keep IOptions<PinotechrdSecurityOptions>.Value.Tenancy equal to the registered TenantResolutionOptions.
+                var tenancy = o.Tenancy;
+                tenancy.HeaderName = options.Tenancy.HeaderName;
+                tenancy.ClaimType = options.Tenancy.ClaimType;
+                tenancy.Sources = options.Tenancy.Sources;
+                tenancy.OnMissingTenant = options.Tenancy.OnMissingTenant;
+                tenancy.RequiredPathPrefix = options.Tenancy.RequiredPathPrefix;
+                tenancy.SkipPaths = options.Tenancy.SkipPaths;
+                tenancy.UseSharedSchemaWhenNoTenant = options.Tenancy.UseSharedSchemaWhenNoTenant;
+            })
             .ValidateOnStart();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<PinotechrdSecurityOptions>, PinotechrdSecurityOptionsValidator>());
 
@@ -96,22 +123,30 @@ public static class SecurityExtensions
         })
         .AddJwtBearer();
 
-        // Built from the validated options when the bearer handler first needs them.
+        // Applied from the validated options in a PostConfigure step, which runs after every Configure, so an
+        // application that changes or replaces TokenValidationParameters keeps its other settings but cannot
+        // drop what the library guarantees.
         services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
-            .Configure<IOptions<PinotechrdSecurityOptions>>((jwt, security) =>
+            .PostConfigure<IOptions<PinotechrdSecurityOptions>, TenantResolutionOptions>((jwt, security, tenancy) =>
             {
+                // The tenant claim must arrive under its own name: inbound claim mapping would rename, for example,
+                // "tid" to http://schemas.microsoft.com/identity/claims/tenantid, and every request would then be
+                // tenant_invalid. Only that claim type is exempted, on this scheme's handler instances; every other
+                // claim keeps the default mapping (sub stays ClaimTypes.NameIdentifier).
+                TenantClaimMapping.Exempt(jwt, tenancy.ClaimType);
+
                 var settings = security.Value.Jwt;
-                jwt.TokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuer = true,
-                    ValidateAudience = true,
-                    ValidateLifetime = true,
-                    ValidateIssuerSigningKey = true,
-                    ValidIssuer = settings.Issuer,
-                    ValidAudience = settings.Audience,
-                    ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
-                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.Secret))
-                };
+                var parameters = jwt.TokenValidationParameters ??= new TokenValidationParameters();
+                parameters.ValidateIssuer = true;
+                parameters.ValidateAudience = true;
+                parameters.ValidateLifetime = true;
+                parameters.ValidateIssuerSigningKey = true;
+                parameters.RequireSignedTokens = true;
+                parameters.RequireExpirationTime = true;
+                parameters.ValidIssuer = settings.Issuer;
+                parameters.ValidAudience = settings.Audience;
+                parameters.ValidAlgorithms = [SecurityAlgorithms.HmacSha256];
+                parameters.IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.Secret));
             });
 
         services.AddAuthorization();
@@ -124,6 +159,20 @@ public static class SecurityExtensions
     /// <summary>
     /// Adds the tenant resolution middleware to the pipeline.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Order: after <c>UseAuthentication()</c>, before <c>UseAuthorization()</c> and <c>UseOutputCache()</c>.
+    /// The middleware also installs an endpoint feature that wraps every endpoint set on the request, by routing
+    /// before or after it or by a re-execution, so that after authorization and before the endpoint runs an
+    /// authenticated user's tenant claim must equal the resolved tenant (<c>400 tenant_invalid</c> otherwise). This
+    /// covers minimal APIs, MVC, Razor Pages and fallback endpoints, including endpoints that authenticate with
+    /// their own schemes, and does not depend on where <c>UseRouting()</c> is. Skip paths are not checked.
+    /// </para>
+    /// <para>
+    /// Not covered: code that calls <c>AuthenticateAsync</c> itself inside an endpoint, and long-lived
+    /// connections (for example SignalR), which are checked only when they connect.
+    /// </para>
+    /// </remarks>
     /// <param name="app">Application pipeline builder.</param>
     /// <returns>The same application builder for chaining.</returns>
     public static IApplicationBuilder UseTenantResolution(this IApplicationBuilder app)

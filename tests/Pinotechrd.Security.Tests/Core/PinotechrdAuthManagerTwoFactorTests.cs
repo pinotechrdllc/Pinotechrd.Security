@@ -701,4 +701,145 @@ public class PinotechrdAuthManagerTwoFactorTests
 
         providers.Should().Equal("Email");
     }
+
+    // ---- Recording a failed code (concurrency) -----------------------------------------------
+
+    private static IdentityResult Concurrency() => IdentityResult.Failed(new IdentityErrorDescriber().ConcurrencyFailure());
+
+    private static int Calls(AuthManagerTestKit<TfUser> kit, string method) =>
+        kit.UserManager.ReceivedCalls().Count(c => c.GetMethodInfo().Name == method);
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldRecordTheFailureAndReloadTheUser_WhenTheCountConflictsTwiceThenSucceeds()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        kit.UserManager.AccessFailedAsync(Arg.Any<TfUser>()).Returns(
+            Task.FromResult(Concurrency()), Task.FromResult(Concurrency()), Task.FromResult(IdentityResult.Success));
+        var findsBefore = Calls(kit, nameof(UserManager<TfUser>.FindByIdAsync));
+
+        var wrong = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", "000000", Tenant);
+
+        wrong.ErrorMessage.Should().Be(InvalidCode);
+        Calls(kit, nameof(UserManager<TfUser>.AccessFailedAsync)).Should().Be(3);
+        // One lookup to read the token, then one reload before each retry.
+        (Calls(kit, nameof(UserManager<TfUser>.FindByIdAsync)) - findsBefore).Should().Be(3);
+
+        var right = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+        right.Succeeded.Should().BeTrue("the challenge stays usable once the failure was recorded");
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldExhaustTheChallenge_WhenTheCountConflictsOnEveryTry()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        kit.UserManager.AccessFailedAsync(Arg.Any<TfUser>()).Returns(Task.FromResult(Concurrency()));
+
+        var wrong = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", "000000", Tenant);
+        var verifiesAfterFirst = VerifyCalls(kit);
+        var right = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+
+        wrong.Succeeded.Should().BeFalse();
+        right.Succeeded.Should().BeFalse("a failure that could not be recorded spends the challenge");
+        right.ErrorMessage.Should().Be(InvalidCode);
+        VerifyCalls(kit).Should().Be(verifiesAfterFirst, "the code of a spent challenge is not verified");
+        Calls(kit, nameof(UserManager<TfUser>.AccessFailedAsync)).Should().BeGreaterThan(1).And.BeLessThanOrEqualTo(20);
+        await AssertNoTokensIssued(kit);
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldExhaustTheChallenge_WhenRecordingTheFailureFailsForAnyOtherReason()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        kit.UserManager.AccessFailedAsync(Arg.Any<TfUser>())
+            .Returns(Task.FromResult(IdentityResult.Failed(new IdentityError { Code = "Boom", Description = "boom" })));
+
+        await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", "000000", Tenant);
+        var right = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+
+        Calls(kit, nameof(UserManager<TfUser>.AccessFailedAsync)).Should().Be(1, "only a concurrency conflict is retried");
+        right.Succeeded.Should().BeFalse();
+        VerifyCalls(kit).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldNotSpendTheChallenge_WhenTheFailureIsRecordedOnTheFirstTry()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+
+        await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", "000000", Tenant);
+        var right = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+
+        right.Succeeded.Should().BeTrue();
+    }
+
+    // ---- The correct-code path ----------------------------------------------------------------
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldFail_WhenResettingTheFailureCountKeepsFailing()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        kit.UserManager.ResetAccessFailedCountAsync(Arg.Any<TfUser>())
+            .Returns(Task.FromResult(IdentityResult.Failed(new IdentityError { Code = "Boom" })));
+
+        var result = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+
+        result.Succeeded.Should().BeFalse();
+        await AssertNoTokensIssued(kit);
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldFail_WhenResettingTheFailureCountConflictsOnEveryTry()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        kit.UserManager.ResetAccessFailedCountAsync(Arg.Any<TfUser>()).Returns(Task.FromResult(Concurrency()));
+
+        var result = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+
+        result.Succeeded.Should().BeFalse();
+        await AssertNoTokensIssued(kit);
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldSucceed_WhenResettingTheFailureCountConflictsOnceThenSucceeds()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        kit.UserManager.ResetAccessFailedCountAsync(Arg.Any<TfUser>())
+            .Returns(Task.FromResult(Concurrency()), Task.FromResult(IdentityResult.Success));
+
+        var result = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+
+        result.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldRetryTheStampRenewal_WhenItConflictsWhileTheStampIsStillTheTokens()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        kit.UserManager.UpdateSecurityStampAsync(Arg.Any<TfUser>()).Returns(
+            Task.FromResult(Concurrency()),
+            Task.FromResult(IdentityResult.Success));
+
+        var result = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+
+        result.Succeeded.Should().BeTrue();
+        await kit.UserManager.Received(2).UpdateSecurityStampAsync(user);
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldFail_WhenAConcurrentVerificationAlreadyRenewedTheStamp()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        var code = kit.CodeFor(user);
+        kit.UserManager.UpdateSecurityStampAsync(Arg.Any<TfUser>()).Returns(_ =>
+        {
+            kit.ChangeStamp(user); // the other verification of the same token got there first
+            return Task.FromResult(Concurrency());
+        });
+
+        var result = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", code, Tenant);
+
+        result.Succeeded.Should().BeFalse();
+        await kit.UserManager.Received(1).UpdateSecurityStampAsync(user);
+        await AssertNoTokensIssued(kit);
+    }
 }

@@ -657,6 +657,157 @@ public class TenantResolutionMiddlewareContractTests
         run.TenantContext.TenantId.Should().Be(guid);
     }
 
+    // ---- Credentials and several identities --------------------------------------------------
+
+    [Theory]
+    [InlineData(MissingTenantBehavior.Reject)]
+    [InlineData(MissingTenantBehavior.Continue)]
+    public async Task AuthorizationHeader_ShouldNotStopTheTenantHeader_WhenNobodyIsAuthenticated(MissingTenantBehavior onMissing)
+    {
+        var context = NewContext("/api/x");
+        context.Request.Headers["Authorization"] = "Bearer something";
+
+        var run = await RunAsync(
+            new TenantResolutionOptions { OnMissingTenant = onMissing },
+            headerTenant: "tenant-b",
+            validTenants: ["tenant-b"],
+            context: context);
+
+        run.NextCalled.Should().BeTrue();
+        run.TenantContext.TenantId.Should().Be("tenant-b");
+        run.Context.Response.StatusCode.Should().Be(200);
+    }
+
+    [Theory]
+    [InlineData("Basic dXNlcjpwYXNz")]
+    [InlineData("Negotiate abc")]
+    [InlineData("Bearer expired.token.value")]
+    [InlineData("")]
+    public async Task AnyAuthorizationHeaderValue_ShouldLeaveTheTenantHeaderInForce(string value)
+    {
+        var context = NewContext("/api/x");
+        context.Request.Headers["Authorization"] = value;
+
+        var run = await RunAsync(headerTenant: "tenant-b", validTenants: ["tenant-b"], context: context);
+
+        run.TenantContext.TenantId.Should().Be("tenant-b");
+        await run.Store.Received(1).TenantExistsAsync("tenant-b");
+    }
+
+    [Fact]
+    public async Task AuthorizationHeader_ShouldNotChangeAnAuthenticatedRequest_WhichStillUsesItsClaim()
+    {
+        var context = NewContext("/api/x");
+        context.Request.Headers["Authorization"] = "Bearer something";
+
+        var run = await RunAsync(
+            headerTenant: "tenant-b",
+            user: Authenticated("tenant-a"),
+            validTenants: ["tenant-a", "tenant-b"],
+            context: context);
+
+        run.TenantContext.TenantId.Should().Be("tenant-a");
+        await run.Store.DidNotReceive().TenantExistsAsync("tenant-b");
+    }
+
+    [Fact]
+    public async Task SecondIdentity_ShouldProvideTheClaim_WhenOnlyItIsAuthenticated_AndTheHeaderIsNeverRead()
+    {
+        var unauthenticated = new ClaimsIdentity([new Claim("sub", "someone")]);
+        var authenticated = new ClaimsIdentity([new Claim("tenant_id", "tenant-a")], "Bearer");
+
+        var run = await RunAsync(
+            headerTenant: "tenant-b",
+            user: new ClaimsPrincipal([unauthenticated, authenticated]),
+            validTenants: ["tenant-a", "tenant-b"]);
+
+        run.NextCalled.Should().BeTrue();
+        run.TenantContext.TenantId.Should().Be("tenant-a");
+        await run.Store.DidNotReceive().TenantExistsAsync("tenant-b");
+    }
+
+    // The claim must come from an authenticated identity: an unauthenticated identity that happens to carry a
+    // tenant_id claim must not decide the tenant (the permission handler already ignores such identities).
+    [Fact]
+    public async Task SecondIdentity_ShouldUseTheAuthenticatedIdentitysClaim_NotTheClaimOfAnUnauthenticatedFirstIdentity()
+    {
+        var unauthenticated = new ClaimsIdentity([new Claim("tenant_id", "tenant-evil")]);
+        var authenticated = new ClaimsIdentity([new Claim("tenant_id", "tenant-a")], "Bearer");
+
+        var run = await RunAsync(
+            user: new ClaimsPrincipal([unauthenticated, authenticated]),
+            validTenants: ["tenant-a", "tenant-evil"]);
+
+        run.TenantContext.TenantId.Should().Be("tenant-a");
+        await run.Store.DidNotReceive().TenantExistsAsync("tenant-evil");
+    }
+
+    [Fact]
+    public async Task UnauthenticatedIdentityWithAClaim_ShouldNeverProvideTheTenant_WhenNoIdentityIsAuthenticated()
+    {
+        var unauthenticated = new ClaimsIdentity([new Claim("tenant_id", "tenant-a")]);
+
+        var run = await RunAsync(user: new ClaimsPrincipal(unauthenticated), validTenants: ["tenant-a"]);
+
+        run.TenantContext.TenantId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TwoAuthenticatedIdentitiesWithDifferentTenants_ShouldBeRejectedAsTenantInvalid()
+    {
+        var first = new ClaimsIdentity([new Claim("tenant_id", "tenant-a")], "Bearer");
+        var second = new ClaimsIdentity([new Claim("tenant_id", "tenant-b")], "Cookie");
+
+        var run = await RunAsync(
+            headerTenant: "tenant-a",
+            user: new ClaimsPrincipal([first, second]),
+            validTenants: ["tenant-a", "tenant-b"],
+            withProblemDetails: true);
+
+        run.NextCalled.Should().BeFalse();
+        run.Context.Response.StatusCode.Should().Be(400);
+        run.Json!.RootElement.GetProperty("code").GetString().Should().Be("tenant_invalid");
+        run.TenantContext.TenantId.Should().BeNull();
+        await run.Store.DidNotReceiveWithAnyArgs().TenantExistsAsync(default!);
+    }
+
+    [Fact]
+    public async Task TwoAuthenticatedIdentitiesWithTheSameTenant_ShouldResolveThatTenant()
+    {
+        var first = new ClaimsIdentity([new Claim("tenant_id", "tenant-a")], "Bearer");
+        var second = new ClaimsIdentity([new Claim("tenant_id", "tenant-a")], "Cookie");
+
+        var run = await RunAsync(user: new ClaimsPrincipal([first, second]), validTenants: ["tenant-a"]);
+
+        run.NextCalled.Should().BeTrue();
+        run.TenantContext.TenantId.Should().Be("tenant-a");
+    }
+
+    [Fact]
+    public async Task OneIdentityWithTwoDifferentTenantClaims_ShouldBeRejected()
+    {
+        var identity = new ClaimsIdentity([new Claim("tenant_id", "tenant-a"), new Claim("tenant_id", "tenant-b")], "Bearer");
+
+        var run = await RunAsync(user: new ClaimsPrincipal(identity), validTenants: ["tenant-a", "tenant-b"]);
+
+        run.NextCalled.Should().BeFalse();
+        run.Context.Response.StatusCode.Should().Be(400);
+    }
+
+    [Fact]
+    public async Task ClaimOnAnUnauthenticatedIdentity_ShouldBeIgnored_SoTheHeaderIsUsed()
+    {
+        var unauthenticated = new ClaimsIdentity([new Claim("tenant_id", "tenant-a")]);
+
+        var run = await RunAsync(
+            headerTenant: "tenant-b",
+            user: new ClaimsPrincipal(unauthenticated),
+            validTenants: ["tenant-a", "tenant-b"]);
+
+        run.TenantContext.TenantId.Should().Be("tenant-b");
+        await run.Store.DidNotReceive().TenantExistsAsync("tenant-a");
+    }
+
     // ---- Support ----------------------------------------------------------------------------
 
     private sealed record Run(

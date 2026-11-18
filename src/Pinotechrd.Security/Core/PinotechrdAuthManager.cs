@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Pinotechrd.Security.Entities;
 using Pinotechrd.Security.Enums;
@@ -27,9 +28,16 @@ namespace Pinotechrd.Security.Core;
 /// <para>
 /// Tenant binding: every token is issued for the tenant the request was resolved for
 /// (<see cref="TenantContext"/>). Login, two-factor completion and refresh fail with the generic error when
-/// no tenant is resolved or when the tenant passed in differs from it. In the schema-per-tenant model the
-/// user is looked up through the tenant's schema, so finding the user is what proves membership; with a
-/// shared schema, use <see cref="IIdentityValidator{TUser}"/> to check membership.
+/// no tenant is resolved or when the tenant passed in differs from it.
+/// </para>
+/// <para>
+/// Membership: this class does not check that the user belongs to the tenant. Finding the user proves
+/// membership only when the user store reads the tenant's own tables, which holds in exactly two setups of
+/// <see cref="Data.PinotechrdSecurityDbContext{TUser, TRole}"/>: <see cref="Data.TenantSchemaMode.SchemaPerTenantInModel"/>
+/// with <c>UsePinotechrdSecurity()</c> on the context options, or <see cref="Data.TenantSchemaMode.SearchPath"/>
+/// with <c>search_path</c> set to the resolved tenant's schema on every connection. In any other setup,
+/// including a shared schema or a context of your own, a user of one tenant can obtain a token for another
+/// tenant unless <see cref="IIdentityValidator{TUser}"/> rejects it; implement that hook to check membership.
 /// </para>
 /// <para>
 /// Login failures for an unknown user, an inactive user (<see cref="BaseSecurityUser.IsActive"/>), a wrong
@@ -47,7 +55,9 @@ namespace Pinotechrd.Security.Core;
 /// Protection. The token is bound to the user, the tenant and the user's security stamp, and expires
 /// after five minutes. Each token allows five code attempts, counted through
 /// <see cref="ITwoFactorAttemptStore"/> before the code is checked, so concurrent guesses are counted too.
-/// Wrong codes also count toward the Identity lockout. A successful verification renews the security
+/// Wrong codes also count toward the Identity lockout: a count lost to a concurrent update is retried after
+/// reloading the user, and a count that still cannot be recorded spends the token's remaining attempts.
+/// A successful verification renews the security
 /// stamp, which invalidates the token and the code just used.
 /// </para>
 /// <para>
@@ -80,6 +90,9 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     private readonly TenantContext? _tenantContext;
     private readonly ITwoFactorAttemptStore? _twoFactorAttempts;
     private readonly TimeProvider _timeProvider;
+    private readonly ISecurityDbContext? _securityDbContext;
+    private readonly string _tenantClaimType;
+    private const int MaxFailedCountRetries = 10;
 
     /// <summary>
     /// Initializes the authentication manager.
@@ -102,7 +115,9 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         IDataProtectionProvider? dataProtectionProvider = null,
         TenantContext? tenantContext = null,
         ITwoFactorAttemptStore? twoFactorAttemptStore = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ISecurityDbContext? securityDbContext = null,
+        TenantResolutionOptions? tenantOptions = null)
     {
         _userManager = userManager;
         _signInManager = signInManager;
@@ -116,6 +131,10 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         _tenantContext = tenantContext;
         _twoFactorAttempts = twoFactorAttemptStore;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _securityDbContext = securityDbContext;
+        // One source of truth for the claim name: the TenantResolutionOptions singleton that the middleware, the
+        // permission handler, the engine and the consistency check read.
+        _tenantClaimType = tenantOptions?.ClaimType ?? _options.Tenancy.ClaimType;
     }
 
     /// <inheritdoc />
@@ -193,7 +212,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         {
             new Claim("id", userId),
             new Claim("name", fullName),
-            new Claim("tenant_id", tenantId),
+            new Claim(_tenantClaimType, tenantId),
             new Claim(ClaimTypes.Email, email)
         };
 
@@ -296,28 +315,41 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         if (!valid)
         {
             // The per-token count above already holds this failure, even if this update fails.
-            if (_userManager.SupportsUserLockout) await _userManager.AccessFailedAsync(user);
+            // If the failure cannot be recorded (for example a concurrency conflict that survives the retries),
+            // the challenge is spent: no further code is accepted for this token.
+            if (_userManager.SupportsUserLockout && !await RecordFailedAttemptAsync(user))
+                await _twoFactorAttempts!.ExhaustAsync(ticket.ChallengeId, ticket.ExpiresAt);
             return AuthResult.Failure(InvalidCode);
         }
 
         // A concurrent failure may have locked the account after the first check.
-        if (_userManager.SupportsUserLockout)
-        {
-            if (await _userManager.IsLockedOutAsync(user)) return AuthResult.Failure(InvalidCode);
-            await _userManager.ResetAccessFailedCountAsync(user);
-        }
+        if (_userManager.SupportsUserLockout && await _userManager.IsLockedOutAsync(user))
+            return AuthResult.Failure(InvalidCode);
 
-        // Single use: a new security stamp invalidates this token and the code just used.
+        // Single use: a new security stamp invalidates this token and the code just used. It is renewed first;
+        // a concurrency conflict is retried only while the stored stamp is still the token's, so of two
+        // concurrent verifications of one token only one can renew it.
         if (_userManager.SupportsUserSecurityStamp)
         {
-            var stampResult = await _userManager.UpdateSecurityStampAsync(user);
-            if (!stampResult.Succeeded) return AuthResult.Failure(InvalidSession);
+            var renewed = await RetryOnConcurrencyAsync(
+                user,
+                u => _userManager.UpdateSecurityStampAsync(u),
+                async u => string.Equals(await _userManager.GetSecurityStampAsync(u) ?? string.Empty, ticket.Stamp, StringComparison.Ordinal));
+            if (renewed == null) return AuthResult.Failure(InvalidSession);
+            user = renewed;
+        }
+
+        if (_userManager.SupportsUserLockout)
+        {
+            var reset = await RetryOnConcurrencyAsync(user, u => _userManager.ResetAccessFailedCountAsync(u));
+            if (reset == null) return AuthResult.Failure(InvalidSession);
+            user = reset;
         }
 
         return await BuildAuthenticatedResultAsync(user, ticket.TenantId);
     }
 
-    private sealed record TwoFactorTicket(TUser User, string TenantId, string ChallengeId, DateTimeOffset ExpiresAt);
+    private sealed record TwoFactorTicket(TUser User, string TenantId, string ChallengeId, DateTimeOffset ExpiresAt, string Stamp);
 
     private async Task<string> CreateTwoFactorTokenAsync(TUser user, string tenantId)
     {
@@ -371,7 +403,58 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             if (!string.Equals(stamp, parts[2] ?? string.Empty, StringComparison.Ordinal)) return null;
         }
 
-        return new TwoFactorTicket(user, tenantId, parts[3]!, expiresAt);
+        return new TwoFactorTicket(user, tenantId, parts[3]!, expiresAt, parts[2] ?? string.Empty);
+    }
+
+    /// <summary>
+    /// Increments the Identity failed-access count. Concurrent wrong codes make the update fail on the concurrency
+    /// stamp; the user is then reloaded and the increment retried, a bounded number of times.
+    /// </summary>
+    /// <returns><see langword="true"/> when the failure was recorded.</returns>
+    private async Task<bool> RecordFailedAttemptAsync(TUser user)
+        => await RetryOnConcurrencyAsync(user, u => _userManager.AccessFailedAsync(u)) != null;
+
+    /// <summary>
+    /// Runs a user update; on a concurrency conflict, reloads the user and, if <paramref name="stillValid"/>
+    /// allows, retries, up to <see cref="MaxFailedCountRetries"/> times.
+    /// </summary>
+    /// <returns>The (possibly reloaded) user when the update succeeded; otherwise <see langword="null"/>.</returns>
+    private async Task<TUser?> RetryOnConcurrencyAsync(
+        TUser user,
+        Func<TUser, Task<IdentityResult>> update,
+        Func<TUser, Task<bool>>? stillValid = null)
+    {
+        for (var attempt = 0; attempt < MaxFailedCountRetries; attempt++)
+        {
+            var result = await update(user);
+            if (result?.Succeeded == true) return user;
+
+            var concurrency = result?.Errors.Any(e => e.Code == nameof(IdentityErrorDescriber.ConcurrencyFailure)) == true;
+            if (!concurrency) return null;
+
+            var reloaded = await ReloadUserAsync(user);
+            if (reloaded == null) return null;
+            if (stillValid != null && !await stillValid(reloaded)) return null;
+            user = reloaded;
+        }
+
+        return null;
+    }
+
+    private async Task<TUser?> ReloadUserAsync(TUser user)
+    {
+        // An EF Core store keeps returning the tracked (stale) instance from FindByIdAsync, so reload the entry.
+        if (_securityDbContext is DbContext context)
+        {
+            var entry = context.Entry(user);
+            if (entry.State != EntityState.Detached)
+            {
+                await entry.ReloadAsync();
+                return entry.State == EntityState.Detached ? null : user;
+            }
+        }
+
+        return await _userManager.FindByIdAsync(await _userManager.GetUserIdAsync(user));
     }
 
     private async Task<bool> IsValidProviderAsync(TUser user, string provider)
@@ -433,7 +516,9 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
                 return AuthResult.Failure(InvalidRefreshToken);
         }
 
-        return await BuildAuthenticatedResultAsync(user, tenantId, consumed.FamilyId);
+        var refreshed = await BuildAuthenticatedResultAsync(user, tenantId, consumed.FamilyId);
+        // A failing IIdentityValidator is reported like every other refresh failure.
+        return refreshed.Succeeded ? refreshed : AuthResult.Failure(InvalidRefreshToken);
     }
 
     /// <inheritdoc />

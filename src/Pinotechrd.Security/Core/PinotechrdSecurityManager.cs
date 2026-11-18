@@ -260,6 +260,10 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Codes are normalised (trimmed, upper case). Returns <see langword="false"/> and changes nothing when a code
+    /// is outside the code alphabet or names a permission that does not exist.
+    /// </remarks>
     public async Task<bool> AssignPermissionsToRoleAsync(string roleId, IEnumerable<string> permissionCodes)
     {
         if (!Guid.TryParse(roleId, out var roleGuid)) return false;
@@ -275,25 +279,32 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
             // but the implementation PinotechrdSecurityDbContext IS a DbContext.
             if (_securityDb is DbContext dbContext)
             {
-                var currentAssignments = await dbContext.Set<RolePermission>()
-                    .Where(rp => rp.RoleId == roleGuid)
-                    .ToListAsync();
-
-                // 2. Remove all current
-                dbContext.Set<RolePermission>().RemoveRange(currentAssignments);
-
-                // 3. Add new ones
-                if (permissionCodes != null && permissionCodes.Any())
+                // 1. Every requested code must be valid and exist; otherwise nothing changes.
+                var wanted = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var code in permissionCodes ?? [])
                 {
-                    var permissionIds = await _securityDb.Permissions
-                        .Where(p => permissionCodes.Contains(p.Code))
+                    if (!SecurityCodes.TryNormalize(code, out var normalized)) return false;
+                    wanted.Add(normalized);
+                }
+
+                var permissionIds = wanted.Count == 0
+                    ? []
+                    : await _securityDb.Permissions
+                        .Where(p => wanted.Contains(p.Code))
                         .Select(p => p.Id)
                         .ToListAsync();
 
-                    foreach (var permissionId in permissionIds)
-                    {
-                        dbContext.Set<RolePermission>().Add(RolePermission.Create(roleGuid, permissionId));
-                    }
+                if (permissionIds.Count != wanted.Count) return false;
+
+                // 2. Replace the current assignments
+                var currentAssignments = await dbContext.Set<RolePermission>()
+                    .Where(rp => rp.RoleId == roleGuid)
+                    .ToListAsync();
+                dbContext.Set<RolePermission>().RemoveRange(currentAssignments);
+
+                foreach (var permissionId in permissionIds)
+                {
+                    dbContext.Set<RolePermission>().Add(RolePermission.Create(roleGuid, permissionId));
                 }
 
                 await _securityDb.SaveChangesAsync();
@@ -366,7 +377,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
             return false;
         }
 
-        var byCode = new Dictionary<string, PermissionAccessType>(StringComparer.OrdinalIgnoreCase);
+        var byCode = new Dictionary<string, PermissionAccessType>(StringComparer.Ordinal);
         foreach (var item in overrides ?? [])
         {
             if (string.IsNullOrWhiteSpace(item.Code))
@@ -374,15 +385,20 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
                 continue;
             }
 
-            if (byCode.TryGetValue(item.Code, out var current) && current == PermissionAccessType.Deny)
+            if (!SecurityCodes.TryNormalize(item.Code, out var code))
+            {
+                return false;
+            }
+
+            if (byCode.TryGetValue(code, out var current) && current == PermissionAccessType.Deny)
             {
                 continue;
             }
 
-            byCode[item.Code] = item.Access;
+            byCode[code] = item.Access;
         }
 
-        var wanted = byCode.Keys.Select(code => code.ToUpperInvariant()).ToList();
+        var wanted = byCode.Keys.ToList();
         var permissions = wanted.Count == 0
             ? []
             : await _securityDb.Permissions.Where(permission => wanted.Contains(permission.Code)).ToListAsync();
@@ -398,7 +414,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
 
         foreach (var (code, access) in byCode)
         {
-            var permission = permissions.First(item => string.Equals(item.Code, code, StringComparison.OrdinalIgnoreCase));
+            var permission = permissions.First(item => string.Equals(item.Code, code, StringComparison.Ordinal));
             var row = access == PermissionAccessType.Deny
                 ? UserModulePermission.CreateDeny(userGuid, permission.Id)
                 : UserModulePermission.CreateAllow(userGuid, permission.Id);

@@ -63,4 +63,44 @@ public class InMemoryTwoFactorAttemptStoreTests
         (await store.RegisterAttemptAsync("expired", longLived)).Should().Be(1);
         (await store.RegisterAttemptAsync("live", longLived)).Should().Be(2);
     }
+
+    [Fact]
+    public async Task RegisterAttemptAsync_ShouldReturnIntMaxValue_AfterTheChallengeIsExhausted()
+    {
+        var store = new InMemoryTwoFactorAttemptStore();
+        var expires = DateTimeOffset.UtcNow.AddMinutes(5);
+        await store.RegisterAttemptAsync("a", expires);
+
+        await store.ExhaustAsync("a", expires);
+
+        (await store.RegisterAttemptAsync("a", expires)).Should().Be(int.MaxValue);
+        (await store.RegisterAttemptAsync("a", expires)).Should().Be(int.MaxValue);
+    }
+
+    [Fact]
+    public async Task ExhaustAsync_ShouldSpendAChallengeThatHasNeverBeenUsed_AndNotTouchOthers()
+    {
+        var store = new InMemoryTwoFactorAttemptStore();
+        var expires = DateTimeOffset.UtcNow.AddMinutes(5);
+
+        await store.ExhaustAsync("spent", expires);
+
+        (await store.RegisterAttemptAsync("spent", expires)).Should().Be(int.MaxValue);
+        (await store.RegisterAttemptAsync("other", expires)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ExhaustAsync_ShouldSpendTheChallengeEvenWhenCalledConcurrentlyWithAttempts()
+    {
+        var store = new InMemoryTwoFactorAttemptStore();
+        var expires = DateTimeOffset.UtcNow.AddMinutes(5);
+
+        await Task.WhenAll(Enumerable.Range(0, 50).Select(i => Task.Run(async () =>
+        {
+            if (i == 25) await store.ExhaustAsync("a", expires);
+            else await store.RegisterAttemptAsync("a", expires);
+        })));
+
+        (await store.RegisterAttemptAsync("a", expires)).Should().Be(int.MaxValue);
+    }
 }

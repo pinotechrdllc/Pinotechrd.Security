@@ -16,6 +16,7 @@ namespace Pinotechrd.Security.Core;
 public class JwtTokenProvider : ITokenProvider
 {
     private readonly JwtSettings _settings;
+    private readonly string _tenantClaimType;
 
     /// <summary>
     /// Initializes the token provider using configured JWT settings.
@@ -27,6 +28,7 @@ public class JwtTokenProvider : ITokenProvider
     public JwtTokenProvider(IOptions<PinotechrdSecurityOptions> options)
     {
         _settings = options.Value.Jwt;
+        _tenantClaimType = options.Value.Tenancy.ClaimType;
         JwtSettingsRules.ThrowIfInvalid(_settings);
     }
 
@@ -71,7 +73,8 @@ public class JwtTokenProvider : ITokenProvider
             ValidateLifetime = false 
         };
 
-        var tokenHandler = new JwtSecurityTokenHandler();
+        // Same claim names as the bearer handler: the tenant claim type is exempt from inbound mapping.
+        var tokenHandler = Tenancy.TenantClaimMapping.LegacyHandler(_tenantClaimType);
         var principal = tokenHandler.ValidateToken(token, tokenValidationParameters, out SecurityToken securityToken);
         
         if (securityToken is not JwtSecurityToken jwtSecurityToken || 

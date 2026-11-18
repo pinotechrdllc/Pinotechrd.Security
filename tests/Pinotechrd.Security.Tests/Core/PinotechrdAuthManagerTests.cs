@@ -286,4 +286,41 @@ public class PinotechrdAuthManagerTests
         unknown.Succeeded.Should().BeFalse();
         unknown.Should().Be(badToken);
     }
+
+    // ---- Host validator ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task RefreshAsync_ShouldReturnExactlyInvalidToken_WhenTheIdentityValidatorFails()
+    {
+        var validator = Substitute.For<IIdentityValidator<RefreshUser>>();
+        validator.ValidateAsync(Arg.Any<RefreshUser>(), Arg.Any<string>())
+            .Returns(Task.FromResult(IdentityValidationResult.Failure("Employee 4711 is suspended in tenant tenant-a")));
+        var kit = new AuthManagerTestKit<RefreshUser>(tenant: Tenant, identityValidator: validator);
+        var user = kit.AddUser("alice@x.test");
+        Consumes(kit, "refresh-1", Consumed(user, kit.StampOf(user)));
+
+        var result = await kit.Manager.RefreshAsync("refresh-1");
+
+        result.Should().Be(InvalidToken);
+        await validator.Received(1).ValidateAsync(user, Tenant);
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task LoginAsync_ShouldReportTheValidatorMessage_ButRefreshHidesIt()
+    {
+        var validator = Substitute.For<IIdentityValidator<RefreshUser>>();
+        validator.ValidateAsync(Arg.Any<RefreshUser>(), Arg.Any<string>())
+            .Returns(Task.FromResult(IdentityValidationResult.Failure("not a member")));
+        var kit = new AuthManagerTestKit<RefreshUser>(tenant: Tenant, identityValidator: validator);
+        var user = kit.AddUser("alice@x.test");
+        Consumes(kit, "refresh-1", Consumed(user, kit.StampOf(user)));
+
+        var login = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<RefreshUser>.Password, Tenant);
+        var refresh = await kit.Manager.RefreshAsync("refresh-1");
+
+        login.Succeeded.Should().BeFalse();
+        login.ErrorMessage.Should().Be("not a member");
+        refresh.ErrorMessage.Should().Be("Invalid token");
+    }
 }

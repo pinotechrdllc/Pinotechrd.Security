@@ -432,3 +432,4 @@ override Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.GetHashCode() 
 override Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.ToString() -> string!
 static Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.operator !=(Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult? left, Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult? right) -> bool
 static Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.operator ==(Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult? left, Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult? right) -> bool
+Pinotechrd.Security.Interfaces.ITwoFactorAttemptStore.ExhaustAsync(string! challengeId, System.DateTimeOffset expiresAt, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!

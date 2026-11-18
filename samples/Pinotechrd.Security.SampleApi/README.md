@@ -2,6 +2,8 @@
 
 Minimal executable sample for consuming `Pinotechrd.Security` in an ASP.NET Core API.
 
+It uses `PinotechrdSecurityDbContext` with `UsePinotechrdSecurity()`, one in-memory database per tenant (standing in for one schema per tenant), and one demo user per tenant: `alice@tenant-a.test` in `tenant-a` and `bob@tenant-b.test` in `tenant-b`, both with the password `Sample-Passw0rd`. Demo only: never ship fixed credentials.
+
 ## Run
 
 ```bash
@@ -12,36 +14,48 @@ dotnet run --project samples/Pinotechrd.Security.SampleApi/Pinotechrd.Security.S
 
 - `GET /health`
   - No tenant required
-- `POST /api/auth/token`
-  - Issues access + refresh token for a valid tenant (`demo`, `tenant-a`, `tenant-b`)
+- `POST /api/auth/login`
+  - Anonymous. Logs in through `IPinotechrdAuthManager` for the tenant in the `TenantId` header (`tenant-a`, `tenant-b`, case-exact).
 - `POST /api/auth/refresh`
-  - Consumes the opaque refresh token atomically for the tenant in the `TenantId` header and returns rotated tokens; presenting a used token again revokes its whole family
+  - Anonymous. Refreshes through `IPinotechrdAuthManager`: the token is consumed atomically for the tenant in the `TenantId` header; presenting a used token again revokes its whole family.
 - `GET /api/tenant`
-  - Resolves tenant from authenticated claim first; falls back to the `TenantId` header
+  - Shows the resolved tenant. An authenticated user's tenant always comes from its token; the `TenantId` header is used only when no user is authenticated, and a user authenticated later by an endpoint-specific scheme must match it.
 - `GET /api/secure`
   - Protected endpoint (`[Authorize]`) to validate middleware order and auth setup
+- `GET /api/reports`
+  - Permission-protected endpoint (`Sample.Read`): the token's tenant must match the resolved tenant.
 
 ## Quick Test
 
 ```bash
-curl -H "TenantId: demo" http://localhost:5000/api/tenant
+curl -H "TenantId: tenant-a" http://localhost:5000/api/tenant
 ```
 
 ## Hardened Flow Smoke Test
 
-1. Issue token:
+1. Log in:
 
 ```bash
-curl -X POST http://localhost:5000/api/auth/token \
+curl -X POST http://localhost:5000/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"userId":"demo-user","tenantId":"tenant-a"}'
+  -H "TenantId: tenant-a" \
+  -d '{"email":"alice@tenant-a.test","password":"Sample-Passw0rd"}'
 ```
 
-1. Access protected endpoint:
+1. The same user naming another tenant is refused (`401`): she does not exist in `tenant-b`'s database.
 
 ```bash
-curl http://localhost:5000/api/secure \
-  -H "Authorization: Bearer <access-token>"
+curl -X POST http://localhost:5000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -H "TenantId: tenant-b" \
+  -d '{"email":"alice@tenant-a.test","password":"Sample-Passw0rd"}'
+```
+
+1. Access protected endpoints:
+
+```bash
+curl http://localhost:5000/api/secure -H "Authorization: Bearer <access-token>"
+curl http://localhost:5000/api/reports -H "Authorization: Bearer <access-token>"
 ```
 
 1. Rotate refresh token:
@@ -57,8 +71,8 @@ curl -X POST http://localhost:5000/api/auth/refresh \
 
 ```bash
 curl http://localhost:5000/api/tenant \
-  -H "Authorization: Bearer <refreshed-access-token>" \
+  -H "Authorization: Bearer <access-token>" \
   -H "TenantId: tenant-b"
 ```
 
-Expected result: `tenant-a` is returned because authenticated claim is trusted before header fallback.
+Expected result: `tenant-a` is returned because the header is never read for an authenticated user.

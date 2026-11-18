@@ -3,7 +3,6 @@ override Pinotechrd.Security.Authorization.PermissionAuthorizationHandler.Handle
 override Pinotechrd.Security.Authorization.PermissionPolicyProvider.GetPolicyAsync(string! policyName) -> System.Threading.Tasks.Task<Microsoft.AspNetCore.Authorization.AuthorizationPolicy?>!
 override Pinotechrd.Security.Data.PinotechrdSecurityDbContext<TUser, TRole>.OnModelCreating(Microsoft.EntityFrameworkCore.ModelBuilder! modelBuilder) -> void
 Pinotechrd.Security.Authorization.PermissionAuthorizationHandler
-Pinotechrd.Security.Authorization.PermissionAuthorizationHandler.PermissionAuthorizationHandler(Pinotechrd.Security.Interfaces.ISecurityEngine! securityEngine) -> void
 Pinotechrd.Security.Authorization.PermissionPolicyProvider
 Pinotechrd.Security.Authorization.PermissionPolicyProvider.PermissionPolicyProvider(Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.Authorization.AuthorizationOptions!>! options) -> void
 Pinotechrd.Security.Authorization.PermissionRequirement
@@ -59,7 +58,6 @@ Pinotechrd.Security.Core.SecurityEngine
 Pinotechrd.Security.Core.SecurityEngine.CanAccessAsync(string! moduleCode, string! permissionName) -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Core.SecurityEngine.GetAuthorizedMenuAsync(System.Collections.Generic.IEnumerable<Pinotechrd.Security.Entities.SecurityMenuItem!>! fullMenu) -> System.Threading.Tasks.Task<System.Collections.Generic.List<Pinotechrd.Security.Entities.SecurityMenuItem!>!>!
 Pinotechrd.Security.Core.SecurityEngine.GetPermissionsAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
-Pinotechrd.Security.Core.SecurityEngine.SecurityEngine(Pinotechrd.Security.Interfaces.ISecurityStore! securityStore, Pinotechrd.Security.Interfaces.ISecurityDataProvider! dataProvider) -> void
 Pinotechrd.Security.Core.SecuritySeeder
 Pinotechrd.Security.Core.SecuritySeeder.SecuritySeeder(Pinotechrd.Security.Interfaces.ISecurityDbContext! db) -> void
 Pinotechrd.Security.Core.SecuritySeeder.SeedModuleAsync(string! name, string! code, string? description, int displayOrder, System.Collections.Generic.IEnumerable<(string! Name, string! Code, string? Description)>! permissions) -> System.Threading.Tasks.Task!
@@ -69,14 +67,12 @@ Pinotechrd.Security.Core.TenantCacheStore.IsModuleActiveAsync(string! tenantId, 
 Pinotechrd.Security.Core.TenantCacheStore.IsSubscriptionActiveAsync(string! tenantId) -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Core.TenantCacheStore.TenantCacheStore(Pinotechrd.Security.Interfaces.ISecurityStore! inner, Microsoft.Extensions.Caching.Memory.IMemoryCache! cache) -> void
 Pinotechrd.Security.Data.ISchemaAwareContext
-Pinotechrd.Security.Data.ISchemaAwareContext.SchemaName.get -> string!
 Pinotechrd.Security.Data.ModelSchemaCacheKeyFactory
 Pinotechrd.Security.Data.ModelSchemaCacheKeyFactory.Create(Microsoft.EntityFrameworkCore.DbContext! context) -> object!
 Pinotechrd.Security.Data.ModelSchemaCacheKeyFactory.Create(Microsoft.EntityFrameworkCore.DbContext! context, bool designTime) -> object!
 Pinotechrd.Security.Data.ModelSchemaCacheKeyFactory.ModelSchemaCacheKeyFactory() -> void
 Pinotechrd.Security.Data.PinotechrdSecurityDbContext<TUser, TRole>
 Pinotechrd.Security.Data.PinotechrdSecurityDbContext<TUser, TRole>.PinotechrdSecurityDbContext(Microsoft.EntityFrameworkCore.DbContextOptions! options, Pinotechrd.Security.Interfaces.ISchemaProvider! schemaProvider) -> void
-Pinotechrd.Security.Data.PinotechrdSecurityDbContext<TUser, TRole>.SchemaName.get -> string!
 Pinotechrd.Security.Extensions.SecurityExtensions
 Pinotechrd.Security.Interfaces.ISecurityDbContext
 Pinotechrd.Security.Interfaces.ISecurityDbContext.Modules.get -> System.Linq.IQueryable<Pinotechrd.Security.Entities.SecurityModule!>!
@@ -192,7 +188,6 @@ Pinotechrd.Security.Core.InMemoryTwoFactorAttemptStore
 Pinotechrd.Security.Core.InMemoryTwoFactorAttemptStore.InMemoryTwoFactorAttemptStore() -> void
 Pinotechrd.Security.Core.InMemoryTwoFactorAttemptStore.InMemoryTwoFactorAttemptStore(System.TimeProvider! timeProvider) -> void
 Pinotechrd.Security.Core.InMemoryTwoFactorAttemptStore.RegisterAttemptAsync(string! challengeId, System.DateTimeOffset expiresAt, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.PinotechrdAuthManager(Microsoft.AspNetCore.Identity.UserManager<TUser!>! userManager, Microsoft.AspNetCore.Identity.SignInManager<TUser!>! signInManager, Pinotechrd.Security.Interfaces.ISecurityEngine! securityEngine, Pinotechrd.Security.Interfaces.ITokenProvider! tokenProvider, Pinotechrd.Security.Interfaces.IRefreshTokenStore! refreshTokenStore, Microsoft.Extensions.Options.IOptions<Pinotechrd.Security.Options.PinotechrdSecurityOptions!>! options, Pinotechrd.Security.Interfaces.IIdentityValidator<TUser!>? customValidator = null, Pinotechrd.Security.Interfaces.IPinotechrdMessageService? messageService = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider? dataProtectionProvider = null, Pinotechrd.Security.Tenancy.TenantContext? tenantContext = null, Pinotechrd.Security.Interfaces.ITwoFactorAttemptStore? twoFactorAttemptStore = null, System.TimeProvider? timeProvider = null) -> void
 Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.PinotechrdSecurityManager(Microsoft.AspNetCore.Identity.UserManager<TUser!>! userManager, Microsoft.AspNetCore.Identity.RoleManager<TRole!>! roleManager, Pinotechrd.Security.Interfaces.ISecurityDbContext! securityDb, Pinotechrd.Security.Interfaces.IRefreshTokenStore? refreshTokenStore = null) -> void
 Pinotechrd.Security.Tenancy.DbSchemaProvider.DbSchemaProvider(Pinotechrd.Security.Tenancy.TenantContext! tenantContext, Pinotechrd.Security.Tenancy.TenantResolutionOptions? options) -> void
 Pinotechrd.Security.Tenancy.TenantIdentifier
@@ -202,3 +197,35 @@ const Pinotechrd.Security.Tenancy.TenantIdentifier.MaxLength = 56 -> int
 const Pinotechrd.Security.Tenancy.TenantIdentifier.SchemaPrefix = "tenant_" -> string!
 static Pinotechrd.Security.Tenancy.TenantIdentifier.IsValid(string? tenantId) -> bool
 static Pinotechrd.Security.Tenancy.TenantIdentifier.ToSchemaName(string! tenantId) -> string!
+Pinotechrd.Security.Data.ISchemaAwareContext.SchemaName.get -> string?
+Pinotechrd.Security.Data.PinotechrdSecurityDbContext<TUser, TRole>.SchemaName.get -> string?
+Pinotechrd.Security.Data.PinotechrdSecurityDbContextOptionsExtensions
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.CatalogSchema.get -> string?
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.CatalogSchema.set -> void
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.ExcludeCatalogFromMigrations.get -> bool
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.ExcludeCatalogFromMigrations.set -> void
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.PinotechrdSecurityModelOptions() -> void
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.TenantSchemaMode.get -> Pinotechrd.Security.Data.TenantSchemaMode
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.TenantSchemaMode.set -> void
+Pinotechrd.Security.Data.TenantSchemaMode
+Pinotechrd.Security.Data.TenantSchemaMode.SchemaPerTenantInModel = 0 -> Pinotechrd.Security.Data.TenantSchemaMode
+Pinotechrd.Security.Data.TenantSchemaMode.SearchPath = 1 -> Pinotechrd.Security.Data.TenantSchemaMode
+static Pinotechrd.Security.Data.PinotechrdSecurityDbContextOptionsExtensions.UsePinotechrdSecurity(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder! builder, System.Action<Pinotechrd.Security.Data.PinotechrdSecurityModelOptions!>? configure = null) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder!
+Pinotechrd.Security.Authorization.PermissionAuthorizationHandler.PermissionAuthorizationHandler(Pinotechrd.Security.Interfaces.ISecurityEngine! securityEngine, Pinotechrd.Security.Tenancy.TenantContext? tenantContext = null, Pinotechrd.Security.Tenancy.TenantResolutionOptions? tenantOptions = null) -> void
+Pinotechrd.Security.Core.InMemoryTwoFactorAttemptStore.ExhaustAsync(string! challengeId, System.DateTimeOffset expiresAt, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Core.SecurityModuleId
+static Pinotechrd.Security.Core.SecurityModuleId.FromCode(string! code) -> System.Guid
+static readonly Pinotechrd.Security.Core.SecurityModuleId.Namespace -> System.Guid
+Pinotechrd.Security.Core.SecurityEngine.SecurityEngine(Pinotechrd.Security.Interfaces.ISecurityStore! securityStore, Pinotechrd.Security.Interfaces.ISecurityDataProvider! dataProvider, Pinotechrd.Security.Tenancy.TenantContext? tenantContext = null, Microsoft.AspNetCore.Http.IHttpContextAccessor? httpContextAccessor = null, Pinotechrd.Security.Tenancy.TenantResolutionOptions? tenantOptions = null) -> void
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.ApplicationTakesResponsibilityForSearchPath.get -> bool
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.ApplicationTakesResponsibilityForSearchPath.set -> void
+Pinotechrd.Security.Tenancy.TenantOutputCacheExtensions
+Pinotechrd.Security.Tenancy.TenantOutputCachePolicy
+Pinotechrd.Security.Tenancy.TenantOutputCachePolicy.CacheRequestAsync(Microsoft.AspNetCore.OutputCaching.OutputCacheContext! context, System.Threading.CancellationToken cancellation) -> System.Threading.Tasks.ValueTask
+Pinotechrd.Security.Tenancy.TenantOutputCachePolicy.ServeFromCacheAsync(Microsoft.AspNetCore.OutputCaching.OutputCacheContext! context, System.Threading.CancellationToken cancellation) -> System.Threading.Tasks.ValueTask
+Pinotechrd.Security.Tenancy.TenantOutputCachePolicy.ServeResponseAsync(Microsoft.AspNetCore.OutputCaching.OutputCacheContext! context, System.Threading.CancellationToken cancellation) -> System.Threading.Tasks.ValueTask
+Pinotechrd.Security.Tenancy.TenantOutputCachePolicy.TenantOutputCachePolicy() -> void
+const Pinotechrd.Security.Tenancy.TenantOutputCachePolicy.VaryByKey = "pinotechrd-tenant" -> string!
+static Pinotechrd.Security.Tenancy.TenantOutputCacheExtensions.CacheOutputPerTenant<TBuilder>(this TBuilder builder, System.Action<Microsoft.AspNetCore.OutputCaching.OutputCachePolicyBuilder!>? configure = null) -> TBuilder
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.PinotechrdAuthManager(Microsoft.AspNetCore.Identity.UserManager<TUser!>! userManager, Microsoft.AspNetCore.Identity.SignInManager<TUser!>! signInManager, Pinotechrd.Security.Interfaces.ISecurityEngine! securityEngine, Pinotechrd.Security.Interfaces.ITokenProvider! tokenProvider, Pinotechrd.Security.Interfaces.IRefreshTokenStore! refreshTokenStore, Microsoft.Extensions.Options.IOptions<Pinotechrd.Security.Options.PinotechrdSecurityOptions!>! options, Pinotechrd.Security.Interfaces.IIdentityValidator<TUser!>? customValidator = null, Pinotechrd.Security.Interfaces.IPinotechrdMessageService? messageService = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider? dataProtectionProvider = null, Pinotechrd.Security.Tenancy.TenantContext? tenantContext = null, Pinotechrd.Security.Interfaces.ITwoFactorAttemptStore? twoFactorAttemptStore = null, System.TimeProvider? timeProvider = null, Pinotechrd.Security.Interfaces.ISecurityDbContext? securityDbContext = null, Pinotechrd.Security.Tenancy.TenantResolutionOptions? tenantOptions = null) -> void

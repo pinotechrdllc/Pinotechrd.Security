@@ -49,4 +49,7 @@ public class DbSchemaProvider : ISchemaProvider
 
     /// <inheritdoc />
     public string GetDefaultSchema() => DEFAULT_SCHEMA;
+
+    /// <summary>Whether this provider falls back to the shared schema when no tenant is resolved.</summary>
+    internal bool SharedSchemaFallbackEnabled => _useSharedSchemaWhenNoTenant;
 }
