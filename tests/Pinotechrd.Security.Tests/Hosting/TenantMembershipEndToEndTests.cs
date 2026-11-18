@@ -16,8 +16,8 @@ namespace Pinotechrd.Security.Tests.Hosting;
 
 /// <summary>
 /// Membership, as the README describes it: the user is looked up in the tenant's own tables, so finding the user is what
-/// proves membership. Proven here with one SQLite database per tenant through the library's own wiring. Not proven:
-/// PostgreSQL schemas (schema in the model) and <c>search_path</c>, which need a PostgreSQL server.
+/// proves membership. Proven here with one SQLite database per tenant through the library's own wiring. The PostgreSQL schema modes
+/// (schema in the model and <c>search_path</c>) are proven against a real server in <c>PostgresHostTests</c>.
 /// </summary>
 public class TenantMembershipEndToEndTests
 {
