@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>Pinotechrd.Security</PackageId>
+    <Description>Multi-tenant identity and authorization infrastructure for ASP.NET Core: granular permissions, tenant resolution and hardened JWT authentication.</Description>
+    <PackageTags>security;identity;multi-tenancy;auth;jwt;authorization;permissions</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="EFCore.NamingConventions" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pinotechrd.Security.Abstractions\Pinotechrd.Security.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

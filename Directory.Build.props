@@ -1,0 +1,47 @@
+<Project>
+
+  <PropertyGroup>
+    <Version>1.2.0-preview.2</Version>
+
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true' or '$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+
+    <Authors>Pinotechrd</Authors>
+    <Company>Pinotechrd</Company>
+    <Product>Pinotechrd.Security</Product>
+    <Copyright>Copyright (c) Pinotechrd</Copyright>
+    <PackageProjectUrl>https://github.com/pinotechrdllc/Pinotechrd.Security</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/pinotechrdllc/Pinotechrd.Security</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- Only the shipped libraries under src/ are packed and held to the strict bar; tests and samples stay lenient. -->
+  <PropertyGroup Condition="$(MSBuildProjectDirectory.StartsWith('$(MSBuildThisFileDirectory)src'))">
+    <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <!-- Nothing has been published as Pinotechrd.* yet, so there is no baseline to diff against.
+         After the first stable release set this to that version (e.g. 1.2.0) so breaking changes fail the pack. -->
+    <PackageValidationBaselineVersion></PackageValidationBaselineVersion>
+  </PropertyGroup>
+
+  <ItemGroup Condition="$(MSBuildProjectDirectory.StartsWith('$(MSBuildThisFileDirectory)src'))">
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" PrivateAssets="all" />
+    <AdditionalFiles Include="PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="PublicAPI.Unshipped.txt" />
+  </ItemGroup>
+
+</Project>

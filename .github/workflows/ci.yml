@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ "develop", "main" ]
+  push:
+    branches: [ "develop", "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Pinotechrd.Security.slnx
+
+      - name: Audit vulnerable packages
+        shell: pwsh
+        run: ./build/audit-vulnerable-packages.ps1 -ReportPath "${{ runner.temp }}/audit/nuget-vulnerability-report.json"
+
+      - name: Build (warnings are errors)
+        run: dotnet build Pinotechrd.Security.slnx --configuration Release --no-restore -warnaserror
+
+      - name: Test with coverage gate
+        run: >-
+          dotnet test tests/Pinotechrd.Security.Tests/Pinotechrd.Security.Tests.csproj
+          --configuration Release --no-build --verbosity minimal
+          /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura
+          '/p:Include=[Pinotechrd.Security]Pinotechrd.Security.*'
+          /p:Threshold=40 /p:ThresholdType=line /p:ThresholdStat=total
+
+      - name: Pack
+        run: |
+          dotnet pack src/Pinotechrd.Security.Abstractions/Pinotechrd.Security.Abstractions.csproj --configuration Release --no-build --output "${{ runner.temp }}/packages"
+          dotnet pack src/Pinotechrd.Security/Pinotechrd.Security.csproj --configuration Release --no-build --output "${{ runner.temp }}/packages"
+
+      - name: Upload packages and audit report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nuget-packages
+          path: |
+            ${{ runner.temp }}/packages/*.nupkg
+            ${{ runner.temp }}/packages/*.snupkg
+            ${{ runner.temp }}/audit/nuget-vulnerability-report.json

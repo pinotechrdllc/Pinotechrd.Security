@@ -1,0 +1,402 @@
+#nullable enable
+override Pinotechrd.Security.Interfaces.IdentityValidationResult.Equals(object? obj) -> bool
+override Pinotechrd.Security.Interfaces.IdentityValidationResult.GetHashCode() -> int
+override Pinotechrd.Security.Interfaces.IdentityValidationResult.ToString() -> string!
+override Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.Equals(object? obj) -> bool
+override Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.GetHashCode() -> int
+override Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.ToString() -> string!
+override Pinotechrd.Security.Models.AuthResult.Equals(object? obj) -> bool
+override Pinotechrd.Security.Models.AuthResult.GetHashCode() -> int
+override Pinotechrd.Security.Models.AuthResult.ToString() -> string!
+override Pinotechrd.Security.Models.AuthToken.Equals(object? obj) -> bool
+override Pinotechrd.Security.Models.AuthToken.GetHashCode() -> int
+override Pinotechrd.Security.Models.AuthToken.ToString() -> string!
+Pinotechrd.Security.Entities.BaseSecurityEntity
+Pinotechrd.Security.Entities.BaseSecurityEntity.BaseSecurityEntity() -> void
+Pinotechrd.Security.Entities.BaseSecurityEntity.TenantId.get -> string!
+Pinotechrd.Security.Entities.BaseSecurityEntity.TenantId.set -> void
+Pinotechrd.Security.Entities.BaseSecurityRole
+Pinotechrd.Security.Entities.BaseSecurityRole.BaseSecurityRole() -> void
+Pinotechrd.Security.Entities.BaseSecurityRole.BaseSecurityRole(string! roleName) -> void
+Pinotechrd.Security.Entities.BaseSecurityRole.CreatedAt.get -> System.DateTime
+Pinotechrd.Security.Entities.BaseSecurityRole.CreatedAt.set -> void
+Pinotechrd.Security.Entities.BaseSecurityRole.Description.get -> string?
+Pinotechrd.Security.Entities.BaseSecurityRole.Description.set -> void
+Pinotechrd.Security.Entities.BaseSecurityUser
+Pinotechrd.Security.Entities.BaseSecurityUser.BaseSecurityUser() -> void
+Pinotechrd.Security.Entities.BaseSecurityUser.CreatedAt.get -> System.DateTime
+Pinotechrd.Security.Entities.BaseSecurityUser.CreatedAt.set -> void
+Pinotechrd.Security.Entities.BaseSecurityUser.IsActive.get -> bool
+Pinotechrd.Security.Entities.BaseSecurityUser.IsActive.set -> void
+Pinotechrd.Security.Entities.BaseSecurityUser.UpdatedAt.get -> System.DateTime?
+Pinotechrd.Security.Entities.BaseSecurityUser.UpdatedAt.set -> void
+Pinotechrd.Security.Entities.RolePermission
+Pinotechrd.Security.Entities.RolePermission.RolePermission() -> void
+Pinotechrd.Security.Entities.SecurityBaseEntity
+Pinotechrd.Security.Entities.SecurityBaseEntity.SecurityBaseEntity() -> void
+Pinotechrd.Security.Entities.SecurityMenuItem
+Pinotechrd.Security.Entities.SecurityMenuItem.Children.get -> System.Collections.Generic.List<Pinotechrd.Security.Entities.SecurityMenuItem!>!
+Pinotechrd.Security.Entities.SecurityMenuItem.Children.init -> void
+Pinotechrd.Security.Entities.SecurityMenuItem.Icon.get -> string?
+Pinotechrd.Security.Entities.SecurityMenuItem.Icon.init -> void
+Pinotechrd.Security.Entities.SecurityMenuItem.ModuleCode.get -> string?
+Pinotechrd.Security.Entities.SecurityMenuItem.ModuleCode.init -> void
+Pinotechrd.Security.Entities.SecurityMenuItem.Order.get -> int
+Pinotechrd.Security.Entities.SecurityMenuItem.Order.init -> void
+Pinotechrd.Security.Entities.SecurityMenuItem.Path.get -> string?
+Pinotechrd.Security.Entities.SecurityMenuItem.Path.init -> void
+Pinotechrd.Security.Entities.SecurityMenuItem.RequiredPermissions.get -> System.Collections.Generic.List<string!>!
+Pinotechrd.Security.Entities.SecurityMenuItem.RequiredPermissions.init -> void
+Pinotechrd.Security.Entities.SecurityMenuItem.SecurityMenuItem() -> void
+Pinotechrd.Security.Entities.SecurityMenuItem.TitleKey.get -> string!
+Pinotechrd.Security.Entities.SecurityMenuItem.TitleKey.init -> void
+Pinotechrd.Security.Entities.SecurityModule
+Pinotechrd.Security.Entities.SecurityModule.SecurityModule() -> void
+Pinotechrd.Security.Entities.SecurityModule.Update(string! name, string? description, int displayOrder) -> void
+Pinotechrd.Security.Entities.SecurityPermission
+Pinotechrd.Security.Entities.SecurityPermission.SecurityPermission() -> void
+Pinotechrd.Security.Entities.SubscriptionPlan
+Pinotechrd.Security.Entities.SubscriptionPlan.SubscriptionPlan() -> void
+Pinotechrd.Security.Entities.SubscriptionPlanFeature
+Pinotechrd.Security.Entities.SubscriptionPlanFeature.SubscriptionPlanFeature() -> void
+Pinotechrd.Security.Entities.SubscriptionPlanModule
+Pinotechrd.Security.Entities.SubscriptionPlanModule.SubscriptionPlanModule() -> void
+Pinotechrd.Security.Entities.SystemSubscription
+Pinotechrd.Security.Entities.SystemSubscription.SystemSubscription() -> void
+Pinotechrd.Security.Entities.Tenant
+Pinotechrd.Security.Entities.Tenant.Tenant() -> void
+Pinotechrd.Security.Entities.UserModulePermission
+Pinotechrd.Security.Entities.UserModulePermission.UserModulePermission() -> void
+Pinotechrd.Security.Enums.PermissionAccessType
+Pinotechrd.Security.Enums.PermissionAccessType.Allow = 1 -> Pinotechrd.Security.Enums.PermissionAccessType
+Pinotechrd.Security.Enums.PermissionAccessType.Deny = 2 -> Pinotechrd.Security.Enums.PermissionAccessType
+Pinotechrd.Security.Enums.SecurityCodeType
+Pinotechrd.Security.Enums.SecurityCodeType.PasswordReset = 2 -> Pinotechrd.Security.Enums.SecurityCodeType
+Pinotechrd.Security.Enums.SecurityCodeType.TwoFactor = 1 -> Pinotechrd.Security.Enums.SecurityCodeType
+Pinotechrd.Security.Enums.TenantStatus
+Pinotechrd.Security.Enums.TenantStatus.Active = 1 -> Pinotechrd.Security.Enums.TenantStatus
+Pinotechrd.Security.Enums.TenantStatus.Cancelled = 3 -> Pinotechrd.Security.Enums.TenantStatus
+Pinotechrd.Security.Enums.TenantStatus.Provisioning = 0 -> Pinotechrd.Security.Enums.TenantStatus
+Pinotechrd.Security.Enums.TenantStatus.Suspended = 2 -> Pinotechrd.Security.Enums.TenantStatus
+Pinotechrd.Security.Interfaces.IdentityValidationResult
+Pinotechrd.Security.Interfaces.IdentityValidationResult.AdditionalClaims.get -> System.Collections.Generic.IEnumerable<System.Security.Claims.Claim!>?
+Pinotechrd.Security.Interfaces.IdentityValidationResult.AdditionalClaims.init -> void
+Pinotechrd.Security.Interfaces.IdentityValidationResult.Deconstruct(out bool Succeeded, out string? ErrorMessage, out string? FullName, out System.Collections.Generic.IEnumerable<System.Security.Claims.Claim!>? AdditionalClaims) -> void
+Pinotechrd.Security.Interfaces.IdentityValidationResult.ErrorMessage.get -> string?
+Pinotechrd.Security.Interfaces.IdentityValidationResult.ErrorMessage.init -> void
+Pinotechrd.Security.Interfaces.IdentityValidationResult.FullName.get -> string?
+Pinotechrd.Security.Interfaces.IdentityValidationResult.FullName.init -> void
+Pinotechrd.Security.Interfaces.IdentityValidationResult.IdentityValidationResult(bool Succeeded, string? ErrorMessage = null, string? FullName = null, System.Collections.Generic.IEnumerable<System.Security.Claims.Claim!>? AdditionalClaims = null) -> void
+Pinotechrd.Security.Interfaces.IdentityValidationResult.IdentityValidationResult(Pinotechrd.Security.Interfaces.IdentityValidationResult! original) -> void
+Pinotechrd.Security.Interfaces.IdentityValidationResult.Succeeded.get -> bool
+Pinotechrd.Security.Interfaces.IdentityValidationResult.Succeeded.init -> void
+Pinotechrd.Security.Interfaces.IIdentityValidator<TUser>
+Pinotechrd.Security.Interfaces.IIdentityValidator<TUser>.ValidateAsync(TUser! user, string! tenantId) -> System.Threading.Tasks.Task<Pinotechrd.Security.Interfaces.IdentityValidationResult!>!
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.ChangePasswordAsync(string! userId, string! currentPassword, string! newPassword) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.GeneratePasswordResetTokenAsync(string! email) -> System.Threading.Tasks.Task<string?>!
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.GetTwoFactorProvidersAsync(string! twoFactorToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IList<string!>!>!
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.LoginAsync(string! email, string! password, string! tenantId) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.RefreshAsync(string! refreshToken) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.ResetPasswordAsync(string! email, string! token, string! newPassword) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.SendTwoFactorCodeAsync(string! twoFactorToken, string! provider) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.SignOutAsync(string! userId) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.VerifyTwoFactorCodeAsync(string! twoFactorToken, string! provider, string! code, string! tenantId) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Interfaces.IPinotechrdMessageService
+Pinotechrd.Security.Interfaces.IPinotechrdMessageService.SendCodeAsync(string! destination, string! code, Pinotechrd.Security.Enums.SecurityCodeType codeType) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.AssignPermissionsToRoleAsync(string! roleId, System.Collections.Generic.IEnumerable<string!>! permissionCodes) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.AssignRolesToUserAsync(string! userId, System.Collections.Generic.IEnumerable<string!>! roleNames) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.ChangeUserPasswordAsync(string! userId, string! currentPassword, string! newPassword) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.CreateRoleAsync(TRole! role, string? description = null) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.CreateUserAsync(TUser! user, string! password, System.Collections.Generic.IEnumerable<string!>? roles = null) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.DeleteRoleAsync(string! roleId) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.DeleteUserAsync(string! userId) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.GetPermissionsAsync() -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Pinotechrd.Security.Entities.SecurityPermission!>!>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.GetRoleByIdAsync(string! roleId) -> System.Threading.Tasks.Task<TRole?>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.GetRoleByNameAsync(string! roleName) -> System.Threading.Tasks.Task<TRole?>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.GetRolePermissionsAsync(string! roleId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.GetRolesAsync() -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<TRole!>!>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.GetUserByEmailAsync(string! email) -> System.Threading.Tasks.Task<TUser?>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.GetUserByIdAsync(string! userId) -> System.Threading.Tasks.Task<TUser?>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.GetUserRolesAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.GetUsersAsync() -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<TUser!>!>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.RemoveRolesFromUserAsync(string! userId, System.Collections.Generic.IEnumerable<string!>! roleNames) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.ResetUserPasswordAsync(string! userId, string! newPassword) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.SetUserActiveStatusAsync(string! userId, bool isActive) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.UpdateRoleAsync(TRole! role) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.UpdateUserAsync(TUser! user) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IRefreshTokenStore
+Pinotechrd.Security.Interfaces.IRefreshTokenStore.RevokeAsync(string! refreshToken) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Interfaces.IRefreshTokenStore.SaveAsync(string! userId, string! tenantId, string! refreshToken, System.DateTime expiresAtUtc) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Interfaces.IRefreshTokenStore.ValidateAsync(string! refreshToken) -> System.Threading.Tasks.Task<Pinotechrd.Security.Interfaces.RefreshTokenValidationResult!>!
+Pinotechrd.Security.Interfaces.ISchemaProvider
+Pinotechrd.Security.Interfaces.ISchemaProvider.GetDefaultSchema() -> string!
+Pinotechrd.Security.Interfaces.ISchemaProvider.GetSchemaName() -> string!
+Pinotechrd.Security.Interfaces.ISecurityDataProvider
+Pinotechrd.Security.Interfaces.ISecurityDataProvider.GetCurrentTenantId() -> string?
+Pinotechrd.Security.Interfaces.ISecurityDataProvider.GetCurrentUserId() -> string?
+Pinotechrd.Security.Interfaces.ISecurityDataProvider.GetUserPermissionsAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Interfaces.ISecurityDataProvider.GetUserRolesAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Interfaces.ITenantEntity
+Pinotechrd.Security.Interfaces.ITenantEntity.TenantId.get -> string!
+Pinotechrd.Security.Interfaces.ITenantEntity.TenantId.set -> void
+Pinotechrd.Security.Interfaces.ITenantStore
+Pinotechrd.Security.Interfaces.ITenantStore.TenantExistsAsync(string! tenantId) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.ITokenProvider
+Pinotechrd.Security.Interfaces.ITokenProvider.GenerateAccessToken(System.Collections.Generic.IEnumerable<System.Security.Claims.Claim!>! claims) -> string!
+Pinotechrd.Security.Interfaces.ITokenProvider.GenerateRefreshToken() -> string!
+Pinotechrd.Security.Interfaces.ITokenProvider.GetPrincipalFromExpiredToken(string! token) -> System.Security.Claims.ClaimsPrincipal!
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.<Clone>$() -> Pinotechrd.Security.Interfaces.RefreshTokenValidationResult!
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.Deconstruct(out bool IsValid, out string? UserId, out string? TenantId, out string? Reason) -> void
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.Equals(Pinotechrd.Security.Interfaces.RefreshTokenValidationResult? other) -> bool
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.IsValid.get -> bool
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.IsValid.init -> void
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.Reason.get -> string?
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.Reason.init -> void
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.RefreshTokenValidationResult(bool IsValid, string? UserId = null, string? TenantId = null, string? Reason = null) -> void
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.TenantId.get -> string?
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.TenantId.init -> void
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.UserId.get -> string?
+Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.UserId.init -> void
+Pinotechrd.Security.Models.AuthResult
+Pinotechrd.Security.Models.AuthResult.AuthResult(bool Succeeded, string? ErrorMessage = null, Pinotechrd.Security.Models.AuthToken? Token = null, string? UserId = null, string? FullName = null, System.Collections.Generic.IEnumerable<string!>? Permissions = null, bool RequiresTwoFactor = false, System.Collections.Generic.IEnumerable<string!>? TwoFactorProviders = null, string? TwoFactorToken = null, object? User = null) -> void
+Pinotechrd.Security.Models.AuthResult.AuthResult(Pinotechrd.Security.Models.AuthResult! original) -> void
+Pinotechrd.Security.Models.AuthResult.Deconstruct(out bool Succeeded, out string? ErrorMessage, out Pinotechrd.Security.Models.AuthToken? Token, out string? UserId, out string? FullName, out System.Collections.Generic.IEnumerable<string!>? Permissions, out bool RequiresTwoFactor, out System.Collections.Generic.IEnumerable<string!>? TwoFactorProviders, out string? TwoFactorToken, out object? User) -> void
+Pinotechrd.Security.Models.AuthResult.ErrorMessage.get -> string?
+Pinotechrd.Security.Models.AuthResult.ErrorMessage.init -> void
+Pinotechrd.Security.Models.AuthResult.FullName.get -> string?
+Pinotechrd.Security.Models.AuthResult.FullName.init -> void
+Pinotechrd.Security.Models.AuthResult.Permissions.get -> System.Collections.Generic.IEnumerable<string!>?
+Pinotechrd.Security.Models.AuthResult.Permissions.init -> void
+Pinotechrd.Security.Models.AuthResult.RequiresTwoFactor.get -> bool
+Pinotechrd.Security.Models.AuthResult.RequiresTwoFactor.init -> void
+Pinotechrd.Security.Models.AuthResult.Succeeded.get -> bool
+Pinotechrd.Security.Models.AuthResult.Succeeded.init -> void
+Pinotechrd.Security.Models.AuthResult.Token.get -> Pinotechrd.Security.Models.AuthToken?
+Pinotechrd.Security.Models.AuthResult.Token.init -> void
+Pinotechrd.Security.Models.AuthResult.TwoFactorProviders.get -> System.Collections.Generic.IEnumerable<string!>?
+Pinotechrd.Security.Models.AuthResult.TwoFactorProviders.init -> void
+Pinotechrd.Security.Models.AuthResult.TwoFactorToken.get -> string?
+Pinotechrd.Security.Models.AuthResult.TwoFactorToken.init -> void
+Pinotechrd.Security.Models.AuthResult.User.get -> object?
+Pinotechrd.Security.Models.AuthResult.User.init -> void
+Pinotechrd.Security.Models.AuthResult.UserId.get -> string?
+Pinotechrd.Security.Models.AuthResult.UserId.init -> void
+Pinotechrd.Security.Models.AuthToken
+Pinotechrd.Security.Models.AuthToken.AccessToken.get -> string!
+Pinotechrd.Security.Models.AuthToken.AccessToken.init -> void
+Pinotechrd.Security.Models.AuthToken.AuthToken(Pinotechrd.Security.Models.AuthToken! original) -> void
+Pinotechrd.Security.Models.AuthToken.AuthToken(string! AccessToken, string! RefreshToken, System.DateTime ExpiresAt) -> void
+Pinotechrd.Security.Models.AuthToken.Deconstruct(out string! AccessToken, out string! RefreshToken, out System.DateTime ExpiresAt) -> void
+Pinotechrd.Security.Models.AuthToken.ExpiresAt.get -> System.DateTime
+Pinotechrd.Security.Models.AuthToken.ExpiresAt.init -> void
+Pinotechrd.Security.Models.AuthToken.RefreshToken.get -> string!
+Pinotechrd.Security.Models.AuthToken.RefreshToken.init -> void
+static Pinotechrd.Security.Entities.RolePermission.Create(System.Guid roleId, System.Guid permissionId) -> Pinotechrd.Security.Entities.RolePermission!
+static Pinotechrd.Security.Entities.SecurityModule.Create(string! name, string! code, string? description = null, int displayOrder = 0) -> Pinotechrd.Security.Entities.SecurityModule!
+static Pinotechrd.Security.Entities.SecurityPermission.Create(System.Guid moduleId, string! name, string! code, string? description = null, string? group = null) -> Pinotechrd.Security.Entities.SecurityPermission!
+static Pinotechrd.Security.Entities.SubscriptionPlan.Create(string! name, string! code, string? description, decimal? monthlyPrice) -> Pinotechrd.Security.Entities.SubscriptionPlan!
+static Pinotechrd.Security.Entities.SubscriptionPlanFeature.Create(System.Guid planId, string! code, string? value, string? description) -> Pinotechrd.Security.Entities.SubscriptionPlanFeature!
+static Pinotechrd.Security.Entities.SubscriptionPlanModule.Create(System.Guid planId, System.Guid moduleId) -> Pinotechrd.Security.Entities.SubscriptionPlanModule!
+static Pinotechrd.Security.Entities.SystemSubscription.Create(string! customerName, string! tenantName, System.Guid planId, System.DateOnly startDate, string? contactEmail = null, string? contactPhone = null, System.DateOnly? endDate = null) -> Pinotechrd.Security.Entities.SystemSubscription!
+static Pinotechrd.Security.Entities.Tenant.Create(System.Guid subscriptionId, string! name, string! identifier, string! dbSchema) -> Pinotechrd.Security.Entities.Tenant!
+static Pinotechrd.Security.Entities.UserModulePermission.Create(System.Guid userId, System.Guid permissionId, Pinotechrd.Security.Enums.PermissionAccessType accessType) -> Pinotechrd.Security.Entities.UserModulePermission!
+static Pinotechrd.Security.Entities.UserModulePermission.CreateAllow(System.Guid userId, System.Guid permissionId) -> Pinotechrd.Security.Entities.UserModulePermission!
+static Pinotechrd.Security.Entities.UserModulePermission.CreateDeny(System.Guid userId, System.Guid permissionId) -> Pinotechrd.Security.Entities.UserModulePermission!
+static Pinotechrd.Security.Interfaces.IdentityValidationResult.Failure(string! errorMessage) -> Pinotechrd.Security.Interfaces.IdentityValidationResult!
+static Pinotechrd.Security.Interfaces.IdentityValidationResult.operator !=(Pinotechrd.Security.Interfaces.IdentityValidationResult? left, Pinotechrd.Security.Interfaces.IdentityValidationResult? right) -> bool
+static Pinotechrd.Security.Interfaces.IdentityValidationResult.operator ==(Pinotechrd.Security.Interfaces.IdentityValidationResult? left, Pinotechrd.Security.Interfaces.IdentityValidationResult? right) -> bool
+static Pinotechrd.Security.Interfaces.IdentityValidationResult.Success(string! fullName, System.Collections.Generic.IEnumerable<System.Security.Claims.Claim!>? extraClaims = null) -> Pinotechrd.Security.Interfaces.IdentityValidationResult!
+static Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.operator !=(Pinotechrd.Security.Interfaces.RefreshTokenValidationResult? left, Pinotechrd.Security.Interfaces.RefreshTokenValidationResult? right) -> bool
+static Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.operator ==(Pinotechrd.Security.Interfaces.RefreshTokenValidationResult? left, Pinotechrd.Security.Interfaces.RefreshTokenValidationResult? right) -> bool
+static Pinotechrd.Security.Models.AuthResult.Failure(string! errorMessage) -> Pinotechrd.Security.Models.AuthResult!
+static Pinotechrd.Security.Models.AuthResult.operator !=(Pinotechrd.Security.Models.AuthResult? left, Pinotechrd.Security.Models.AuthResult? right) -> bool
+static Pinotechrd.Security.Models.AuthResult.operator ==(Pinotechrd.Security.Models.AuthResult? left, Pinotechrd.Security.Models.AuthResult? right) -> bool
+static Pinotechrd.Security.Models.AuthResult.Success(Pinotechrd.Security.Models.AuthToken! token, string! userId, string! fullName, System.Collections.Generic.IEnumerable<string!>! permissions, object? user = null) -> Pinotechrd.Security.Models.AuthResult!
+static Pinotechrd.Security.Models.AuthResult.TwoFactorRequired(System.Collections.Generic.IEnumerable<string!>! providers, string! twoFactorToken) -> Pinotechrd.Security.Models.AuthResult!
+static Pinotechrd.Security.Models.AuthToken.operator !=(Pinotechrd.Security.Models.AuthToken? left, Pinotechrd.Security.Models.AuthToken? right) -> bool
+static Pinotechrd.Security.Models.AuthToken.operator ==(Pinotechrd.Security.Models.AuthToken? left, Pinotechrd.Security.Models.AuthToken? right) -> bool
+virtual Pinotechrd.Security.Entities.RolePermission.Permission.get -> Pinotechrd.Security.Entities.SecurityPermission!
+virtual Pinotechrd.Security.Entities.RolePermission.Permission.set -> void
+virtual Pinotechrd.Security.Entities.RolePermission.PermissionId.get -> System.Guid
+virtual Pinotechrd.Security.Entities.RolePermission.PermissionId.set -> void
+virtual Pinotechrd.Security.Entities.RolePermission.RoleId.get -> System.Guid
+virtual Pinotechrd.Security.Entities.RolePermission.RoleId.set -> void
+virtual Pinotechrd.Security.Entities.SecurityBaseEntity.CreatedAt.get -> System.DateTime
+virtual Pinotechrd.Security.Entities.SecurityBaseEntity.CreatedAt.set -> void
+virtual Pinotechrd.Security.Entities.SecurityBaseEntity.Id.get -> System.Guid
+virtual Pinotechrd.Security.Entities.SecurityBaseEntity.Id.set -> void
+virtual Pinotechrd.Security.Entities.SecurityBaseEntity.UpdatedAt.get -> System.DateTime?
+virtual Pinotechrd.Security.Entities.SecurityBaseEntity.UpdatedAt.set -> void
+virtual Pinotechrd.Security.Entities.SecurityModule.Code.get -> string!
+virtual Pinotechrd.Security.Entities.SecurityModule.Code.set -> void
+virtual Pinotechrd.Security.Entities.SecurityModule.Description.get -> string?
+virtual Pinotechrd.Security.Entities.SecurityModule.Description.set -> void
+virtual Pinotechrd.Security.Entities.SecurityModule.DisplayOrder.get -> int
+virtual Pinotechrd.Security.Entities.SecurityModule.DisplayOrder.set -> void
+virtual Pinotechrd.Security.Entities.SecurityModule.IsActive.get -> bool
+virtual Pinotechrd.Security.Entities.SecurityModule.IsActive.set -> void
+virtual Pinotechrd.Security.Entities.SecurityModule.Name.get -> string!
+virtual Pinotechrd.Security.Entities.SecurityModule.Name.set -> void
+virtual Pinotechrd.Security.Entities.SecurityModule.Permissions.get -> System.Collections.Generic.ICollection<Pinotechrd.Security.Entities.SecurityPermission!>!
+virtual Pinotechrd.Security.Entities.SecurityModule.Permissions.set -> void
+virtual Pinotechrd.Security.Entities.SecurityModule.PlanModules.get -> System.Collections.Generic.ICollection<Pinotechrd.Security.Entities.SubscriptionPlanModule!>!
+virtual Pinotechrd.Security.Entities.SecurityModule.PlanModules.set -> void
+virtual Pinotechrd.Security.Entities.SecurityPermission.Code.get -> string!
+virtual Pinotechrd.Security.Entities.SecurityPermission.Code.set -> void
+virtual Pinotechrd.Security.Entities.SecurityPermission.Description.get -> string?
+virtual Pinotechrd.Security.Entities.SecurityPermission.Description.set -> void
+virtual Pinotechrd.Security.Entities.SecurityPermission.Group.get -> string?
+virtual Pinotechrd.Security.Entities.SecurityPermission.Group.set -> void
+virtual Pinotechrd.Security.Entities.SecurityPermission.IsActive.get -> bool
+virtual Pinotechrd.Security.Entities.SecurityPermission.IsActive.set -> void
+virtual Pinotechrd.Security.Entities.SecurityPermission.Module.get -> Pinotechrd.Security.Entities.SecurityModule!
+virtual Pinotechrd.Security.Entities.SecurityPermission.Module.set -> void
+virtual Pinotechrd.Security.Entities.SecurityPermission.ModuleId.get -> System.Guid
+virtual Pinotechrd.Security.Entities.SecurityPermission.ModuleId.set -> void
+virtual Pinotechrd.Security.Entities.SecurityPermission.Name.get -> string!
+virtual Pinotechrd.Security.Entities.SecurityPermission.Name.set -> void
+virtual Pinotechrd.Security.Entities.SecurityPermission.RolePermissions.get -> System.Collections.Generic.ICollection<Pinotechrd.Security.Entities.RolePermission!>!
+virtual Pinotechrd.Security.Entities.SecurityPermission.RolePermissions.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.Activate() -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.Code.get -> string!
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.Code.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.Deactivate() -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.Description.get -> string?
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.Description.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.IsActive.get -> bool
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.IsActive.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.MonthlyPrice.get -> decimal?
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.MonthlyPrice.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.Name.get -> string!
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.Name.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.PlanFeatures.get -> System.Collections.Generic.ICollection<Pinotechrd.Security.Entities.SubscriptionPlanFeature!>!
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.PlanFeatures.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.PlanModules.get -> System.Collections.Generic.ICollection<Pinotechrd.Security.Entities.SubscriptionPlanModule!>!
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.PlanModules.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.SystemSubscriptions.get -> System.Collections.Generic.ICollection<Pinotechrd.Security.Entities.SystemSubscription!>!
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.SystemSubscriptions.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlan.Update(string! name, string? description, decimal? monthlyPrice) -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlanFeature.Code.get -> string!
+virtual Pinotechrd.Security.Entities.SubscriptionPlanFeature.Code.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlanFeature.Description.get -> string?
+virtual Pinotechrd.Security.Entities.SubscriptionPlanFeature.Description.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlanFeature.Plan.get -> Pinotechrd.Security.Entities.SubscriptionPlan!
+virtual Pinotechrd.Security.Entities.SubscriptionPlanFeature.Plan.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlanFeature.PlanId.get -> System.Guid
+virtual Pinotechrd.Security.Entities.SubscriptionPlanFeature.PlanId.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlanFeature.Value.get -> string?
+virtual Pinotechrd.Security.Entities.SubscriptionPlanFeature.Value.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlanModule.Module.get -> Pinotechrd.Security.Entities.SecurityModule!
+virtual Pinotechrd.Security.Entities.SubscriptionPlanModule.Module.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlanModule.ModuleId.get -> System.Guid
+virtual Pinotechrd.Security.Entities.SubscriptionPlanModule.ModuleId.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlanModule.Plan.get -> Pinotechrd.Security.Entities.SubscriptionPlan!
+virtual Pinotechrd.Security.Entities.SubscriptionPlanModule.Plan.set -> void
+virtual Pinotechrd.Security.Entities.SubscriptionPlanModule.PlanId.get -> System.Guid
+virtual Pinotechrd.Security.Entities.SubscriptionPlanModule.PlanId.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.Activate() -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.ActivatedAt.get -> System.DateTime?
+virtual Pinotechrd.Security.Entities.SystemSubscription.ActivatedAt.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.Cancel() -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.ContactEmail.get -> string?
+virtual Pinotechrd.Security.Entities.SystemSubscription.ContactEmail.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.ContactPhone.get -> string?
+virtual Pinotechrd.Security.Entities.SystemSubscription.ContactPhone.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.CustomerName.get -> string!
+virtual Pinotechrd.Security.Entities.SystemSubscription.CustomerName.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.EndDate.get -> System.DateOnly?
+virtual Pinotechrd.Security.Entities.SystemSubscription.EndDate.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.IsActive.get -> bool
+virtual Pinotechrd.Security.Entities.SystemSubscription.IsActive.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.IsValid() -> bool
+virtual Pinotechrd.Security.Entities.SystemSubscription.Plan.get -> Pinotechrd.Security.Entities.SubscriptionPlan!
+virtual Pinotechrd.Security.Entities.SystemSubscription.Plan.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.PlanId.get -> System.Guid
+virtual Pinotechrd.Security.Entities.SystemSubscription.PlanId.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.StartDate.get -> System.DateOnly
+virtual Pinotechrd.Security.Entities.SystemSubscription.StartDate.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.Status.get -> Pinotechrd.Security.Enums.TenantStatus
+virtual Pinotechrd.Security.Entities.SystemSubscription.Status.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.Suspend() -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.SuspendedAt.get -> System.DateTime?
+virtual Pinotechrd.Security.Entities.SystemSubscription.SuspendedAt.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.TenantName.get -> string!
+virtual Pinotechrd.Security.Entities.SystemSubscription.TenantName.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.Tenants.get -> System.Collections.Generic.ICollection<Pinotechrd.Security.Entities.Tenant!>!
+virtual Pinotechrd.Security.Entities.SystemSubscription.Tenants.set -> void
+virtual Pinotechrd.Security.Entities.SystemSubscription.Update(string! customerName, string? contactEmail, string? contactPhone, System.DateOnly? endDate) -> void
+virtual Pinotechrd.Security.Entities.Tenant.Activate() -> void
+virtual Pinotechrd.Security.Entities.Tenant.ConnectionString.get -> string?
+virtual Pinotechrd.Security.Entities.Tenant.ConnectionString.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.CurrentSchemaVersion.get -> string?
+virtual Pinotechrd.Security.Entities.Tenant.CurrentSchemaVersion.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.DbName.get -> string?
+virtual Pinotechrd.Security.Entities.Tenant.DbName.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.DbSchema.get -> string?
+virtual Pinotechrd.Security.Entities.Tenant.DbSchema.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.Identifier.get -> string!
+virtual Pinotechrd.Security.Entities.Tenant.Identifier.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.MarkAsFailed(string! error) -> void
+virtual Pinotechrd.Security.Entities.Tenant.MarkAsProvisioned() -> void
+virtual Pinotechrd.Security.Entities.Tenant.MarkAsProvisioning() -> void
+virtual Pinotechrd.Security.Entities.Tenant.Name.get -> string!
+virtual Pinotechrd.Security.Entities.Tenant.Name.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.ProvisioningAttempts.get -> int
+virtual Pinotechrd.Security.Entities.Tenant.ProvisioningAttempts.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.ProvisioningCompletedAt.get -> System.DateTime?
+virtual Pinotechrd.Security.Entities.Tenant.ProvisioningCompletedAt.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.ProvisioningError.get -> string?
+virtual Pinotechrd.Security.Entities.Tenant.ProvisioningError.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.ProvisioningStartedAt.get -> System.DateTime?
+virtual Pinotechrd.Security.Entities.Tenant.ProvisioningStartedAt.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.Rename(string! newName) -> void
+virtual Pinotechrd.Security.Entities.Tenant.Status.get -> Pinotechrd.Security.Enums.TenantStatus
+virtual Pinotechrd.Security.Entities.Tenant.Status.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.Subscription.get -> Pinotechrd.Security.Entities.SystemSubscription!
+virtual Pinotechrd.Security.Entities.Tenant.Subscription.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.SubscriptionId.get -> System.Guid
+virtual Pinotechrd.Security.Entities.Tenant.SubscriptionId.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.Suspend() -> void
+virtual Pinotechrd.Security.Entities.Tenant.SuspendedAt.get -> System.DateTime?
+virtual Pinotechrd.Security.Entities.Tenant.SuspendedAt.set -> void
+virtual Pinotechrd.Security.Entities.Tenant.UpdateSchemaVersion(string! version) -> void
+virtual Pinotechrd.Security.Entities.UserModulePermission.AccessType.get -> Pinotechrd.Security.Enums.PermissionAccessType
+virtual Pinotechrd.Security.Entities.UserModulePermission.AccessType.set -> void
+virtual Pinotechrd.Security.Entities.UserModulePermission.Permission.get -> Pinotechrd.Security.Entities.SecurityPermission!
+virtual Pinotechrd.Security.Entities.UserModulePermission.Permission.set -> void
+virtual Pinotechrd.Security.Entities.UserModulePermission.PermissionId.get -> System.Guid
+virtual Pinotechrd.Security.Entities.UserModulePermission.PermissionId.set -> void
+virtual Pinotechrd.Security.Entities.UserModulePermission.UserId.get -> System.Guid
+virtual Pinotechrd.Security.Entities.UserModulePermission.UserId.set -> void
+virtual Pinotechrd.Security.Interfaces.IdentityValidationResult.<Clone>$() -> Pinotechrd.Security.Interfaces.IdentityValidationResult!
+virtual Pinotechrd.Security.Interfaces.IdentityValidationResult.EqualityContract.get -> System.Type!
+virtual Pinotechrd.Security.Interfaces.IdentityValidationResult.Equals(Pinotechrd.Security.Interfaces.IdentityValidationResult? other) -> bool
+virtual Pinotechrd.Security.Interfaces.IdentityValidationResult.PrintMembers(System.Text.StringBuilder! builder) -> bool
+virtual Pinotechrd.Security.Models.AuthResult.<Clone>$() -> Pinotechrd.Security.Models.AuthResult!
+virtual Pinotechrd.Security.Models.AuthResult.EqualityContract.get -> System.Type!
+virtual Pinotechrd.Security.Models.AuthResult.Equals(Pinotechrd.Security.Models.AuthResult? other) -> bool
+virtual Pinotechrd.Security.Models.AuthResult.PrintMembers(System.Text.StringBuilder! builder) -> bool
+virtual Pinotechrd.Security.Models.AuthToken.<Clone>$() -> Pinotechrd.Security.Models.AuthToken!
+virtual Pinotechrd.Security.Models.AuthToken.EqualityContract.get -> System.Type!
+virtual Pinotechrd.Security.Models.AuthToken.Equals(Pinotechrd.Security.Models.AuthToken? other) -> bool
+virtual Pinotechrd.Security.Models.AuthToken.PrintMembers(System.Text.StringBuilder! builder) -> bool
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.GetActiveCatalogAsync(string! tenantId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule!>!>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.GetUserOverridesAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride!>!>!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.ReplaceUserOverridesAsync(string! userId, System.Collections.Generic.IEnumerable<Pinotechrd.Security.Models.UserPermissionOverride!>! overrides) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Models.UserPermissionOverride
+Pinotechrd.Security.Models.UserPermissionOverride.Access.get -> Pinotechrd.Security.Enums.PermissionAccessType
+Pinotechrd.Security.Models.UserPermissionOverride.Access.init -> void
+Pinotechrd.Security.Models.UserPermissionOverride.Code.get -> string!
+Pinotechrd.Security.Models.UserPermissionOverride.Code.init -> void
+Pinotechrd.Security.Models.UserPermissionOverride.Deconstruct(out string! Code, out Pinotechrd.Security.Enums.PermissionAccessType Access) -> void
+Pinotechrd.Security.Models.UserPermissionOverride.Equals(Pinotechrd.Security.Models.UserPermissionOverride? other) -> bool
+Pinotechrd.Security.Models.UserPermissionOverride.UserPermissionOverride(string! Code, Pinotechrd.Security.Enums.PermissionAccessType Access) -> void
+Pinotechrd.Security.Models.UserPermissionOverride.<Clone>$() -> Pinotechrd.Security.Models.UserPermissionOverride!
+override Pinotechrd.Security.Models.UserPermissionOverride.Equals(object? obj) -> bool
+override Pinotechrd.Security.Models.UserPermissionOverride.GetHashCode() -> int
+override Pinotechrd.Security.Models.UserPermissionOverride.ToString() -> string!
+static Pinotechrd.Security.Models.UserPermissionOverride.operator !=(Pinotechrd.Security.Models.UserPermissionOverride? left, Pinotechrd.Security.Models.UserPermissionOverride? right) -> bool
+static Pinotechrd.Security.Models.UserPermissionOverride.operator ==(Pinotechrd.Security.Models.UserPermissionOverride? left, Pinotechrd.Security.Models.UserPermissionOverride? right) -> bool

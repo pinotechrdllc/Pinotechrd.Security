@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Pinotechrd.Security.Abstractions/Pinotechrd.Security.Abstractions.csproj" />
+    <Project Path="src/Pinotechrd.Security/Pinotechrd.Security.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Pinotechrd.Security.Tests/Pinotechrd.Security.Tests.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Pinotechrd.Security.SampleApi/Pinotechrd.Security.SampleApi.csproj" />
+  </Folder>
+</Solution>

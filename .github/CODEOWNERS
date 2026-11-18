@@ -1,0 +1,10 @@
+# Every change needs a review from a maintainer.
+* @pinotechrd
+
+# Build, release and dependency configuration decide what gets published to nuget.org.
+/.github/ @pinotechrd
+/build/ @pinotechrd
+/Directory.Build.props @pinotechrd
+/Directory.Packages.props @pinotechrd
+/nuget.config @pinotechrd
+/global.json @pinotechrd
