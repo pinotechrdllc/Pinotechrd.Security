@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project uses Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- `AddPinotechrdEfRefreshTokenStore<TContext>()`: an opt-in, scoped `IRefreshTokenStore` kept in each tenant's schema through EF Core, replacing the default `InMemoryRefreshTokenStore`. Tokens are stored as SHA-256 hashes, consumed with one conditional `UPDATE`, and a replayed token revokes its family. Requires `PinotechrdSecurityModelOptions.MapRefreshTokens` (default `false`, so the model of existing applications does not change); applications that enable it add their own migration for the `refresh_tokens` and `refresh_token_families` tables.
+
+### Fixed
+
+- **Stores.** `AddPinotechrdSecurity` adds the in-memory `IRefreshTokenStore` and `ITwoFactorAttemptStore` only when none is registered. Before, a store registered before `AddPinotechrdSecurity` was silently replaced by the in-memory default.
+
 ## [1.2.0-preview.3] - 2026-11-18
 
 ### Removed (breaking)

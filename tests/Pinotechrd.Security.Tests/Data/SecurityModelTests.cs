@@ -286,4 +286,87 @@ public class SecurityModelTests
         statement.Should().Contain("REFERENCES \"subscription_plans\"");
         statement.Should().NotContain("security_modules");
     }
+
+    // ---- Refresh token tables (opt-in) -------------------------------------------------------
+
+    private static IEnumerable<IEntityType> RefreshTokenTables(SecDb db) =>
+        db.Model.GetEntityTypes().Where(t => t.GetTableName() is "refresh_tokens" or "refresh_token_families");
+
+    [Fact]
+    public void Model_ShouldNotMapRefreshTokenTables_ByDefault()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a");
+
+        RefreshTokenTables(db).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Model_ShouldNotMapRefreshTokenTables_WhenTheFlagIsOffInSearchPathMode()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SearchPath(connection, "a");
+
+        RefreshTokenTables(db).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Model_ShouldMapBothRefreshTokenTablesInTheTenantSchema_WhenMapRefreshTokensIsOn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var a = SecDbFactory.Create(connection, "a", configure: o => o.MapRefreshTokens = true);
+        using var b = SecDbFactory.Create(connection, "b", configure: o => o.MapRefreshTokens = true);
+
+        RefreshTokenTables(a).Select(t => t.GetTableName()).Should().BeEquivalentTo("refresh_tokens", "refresh_token_families");
+        RefreshTokenTables(a).Should().OnlyContain(t => t.GetSchema() == a.SchemaName);
+        RefreshTokenTables(b).Should().OnlyContain(t => t.GetSchema() == b.SchemaName);
+        a.SchemaName.Should().NotBe(b.SchemaName);
+    }
+
+    [Fact]
+    public void Model_ShouldKeepRefreshTokenTablesOutOfTheCatalogSchema_EvenWithACustomCatalogSchema()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a", configure: o =>
+        {
+            o.MapRefreshTokens = true;
+            o.CatalogSchema = "platform";
+        });
+
+        RefreshTokenTables(db).Should().HaveCount(2).And.OnlyContain(t => t.GetSchema() == db.SchemaName && t.GetSchema() != "platform");
+    }
+
+    [Fact]
+    public void Model_ShouldMapRefreshTokenTablesWithoutASchema_InSearchPathModeWhenTheFlagIsOn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SearchPath(connection, "a", o => o.MapRefreshTokens = true);
+
+        RefreshTokenTables(db).Should().HaveCount(2).And.OnlyContain(t => t.GetSchema() == null);
+    }
+
+    [Fact]
+    public void Model_ShouldKeyRefreshTokensByAColumnNamedTokenHashAndStoreNoTokenColumn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a", configure: o => o.MapRefreshTokens = true);
+
+        var tokens = RefreshTokenTables(db).Single(t => t.GetTableName() == "refresh_tokens");
+        var table = Microsoft.EntityFrameworkCore.Metadata.StoreObjectIdentifier.Table("refresh_tokens", tokens.GetSchema());
+        var columns = tokens.GetProperties().Select(p => p.GetColumnName(table)).ToList();
+
+        tokens.FindPrimaryKey()!.Properties.Single().GetColumnName(table).Should().Be("token_hash");
+        columns.Should().BeEquivalentTo("token_hash", "tenant_id", "user_id", "family_id", "security_stamp", "expires_at", "consumed_at", "revoked_at");
+    }
+
+    [Fact]
+    public void TheCreateScript_ShouldContainRefreshTokenTables_OnlyWhenTheFlagIsOn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var off = SearchPath(connection, "a");
+        using var on = SearchPath(connection, "a", o => o.MapRefreshTokens = true);
+
+        off.Database.GenerateCreateScript().Should().NotContain("refresh_token");
+        on.Database.GenerateCreateScript().Should().Contain("refresh_tokens").And.Contain("refresh_token_families");
+    }
 }
