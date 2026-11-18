@@ -11,7 +11,7 @@ Multi-tenant identity and authorization infrastructure for ASP.NET Core on .NET 
 
 ## Features
 
-- **Tenant resolution** from the authenticated claim, a header, the JSON body or the query string.
+- **Tenant resolution** from the authenticated claim, or from a header when there is no claim.
 - **Permission-based authorization**: any `[Authorize(Policy = "Module.Permission")]` is checked against the tenant's subscription, its active modules, and the user's roles and overrides.
 - **ASP.NET Core Identity** wired with JWT bearer authentication and password and e-mail defaults.
 - **JWT access tokens and opaque refresh tokens** with server-side validation and rotation.
@@ -115,12 +115,26 @@ The tenant id is taken from the first source that has a value, in this order:
 | --- | --- | --- | --- |
 | 1 | Claim of the authenticated user | `ClaimType` | `tenant_id` |
 | 2 | Request header | `HeaderName` | `TenantId` |
-| 3 | JSON request body property | `JsonProperty` | `tenantId` |
-| 4 | Query string parameter | `QueryParameter` | `tenantId` |
 
-- A tenant id that `ITenantStore` does not recognize is rejected with `400 Bad Request`.
-- A request to a path starting with `/api` with no tenant id is rejected with `400 Bad Request`.
-- Paths starting with a prefix in `SkipPaths` bypass tenant resolution.
+The order is fixed. When an authenticated user has the claim, the header is not read, so a different header value is ignored and does not cause a rejection. The JSON body and the query string are not read.
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `Sources` | `Claim \| Header` | Sources that may be used. `TenantSources.Claim` alone accepts only the verified claim. |
+| `OnMissingTenant` | `Reject` | `Reject` answers `400` when a request that requires a tenant has none. `Continue` lets the request through without a tenant, so authorization can answer `401` to an anonymous caller of a protected endpoint. |
+| `RequiredPathPrefix` | `/api` | Requests whose path starts with this prefix require a tenant. `/` means every path; empty means none. |
+| `SkipPaths` | empty | Paths starting with one of these prefixes bypass tenant resolution. |
+
+- A tenant id that `ITenantStore` does not recognize is rejected with `400 Bad Request`, whatever `OnMissingTenant` says. An unknown tenant and an inactive one get the same answer.
+- When the application registers `IProblemDetailsService` (for example with `builder.Services.AddProblemDetails()`), rejections are `application/problem+json` with a `code` member: `tenant_required` or `tenant_invalid` (constants in `TenantResolutionErrorCodes`). Without it, the body is plain text.
+- Tenant ids and header values are not logged.
+
+### Login and two-factor
+
+- `LoginAsync` returns the same failure, `Invalid credentials`, for an unknown user, a wrong password, a locked-out account and an account Identity does not allow to sign in. Lockout works as in ASP.NET Core Identity.
+- When there is no real password hash to check, the password is checked against a dummy hash made with the same hasher. This makes it harder to tell from the response time whether an account exists. It does not make the response time constant.
+- When the user has two-factor enabled, `LoginAsync` returns `RequiresTwoFactor` and a `TwoFactorToken`. The token is opaque, protected with ASP.NET Core Data Protection, bound to the user and the tenant, and valid for five minutes. Pass it to `GetTwoFactorProvidersAsync`, `SendTwoFactorCodeAsync` and `VerifyTwoFactorCodeAsync`, with the same tenant id as the login. A successful verification invalidates the token. Wrong codes count toward lockout.
+- In a deployment with several instances, Data Protection keys must be shared between them, or a token issued by one instance is rejected by another.
 
 ### Refresh tokens
 

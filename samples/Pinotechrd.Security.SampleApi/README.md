@@ -17,7 +17,7 @@ dotnet run --project samples/Pinotechrd.Security.SampleApi/Pinotechrd.Security.S
 - `POST /api/auth/refresh`
   - Validates opaque refresh token, revokes old token, returns rotated tokens
 - `GET /api/tenant`
-  - Resolves tenant from authenticated claim first; falls back to `TenantId` header, JSON, query
+  - Resolves tenant from authenticated claim first; falls back to the `TenantId` header
 - `GET /api/secure`
   - Protected endpoint (`[Authorize]`) to validate middleware order and auth setup
 

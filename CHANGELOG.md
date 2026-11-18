@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project uses Semantic Versioning.
 
+## [Unreleased]
+
+### Removed (breaking)
+
+- Tenant resolution no longer reads the JSON request body or the query string. `TenantResolutionOptions.JsonProperty` and `TenantResolutionOptions.QueryParameter` are gone. Reading the body buffered it with no size limit, and a query value ends up in logs and links. Send the tenant in the `TenantId` header (or the name set in `HeaderName`) on requests made before login.
+
+### Changed (breaking)
+
+- `LoginAsync` returns `Invalid credentials` for a locked-out account too, instead of `Account locked out`, so the error does not tell which accounts exist. Lockout itself works as before.
+- `LoginAsync` now asks for the second factor when the user has two-factor enabled. Before, `CheckPasswordSignInAsync` never reported `RequiresTwoFactor`, so a password alone was enough.
+- `AuthResult.TwoFactorToken` is now an opaque value protected with ASP.NET Core Data Protection, bound to the user, the tenant and the security stamp, and valid for five minutes. It used to be the user id, which anyone could send to `GetTwoFactorProvidersAsync`, `SendTwoFactorCodeAsync` and `VerifyTwoFactorCodeAsync`. A user id is no longer accepted by those methods.
+- `VerifyTwoFactorCodeAsync` fails when `tenantId` is not the tenant the token was issued for, counts a wrong code toward lockout, refuses locked-out users, and renews the security stamp on success, which invalidates the token.
+- `PinotechrdAuthManager<TUser>` requires `TUser` to have a public parameterless constructor (`new()`). `AddPinotechrdSecurity` already required it.
+
+### Added
+
+- `TenantResolutionOptions.Sources` (`TenantSources.Claim | TenantSources.Header` by default) chooses the sources. The claim of an authenticated user always wins; the header is read only when there is no claim.
+- `TenantResolutionOptions.OnMissingTenant`: `MissingTenantBehavior.Reject` (default, as before) or `Continue`, which lets a request without a tenant reach authorization so an anonymous caller of a protected endpoint gets `401`.
+- `TenantResolutionOptions.RequiredPathPrefix` (default `/api`) replaces the hard-coded prefix.
+- Tenant rejections go through `IProblemDetailsService` when the application registers one, as `application/problem+json` with a `code` member (`tenant_required` or `tenant_invalid`, see `TenantResolutionErrorCodes`). Without it the plain-text body is unchanged.
+- `PinotechrdAuthManager<TUser>` takes an optional `IDataProtectionProvider`. Without one, two-factor sign-in fails closed.
+
+### Security
+
+- Login for an unknown user, a locked-out user or a user Identity does not allow to sign in verifies the password against a dummy hash, so the response time reveals less about which accounts exist. It is not constant time.
+- An unknown and an inactive tenant get the same status and body.
+
 ## [1.2.0-preview.2] - 2026-11-17
 
 ### Changed (breaking)

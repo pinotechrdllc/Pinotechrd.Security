@@ -31,7 +31,7 @@ Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.ChangePasswordAsync(string
 Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.GeneratePasswordResetTokenAsync(string! email) -> System.Threading.Tasks.Task<string?>!
 Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.GetTwoFactorProvidersAsync(string! twoFactorToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IList<string!>!>!
 Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.LoginAsync(string! emailOrUsername, string! password, string! tenantId) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.PinotechrdAuthManager(Microsoft.AspNetCore.Identity.UserManager<TUser!>! userManager, Microsoft.AspNetCore.Identity.SignInManager<TUser!>! signInManager, Pinotechrd.Security.Interfaces.ISecurityEngine! securityEngine, Pinotechrd.Security.Interfaces.ITokenProvider! tokenProvider, Pinotechrd.Security.Interfaces.IRefreshTokenStore! refreshTokenStore, Microsoft.Extensions.Options.IOptions<Pinotechrd.Security.Options.PinotechrdSecurityOptions!>! options, Pinotechrd.Security.Interfaces.IIdentityValidator<TUser!>? customValidator = null, Pinotechrd.Security.Interfaces.IPinotechrdMessageService? messageService = null) -> void
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.PinotechrdAuthManager(Microsoft.AspNetCore.Identity.UserManager<TUser!>! userManager, Microsoft.AspNetCore.Identity.SignInManager<TUser!>! signInManager, Pinotechrd.Security.Interfaces.ISecurityEngine! securityEngine, Pinotechrd.Security.Interfaces.ITokenProvider! tokenProvider, Pinotechrd.Security.Interfaces.IRefreshTokenStore! refreshTokenStore, Microsoft.Extensions.Options.IOptions<Pinotechrd.Security.Options.PinotechrdSecurityOptions!>! options, Pinotechrd.Security.Interfaces.IIdentityValidator<TUser!>? customValidator = null, Pinotechrd.Security.Interfaces.IPinotechrdMessageService? messageService = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider? dataProtectionProvider = null) -> void
 Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.RefreshAsync(string! refreshToken) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
 Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.ResetPasswordAsync(string! email, string! token, string! newPassword) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
 Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.SendTwoFactorCodeAsync(string! twoFactorToken, string! provider) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
@@ -138,10 +138,6 @@ Pinotechrd.Security.Tenancy.TenantResolutionOptions.ClaimType.get -> string!
 Pinotechrd.Security.Tenancy.TenantResolutionOptions.ClaimType.set -> void
 Pinotechrd.Security.Tenancy.TenantResolutionOptions.HeaderName.get -> string!
 Pinotechrd.Security.Tenancy.TenantResolutionOptions.HeaderName.set -> void
-Pinotechrd.Security.Tenancy.TenantResolutionOptions.JsonProperty.get -> string!
-Pinotechrd.Security.Tenancy.TenantResolutionOptions.JsonProperty.set -> void
-Pinotechrd.Security.Tenancy.TenantResolutionOptions.QueryParameter.get -> string!
-Pinotechrd.Security.Tenancy.TenantResolutionOptions.QueryParameter.set -> void
 Pinotechrd.Security.Tenancy.TenantResolutionOptions.SkipPaths.get -> System.Collections.Generic.List<string!>!
 Pinotechrd.Security.Tenancy.TenantResolutionOptions.SkipPaths.set -> void
 Pinotechrd.Security.Tenancy.TenantResolutionOptions.TenantResolutionOptions() -> void
@@ -175,3 +171,19 @@ Pinotechrd.Security.Core.TenantCacheStore.GetUserOverridesAsync(string! userId) 
 Pinotechrd.Security.Interfaces.ISecurityDbContext.UserModulePermissions.get -> System.Linq.IQueryable<Pinotechrd.Security.Entities.UserModulePermission!>!
 Pinotechrd.Security.Interfaces.ISecurityStore.GetActiveCatalogAsync(string! tenantId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule!>!>!
 Pinotechrd.Security.Interfaces.ISecurityStore.GetUserOverridesAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride!>!>!
+const Pinotechrd.Security.Tenancy.TenantResolutionErrorCodes.TenantInvalid = "tenant_invalid" -> string!
+const Pinotechrd.Security.Tenancy.TenantResolutionErrorCodes.TenantRequired = "tenant_required" -> string!
+Pinotechrd.Security.Tenancy.MissingTenantBehavior
+Pinotechrd.Security.Tenancy.MissingTenantBehavior.Continue = 1 -> Pinotechrd.Security.Tenancy.MissingTenantBehavior
+Pinotechrd.Security.Tenancy.MissingTenantBehavior.Reject = 0 -> Pinotechrd.Security.Tenancy.MissingTenantBehavior
+Pinotechrd.Security.Tenancy.TenantResolutionErrorCodes
+Pinotechrd.Security.Tenancy.TenantResolutionOptions.OnMissingTenant.get -> Pinotechrd.Security.Tenancy.MissingTenantBehavior
+Pinotechrd.Security.Tenancy.TenantResolutionOptions.OnMissingTenant.set -> void
+Pinotechrd.Security.Tenancy.TenantResolutionOptions.RequiredPathPrefix.get -> string?
+Pinotechrd.Security.Tenancy.TenantResolutionOptions.RequiredPathPrefix.set -> void
+Pinotechrd.Security.Tenancy.TenantResolutionOptions.Sources.get -> Pinotechrd.Security.Tenancy.TenantSources
+Pinotechrd.Security.Tenancy.TenantResolutionOptions.Sources.set -> void
+Pinotechrd.Security.Tenancy.TenantSources
+Pinotechrd.Security.Tenancy.TenantSources.Claim = 1 -> Pinotechrd.Security.Tenancy.TenantSources
+Pinotechrd.Security.Tenancy.TenantSources.Header = 2 -> Pinotechrd.Security.Tenancy.TenantSources
+Pinotechrd.Security.Tenancy.TenantSources.None = 0 -> Pinotechrd.Security.Tenancy.TenantSources

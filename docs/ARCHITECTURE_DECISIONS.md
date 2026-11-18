@@ -5,7 +5,7 @@ This document captures the key architecture choices behind Pinotechrd.Security a
 ## ADR-001: Multi-tenant resolution trusts authenticated claims first
 
 - Decision:
-  Tenant resolution uses authenticated user claims as the primary source, then falls back to request-based sources (headers, payload, query) only when claims are not available.
+  Tenant resolution uses authenticated user claims as the primary source, then falls back to the `TenantId` header only when the claim is not available. A header never overrides the claim. The JSON body and query string sources were removed after 1.2.0-preview.2: reading the body buffered it without a bound, and a query value ends up in logs and links.
 - Why:
   Claims come from a validated token and are less spoofable than request metadata.
 - Tradeoff:

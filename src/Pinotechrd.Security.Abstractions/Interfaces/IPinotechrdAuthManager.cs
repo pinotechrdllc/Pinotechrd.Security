@@ -43,7 +43,8 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     /// <summary>
     /// Gets the list of available 2FA providers for the user (Email, Phone, etc).
     /// </summary>
-    /// <param name="twoFactorToken">The temporary token obtained during login.</param>
+    /// <param name="twoFactorToken">The temporary token obtained during login (<see cref="AuthResult.TwoFactorToken"/>).
+    /// It is an opaque, short-lived value bound to the user and the tenant, not the user identifier.</param>
     Task<IList<string>> GetTwoFactorProvidersAsync(string twoFactorToken);
 
     /// <summary>
@@ -59,6 +60,6 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     /// <param name="twoFactorToken">The temporary token.</param>
     /// <param name="provider">The provider used.</param>
     /// <param name="code">The verification code.</param>
-    /// <param name="tenantId">The target tenant ID.</param>
+    /// <param name="tenantId">The target tenant ID. It must be the tenant the token was issued for.</param>
     Task<AuthResult> VerifyTwoFactorCodeAsync(string twoFactorToken, string provider, string code, string tenantId);
 }
