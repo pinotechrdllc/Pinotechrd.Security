@@ -4,8 +4,9 @@ using Pinotechrd.Security.Interfaces;
 namespace Pinotechrd.Security.Data;
 
 /// <summary>
-/// Custom ModelCacheKeyFactory that includes the schema name in the cache key.
+/// Custom ModelCacheKeyFactory that includes the schema name and the security model settings in the cache key.
 /// Required to ensure EF Core doesn't reuse the same model across different dynamic schemas.
+/// Registered by <see cref="PinotechrdSecurityDbContextOptionsExtensions.UsePinotechrdSecurity(Microsoft.EntityFrameworkCore.DbContextOptionsBuilder, Action{PinotechrdSecurityModelOptions}?)"/>.
 /// </summary>
 public class ModelSchemaCacheKeyFactory : IModelCacheKeyFactory
 {
@@ -16,7 +17,9 @@ public class ModelSchemaCacheKeyFactory : IModelCacheKeyFactory
     {
         if (context is ISchemaAwareContext schemaAware)
         {
-            return (context.GetType(), schemaAware.SchemaName, designTime);
+            var settings = context.GetService<IDbContextOptions>()
+                .FindExtension<PinotechrdSecurityDbContextOptionsExtension>()?.Settings;
+            return (context.GetType(), schemaAware.SchemaName, settings, designTime);
         }
 
         return (context.GetType(), designTime);
@@ -35,7 +38,8 @@ public class ModelSchemaCacheKeyFactory : IModelCacheKeyFactory
 public interface ISchemaAwareContext
 {
     /// <summary>
-    /// Gets the dynamic schema name associated with the current context.
+    /// Gets the dynamic schema name associated with the current context, or <see langword="null"/> when the
+    /// model has no tenant schema (<see cref="TenantSchemaMode.SearchPath"/>).
     /// </summary>
-    string SchemaName { get; }
+    string? SchemaName { get; }
 }

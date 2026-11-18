@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Pinotechrd.Security.Entities;
 using Pinotechrd.Security.Interfaces;
 
@@ -7,30 +8,89 @@ namespace Pinotechrd.Security.Data;
 
 /// <summary>
 /// Base database context for Pinotechrd Security infrastructure.
-/// Handles multi-schema routing: 
-/// - "public" for global catalog.
-/// - Dynamic for tenant-specific identity and security.
+/// Handles multi-schema routing:
+/// - A constant catalog schema (<see cref="PinotechrdSecurityModelOptions.CatalogSchema"/>, default "public").
+/// - Tenant-specific identity and security tables, in the tenant's schema (see <see cref="TenantSchemaMode"/>).
 /// </summary>
+/// <remarks>
+/// Configure the options with <see cref="PinotechrdSecurityDbContextOptionsExtensions.UsePinotechrdSecurity(DbContextOptionsBuilder, Action{PinotechrdSecurityModelOptions}?)"/>.
+/// In <see cref="TenantSchemaMode.SchemaPerTenantInModel"/> (the default) the context refuses to build its model
+/// unless <see cref="ModelSchemaCacheKeyFactory"/> is the model cache key factory, because EF Core would otherwise
+/// reuse the first tenant's model, and schema, for every tenant.
+/// The catalog table that maps plans to modules has no foreign key to the tenant's module table: modules live in
+/// each tenant schema, the plan mapping lives once in the catalog, and they are matched by module id.
+/// </remarks>
 /// <typeparam name="TUser">The type of the user entity.</typeparam>
 /// <typeparam name="TRole">The type of the role entity.</typeparam>
-public abstract class PinotechrdSecurityDbContext<TUser, TRole> : IdentityDbContext<TUser, TRole, Guid>, ISecurityDbContext, ISchemaAwareContext
+public abstract class PinotechrdSecurityDbContext<TUser, TRole> : IdentityDbContext<TUser, TRole, Guid>, ISecurityDbContext, ISchemaAwareContext, ISearchPathTenantSource
     where TUser : BaseSecurityUser
     where TRole : BaseSecurityRole
 {
     private readonly ISchemaProvider _schemaProvider;
+    private readonly PinotechrdSecurityModelSettings _settings;
 
     /// <summary>
     /// Initializes the security DbContext with schema provider support.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// A pre-built or compiled model is supplied (<c>UseModel</c>) in <see cref="TenantSchemaMode.SchemaPerTenantInModel"/>,
+    /// or <see cref="TenantSchemaMode.SearchPath"/> is used without the library's <c>search_path</c> interceptors and
+    /// without <see cref="PinotechrdSecurityModelOptions.ApplicationTakesResponsibilityForSearchPath"/>.
+    /// </exception>
     protected PinotechrdSecurityDbContext(DbContextOptions options, ISchemaProvider schemaProvider) : base(options)
     {
         _schemaProvider = schemaProvider;
+        _settings = options.FindExtension<PinotechrdSecurityDbContextOptionsExtension>()?.Settings
+                    ?? PinotechrdSecurityModelSettings.Default;
+
+        RefuseSharedSchemaFallback(_settings, schemaProvider, GetType().Name);
+
+        var core = options.FindExtension<CoreOptionsExtension>();
+        if (_settings.TenantSchemaMode == TenantSchemaMode.SchemaPerTenantInModel && core?.Model != null)
+        {
+            // A supplied model (UseModel, compiled models) holds one schema and bypasses the per-schema model cache.
+            throw new InvalidOperationException(
+                $"{GetType().Name} cannot use a pre-built or compiled model (UseModel) with TenantSchemaMode.SchemaPerTenantInModel: " +
+                "the model holds one tenant's schema. Remove UseModel, or use TenantSchemaMode.SearchPath.");
+        }
+
+        if (_settings.TenantSchemaMode == TenantSchemaMode.SearchPath
+            && !_settings.ApplicationTakesResponsibilityForSearchPath
+            && core?.Interceptors?.Contains(SearchPathConnectionInterceptor.Instance) != true)
+        {
+            throw new InvalidOperationException(
+                $"{GetType().Name} uses TenantSchemaMode.SearchPath without the search_path interceptors, so its queries " +
+                "would reach the connection's default schema. Configure it only through UsePinotechrdSecurity(), or set " +
+                "ApplicationTakesResponsibilityForSearchPath if the application binds every connection itself.");
+        }
+    }
+
+    string ISearchPathTenantSource.ResolveSearchPathSchema() => _schemaProvider.GetSchemaName();
+
+    /// <summary>
+    /// In <see cref="TenantSchemaMode.SearchPath"/> a connection must only ever be bound to a resolved tenant's schema.
+    /// The shared-schema fallback would bind a request without a tenant to the shared <c>identity</c> schema, where the
+    /// tenant tables do not live, so that combination is refused.
+    /// </summary>
+    private static void RefuseSharedSchemaFallback(PinotechrdSecurityModelSettings settings, ISchemaProvider schemaProvider, string contextName)
+    {
+        if (settings.TenantSchemaMode == TenantSchemaMode.SearchPath
+            && schemaProvider is Tenancy.DbSchemaProvider { SharedSchemaFallbackEnabled: true })
+        {
+            throw new InvalidOperationException(
+                $"{contextName} uses TenantSchemaMode.SearchPath with TenantResolutionOptions.UseSharedSchemaWhenNoTenant: a request " +
+                "without a tenant would be bound to the shared schema. Turn the fallback off; in SearchPath mode a connection " +
+                "without a resolved tenant is refused, and design-time tooling does not need it because the model has no tenant schema.");
+        }
     }
 
     /// <summary>
-    /// Gets the dynamic schema name resolved for the current context.
+    /// Gets the tenant schema written into the model, or <see langword="null"/> in
+    /// <see cref="TenantSchemaMode.SearchPath"/>, where the model has no tenant schema.
     /// </summary>
-    public string SchemaName => _schemaProvider.GetSchemaName();
+    public string? SchemaName => _settings.TenantSchemaMode == TenantSchemaMode.SearchPath
+        ? null
+        : _schemaProvider.GetSchemaName();
 
     // Catalog Entities (Static Global Schema: "public")
     /// <summary>
@@ -92,14 +152,25 @@ public abstract class PinotechrdSecurityDbContext<TUser, TRole> : IdentityDbCont
     /// </summary>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // Fail instead of serving one tenant's model (and schema) to every tenant.
+        if (_settings.TenantSchemaMode == TenantSchemaMode.SchemaPerTenantInModel
+            && this.GetService<IModelCacheKeyFactory>() is not ModelSchemaCacheKeyFactory)
+        {
+            throw new InvalidOperationException(
+                $"{GetType().Name} writes the tenant schema into its model, but the model cache is not keyed by schema, " +
+                "so every tenant would get the first tenant's model. Call options.UsePinotechrdSecurity() where the " +
+                "context options are built (AddDbContext and any design-time factory), or use TenantSchemaMode.SearchPath.");
+        }
+
         base.OnModelCreating(modelBuilder);
 
-        // 1. Catalog Mapping (Global "public" schema)
-        string catalogSchema = "public";
-        
-        modelBuilder.Entity<Tenant>(entity => 
+        // 1. Catalog Mapping (constant schema)
+        string? catalogSchema = _settings.CatalogSchema;
+        var excludeCatalog = _settings.ExcludeCatalogFromMigrations;
+
+        modelBuilder.Entity<Tenant>(entity =>
         {
-            entity.ToTable("tenants", catalogSchema);
+            entity.ToTable("tenants", catalogSchema, t => t.ExcludeFromMigrations(excludeCatalog));
             entity.Property(e => e.Name).HasMaxLength(200).IsRequired();
             entity.Property(e => e.Identifier).HasMaxLength(100).IsRequired();
             entity.HasIndex(e => e.Identifier).IsUnique();
@@ -108,7 +179,7 @@ public abstract class PinotechrdSecurityDbContext<TUser, TRole> : IdentityDbCont
 
         modelBuilder.Entity<SubscriptionPlan>(entity => 
         {
-            entity.ToTable("subscription_plans", catalogSchema);
+            entity.ToTable("subscription_plans", catalogSchema, t => t.ExcludeFromMigrations(excludeCatalog));
             entity.Property(e => e.Name).HasMaxLength(100).IsRequired();
             entity.Property(e => e.Code).HasMaxLength(50).IsRequired();
             entity.Property(e => e.MonthlyPrice).HasPrecision(18, 2);
@@ -117,29 +188,36 @@ public abstract class PinotechrdSecurityDbContext<TUser, TRole> : IdentityDbCont
 
         modelBuilder.Entity<SystemSubscription>(entity => 
         {
-            entity.ToTable("system_subscriptions", catalogSchema);
+            entity.ToTable("system_subscriptions", catalogSchema, t => t.ExcludeFromMigrations(excludeCatalog));
             entity.HasOne(e => e.Plan).WithMany(p => p.SystemSubscriptions).HasForeignKey(e => e.PlanId);
         });
 
         modelBuilder.Entity<SubscriptionPlanModule>(entity => 
         {
-            entity.ToTable("subscription_plan_modules", catalogSchema);
+            entity.ToTable("subscription_plan_modules", catalogSchema, t => t.ExcludeFromMigrations(excludeCatalog));
             entity.HasOne(e => e.Plan).WithMany(p => p.PlanModules).HasForeignKey(e => e.PlanId);
-            entity.HasOne(e => e.Module).WithMany(m => m.PlanModules).HasForeignKey(e => e.ModuleId);
+            // No foreign key from the catalog to a tenant table: ModuleId is matched to the tenant's module by value.
+            entity.Ignore(e => e.Module);
+            entity.HasIndex(e => e.ModuleId);
         });
 
-        modelBuilder.Entity<SubscriptionPlanFeature>(entity => 
+        modelBuilder.Entity<SecurityModule>().Ignore(m => m.PlanModules);
+
+        modelBuilder.Entity<SubscriptionPlanFeature>(entity =>
         {
-            entity.ToTable("subscription_plan_features", catalogSchema);
+            entity.ToTable("subscription_plan_features", catalogSchema, t => t.ExcludeFromMigrations(excludeCatalog));
             entity.Property(e => e.Code).HasMaxLength(100).IsRequired();
             entity.Property(e => e.Value).HasMaxLength(500);
             entity.Property(e => e.Description).HasMaxLength(500);
             entity.HasOne(e => e.Plan).WithMany(p => p.PlanFeatures).HasForeignKey(e => e.PlanId);
         });
 
-        // 2. Tenant Identity & Security Mapping (Dynamic schema)
-        string dynamicSchema = SchemaName;
-        modelBuilder.HasDefaultSchema(dynamicSchema);
+        // 2. Tenant Identity & Security Mapping (tenant schema, or none in search_path mode)
+        string? dynamicSchema = SchemaName;
+        if (dynamicSchema != null)
+        {
+            modelBuilder.HasDefaultSchema(dynamicSchema);
+        }
 
         // Identity Table Mapping
         modelBuilder.Entity<TUser>(entity => entity.ToTable("users", dynamicSchema));

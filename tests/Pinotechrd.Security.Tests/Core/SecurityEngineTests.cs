@@ -36,13 +36,27 @@ public class SecurityEngineTests
         _provider.GetCurrentTenantId().Returns(tenantId);
         _store.IsSubscriptionActiveAsync(tenantId).Returns(true);
         _store.IsModuleActiveAsync(tenantId, moduleCode).Returns(true);
-        _provider.GetUserPermissionsAsync(userId).Returns(new List<string> { permName });
+        _provider.GetUserPermissionsAsync(userId).Returns(new List<string> { $"{moduleCode}.{permName}" });
 
         // Act
         var result = await _engine.CanAccessAsync(moduleCode, permName);
 
         // Assert
         result.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CanAccessAsync_ShouldReturnFalse_WhenTheUserHoldsOnlyTheBarePermissionName()
+    {
+        _provider.GetCurrentUserId().Returns("user-1");
+        _provider.GetCurrentTenantId().Returns("tenant-A");
+        _store.IsSubscriptionActiveAsync("tenant-A").Returns(true);
+        _store.IsModuleActiveAsync("tenant-A", "MOD_A").Returns(true);
+        _provider.GetUserPermissionsAsync("user-1").Returns(new List<string> { "PERM_1" });
+
+        var result = await _engine.CanAccessAsync("MOD_A", "PERM_1");
+
+        result.Should().BeFalse("a bare name would grant that permission in every module");
     }
 
     [Fact]

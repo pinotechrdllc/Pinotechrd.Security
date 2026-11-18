@@ -1,8 +1,10 @@
 using System.Collections.Frozen;
+using Microsoft.AspNetCore.Http;
 using Pinotechrd.Security.Entities;
 using Pinotechrd.Security.Enums;
 using Pinotechrd.Security.Interfaces;
 using Pinotechrd.Security.Models;
+using Pinotechrd.Security.Tenancy;
 
 namespace Pinotechrd.Security.Core;
 
@@ -13,14 +15,64 @@ public class SecurityEngine : ISecurityEngine
 {
     private readonly ISecurityStore _securityStore;
     private readonly ISecurityDataProvider _dataProvider;
+    private readonly TenantContext? _tenantContext;
+    private readonly IHttpContextAccessor? _httpContextAccessor;
+    private readonly string _claimType;
 
     /// <summary>
     /// Initializes the security engine.
     /// </summary>
-    public SecurityEngine(ISecurityStore securityStore, ISecurityDataProvider dataProvider)
+    /// <remarks>
+    /// <para>
+    /// The tenant the engine trusts is, for an HTTP request with an authenticated user, the user's tenant claim
+    /// (read from authenticated identities only); it must also equal <see cref="TenantContext"/> when that is set.
+    /// For an anonymous request, or outside HTTP (no <see cref="HttpContext"/>), it is <see cref="TenantContext"/>:
+    /// background work must call <see cref="TenantContext.SetTenant"/> before using the engine.
+    /// Every check denies, and every permission list is empty, when the tenant reported by
+    /// <see cref="ISecurityDataProvider.GetCurrentTenantId"/> is not that trusted tenant, when the user carries
+    /// no tenant claim or two different ones, or when no trusted tenant can be determined.
+    /// </para>
+    /// <para>
+    /// <c>AddPinotechrdSecurity</c> registers all optional services. Constructed without
+    /// <paramref name="tenantContext"/> and <paramref name="httpContextAccessor"/>, the engine trusts the data
+    /// provider's tenant as is.
+    /// </para>
+    /// </remarks>
+    public SecurityEngine(
+        ISecurityStore securityStore,
+        ISecurityDataProvider dataProvider,
+        TenantContext? tenantContext = null,
+        IHttpContextAccessor? httpContextAccessor = null,
+        TenantResolutionOptions? tenantOptions = null)
     {
         _securityStore = securityStore;
         _dataProvider = dataProvider;
+        _tenantContext = tenantContext;
+        _httpContextAccessor = httpContextAccessor;
+        _claimType = tenantOptions?.ClaimType ?? new TenantResolutionOptions().ClaimType;
+    }
+
+    private bool TenantMatchesRequest(string tenantId)
+    {
+        if (_tenantContext == null && _httpContextAccessor == null) return true;
+
+        var trusted = TrustedTenant();
+        return trusted != null && string.Equals(trusted, tenantId, StringComparison.Ordinal);
+    }
+
+    private string? TrustedTenant()
+    {
+        var status = TenantClaims.Read(_httpContextAccessor?.HttpContext?.User, _claimType, out var claimTenant);
+        switch (status)
+        {
+            case TenantClaimStatus.Single:
+                var resolved = _tenantContext?.TenantId;
+                return resolved == null || string.Equals(resolved, claimTenant, StringComparison.Ordinal) ? claimTenant : null;
+            case TenantClaimStatus.NotAuthenticated:
+                return _tenantContext?.TenantId;
+            default:
+                return null;
+        }
     }
 
     /// <summary>
@@ -34,7 +86,10 @@ public class SecurityEngine : ISecurityEngine
         var tenantId = _dataProvider.GetCurrentTenantId();
 
         // FAIL-FAST: No context, no access.
-        if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(tenantId)) 
+        if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(tenantId) || !TenantMatchesRequest(tenantId))
+            return false;
+
+        if (!SecurityCodes.TryNormalize(moduleCode, out moduleCode) || !SecurityCodes.TryNormalize(permissionName, out permissionName))
             return false;
 
         // 2. Validate Active Subscription (Business layer check)
@@ -45,12 +100,10 @@ public class SecurityEngine : ISecurityEngine
         var isModuleActive = await _securityStore.IsModuleActiveAsync(tenantId, moduleCode);
         if (!isModuleActive) return false;
 
-        // 4. Role bundle, plus Allow, minus Deny. A stored code is the full
-        //    "Module.Permission". A bare permission name still matches so a
-        //    caller that has not moved to the full code keeps working.
+        // 4. Role bundle, plus Allow, minus Deny. Only the full "MODULE.PERMISSION" code grants access:
+        //    a bare permission name would grant that permission in every module.
         var permissions = await EffectivePermissionsAsync(userId);
-        var fullCode = moduleCode + "." + permissionName;
-        return permissions.Contains(fullCode) || permissions.Contains(permissionName);
+        return permissions.Contains(moduleCode + "." + permissionName);
     }
 
     /// <inheritdoc />
@@ -61,7 +114,7 @@ public class SecurityEngine : ISecurityEngine
         var tenantId = _dataProvider.GetCurrentTenantId();
 
         // FAIL-FAST: No context, no menu.
-        if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(tenantId)) 
+        if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(tenantId) || !TenantMatchesRequest(tenantId))
             return [];
 
         // 2. Validate Active Subscription (Business layer check - execute once for performance)
@@ -130,8 +183,13 @@ public class SecurityEngine : ISecurityEngine
         if (string.IsNullOrEmpty(userId)) 
             return [];
 
-        var permissions = await EffectivePermissionsAsync(userId);
         var tenantId = _dataProvider.GetCurrentTenantId();
+        if (!string.IsNullOrEmpty(tenantId) && !TenantMatchesRequest(tenantId))
+        {
+            return [];
+        }
+
+        var permissions = await EffectivePermissionsAsync(userId);
         if (string.IsNullOrEmpty(tenantId))
         {
             return permissions;

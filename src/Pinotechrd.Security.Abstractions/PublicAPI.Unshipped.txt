@@ -127,9 +127,6 @@ Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.SetUserA
 Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.UpdateRoleAsync(TRole! role) -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.UpdateUserAsync(TUser! user) -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Interfaces.IRefreshTokenStore
-Pinotechrd.Security.Interfaces.IRefreshTokenStore.RevokeAsync(string! refreshToken) -> System.Threading.Tasks.Task!
-Pinotechrd.Security.Interfaces.IRefreshTokenStore.SaveAsync(string! userId, string! tenantId, string! refreshToken, System.DateTime expiresAtUtc) -> System.Threading.Tasks.Task!
-Pinotechrd.Security.Interfaces.IRefreshTokenStore.ValidateAsync(string! refreshToken) -> System.Threading.Tasks.Task<Pinotechrd.Security.Interfaces.RefreshTokenValidationResult!>!
 Pinotechrd.Security.Interfaces.ISchemaProvider
 Pinotechrd.Security.Interfaces.ISchemaProvider.GetDefaultSchema() -> string!
 Pinotechrd.Security.Interfaces.ISchemaProvider.GetSchemaName() -> string!
@@ -400,3 +397,39 @@ override Pinotechrd.Security.Models.UserPermissionOverride.GetHashCode() -> int
 override Pinotechrd.Security.Models.UserPermissionOverride.ToString() -> string!
 static Pinotechrd.Security.Models.UserPermissionOverride.operator !=(Pinotechrd.Security.Models.UserPermissionOverride? left, Pinotechrd.Security.Models.UserPermissionOverride? right) -> bool
 static Pinotechrd.Security.Models.UserPermissionOverride.operator ==(Pinotechrd.Security.Models.UserPermissionOverride? left, Pinotechrd.Security.Models.UserPermissionOverride? right) -> bool
+Pinotechrd.Security.Interfaces.IRefreshTokenStore.ConsumeAsync(string! refreshToken, string! expectedTenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult!>!
+Pinotechrd.Security.Interfaces.IRefreshTokenStore.RevokeAllForUserAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Interfaces.IRefreshTokenStore.RevokeAsync(string! refreshToken, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Interfaces.IRefreshTokenStore.SaveAsync(string! userId, string! tenantId, string! refreshToken, System.DateTime expiresAtUtc, string? familyId = null, string? securityStamp = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Interfaces.IRefreshTokenStore.ValidateAsync(string! refreshToken, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Pinotechrd.Security.Interfaces.RefreshTokenValidationResult!>!
+Pinotechrd.Security.Interfaces.ITwoFactorAttemptStore
+Pinotechrd.Security.Interfaces.ITwoFactorAttemptStore.RegisterAttemptAsync(string! challengeId, System.DateTimeOffset expiresAt, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.<Clone>$() -> Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult!
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.Deconstruct(out Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus Status, out string? UserId, out string? TenantId, out string? FamilyId, out string? SecurityStamp) -> void
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.Equals(Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult? other) -> bool
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.FamilyId.get -> string?
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.FamilyId.init -> void
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.RefreshTokenConsumeResult(Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus Status, string? UserId = null, string? TenantId = null, string? FamilyId = null, string? SecurityStamp = null) -> void
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.SecurityStamp.get -> string?
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.SecurityStamp.init -> void
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.Status.get -> Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.Status.init -> void
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.Succeeded.get -> bool
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.TenantId.get -> string?
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.TenantId.init -> void
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.UserId.get -> string?
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.UserId.init -> void
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus.Consumed = 0 -> Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus.Expired = 2 -> Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus.NotFound = 1 -> Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus.Reused = 4 -> Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus.Revoked = 3 -> Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus
+Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus.TenantMismatch = 5 -> Pinotechrd.Security.Interfaces.RefreshTokenConsumeStatus
+override Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.Equals(object? obj) -> bool
+override Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.GetHashCode() -> int
+override Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.ToString() -> string!
+static Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.operator !=(Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult? left, Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult? right) -> bool
+static Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.operator ==(Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult? left, Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult? right) -> bool
+Pinotechrd.Security.Interfaces.ITwoFactorAttemptStore.ExhaustAsync(string! challengeId, System.DateTimeOffset expiresAt, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
