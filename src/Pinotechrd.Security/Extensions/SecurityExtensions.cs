@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using Pinotechrd.Security.Authorization;
@@ -30,6 +32,10 @@ public static class SecurityExtensions
     /// <param name="services">Service collection to configure.</param>
     /// <param name="configure">Optional options delegate for security settings.</param>
     /// <returns>The same service collection for chaining.</returns>
+    /// <remarks>
+    /// The JWT settings are not checked here. They are validated when the host starts, and the host fails to
+    /// start with an <see cref="OptionsValidationException"/> that names each missing or weak setting.
+    /// </remarks>
     public static IServiceCollection AddPinotechrdSecurity<TContext, TUser, TRole>(
         this IServiceCollection services,
         Action<PinotechrdSecurityOptions>? configure = null)
@@ -40,20 +46,12 @@ public static class SecurityExtensions
         var options = new PinotechrdSecurityOptions();
         configure?.Invoke(options);
 
-        services.Configure<PinotechrdSecurityOptions>(o => 
-        {
-            o.Jwt = options.Jwt;
-        });
-
-        if (string.IsNullOrWhiteSpace(options.Jwt.Secret))
-        {
-            throw new InvalidOperationException("PinotechrdSecurity requires a non-empty JWT secret.");
-        }
-
-        if (options.Jwt.Secret.Length < options.Jwt.MinimumSecretLength)
-        {
-            throw new InvalidOperationException($"JWT secret must be at least {options.Jwt.MinimumSecretLength} characters.");
-        }
+        // JWT settings are validated when the host starts (or on first use), not here, so tools that build
+        // the host without configuration (for example OpenAPI generation at build time) still work.
+        services.AddOptions<PinotechrdSecurityOptions>()
+            .Configure(o => o.Jwt = options.Jwt)
+            .ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<PinotechrdSecurityOptions>, PinotechrdSecurityOptionsValidator>());
 
         services.AddScoped<TenantContext>();
         services.AddSingleton(options.Tenancy);
@@ -86,6 +84,7 @@ public static class SecurityExtensions
 
         services.AddScoped<ITokenProvider, JwtTokenProvider>();
         services.AddSingleton<IRefreshTokenStore, InMemoryRefreshTokenStore>();
+        services.AddSingleton<ITwoFactorAttemptStore, InMemoryTwoFactorAttemptStore>();
         services.AddScoped<IPinotechrdAuthManager<TUser>, PinotechrdAuthManager<TUser>>();
         services.AddScoped<ISecurityDbContext>(sp => sp.GetRequiredService<TContext>() as ISecurityDbContext ?? throw new InvalidOperationException("DbContext does not implement ISecurityDbContext"));
         services.AddScoped<IPinotechrdSecurityManager<TUser, TRole>, PinotechrdSecurityManager<TUser, TRole>>();
@@ -95,19 +94,25 @@ public static class SecurityExtensions
             auth.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
             auth.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
         })
-        .AddJwtBearer(jwt =>
-        {
-            jwt.TokenValidationParameters = new TokenValidationParameters
+        .AddJwtBearer();
+
+        // Built from the validated options when the bearer handler first needs them.
+        services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+            .Configure<IOptions<PinotechrdSecurityOptions>>((jwt, security) =>
             {
-                ValidateIssuer = !string.IsNullOrEmpty(options.Jwt.Issuer),
-                ValidateAudience = !string.IsNullOrEmpty(options.Jwt.Audience),
-                ValidateLifetime = true,
-                ValidateIssuerSigningKey = true,
-                ValidIssuer = options.Jwt.Issuer,
-                ValidAudience = options.Jwt.Audience,
-                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(options.Jwt.Secret))
-            };
-        });
+                var settings = security.Value.Jwt;
+                jwt.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    ValidIssuer = settings.Issuer,
+                    ValidAudience = settings.Audience,
+                    ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.Secret))
+                };
+            });
 
         services.AddAuthorization();
         services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();

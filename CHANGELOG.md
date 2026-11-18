@@ -12,24 +12,40 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ### Changed (breaking)
 
-- `LoginAsync` returns `Invalid credentials` for a locked-out account too, instead of `Account locked out`, so the error does not tell which accounts exist. Lockout itself works as before.
-- `LoginAsync` now asks for the second factor when the user has two-factor enabled. Before, `CheckPasswordSignInAsync` never reported `RequiresTwoFactor`, so a password alone was enough.
-- `AuthResult.TwoFactorToken` is now an opaque value protected with ASP.NET Core Data Protection, bound to the user, the tenant and the security stamp, and valid for five minutes. It used to be the user id, which anyone could send to `GetTwoFactorProvidersAsync`, `SendTwoFactorCodeAsync` and `VerifyTwoFactorCodeAsync`. A user id is no longer accepted by those methods.
-- `VerifyTwoFactorCodeAsync` fails when `tenantId` is not the tenant the token was issued for, counts a wrong code toward lockout, refuses locked-out users, and renews the security stamp on success, which invalidates the token.
+- **Tenant resolution.** For an authenticated user the verified claim is the only source: the header is never read, whatever `Sources` says. An authenticated user without the claim is rejected with `tenant_invalid` on a path that requires a tenant. `Sources` now only decides whether anonymous requests may use the header.
+- **Tenant resolution.** `RequiredPathPrefix` and `SkipPaths` match whole path segments, ignoring case: `/api` no longer matches `/apix`, and `/health` no longer skips `/healthcheck`.
+- **Tenant ids.** A tenant id must be 1 to 56 characters from `a-z`, `0-9` and `-`, not starting with `-` (`TenantIdentifier`). Other values are rejected as `tenant_invalid` without calling `ITenantStore`, and `TenantContext.SetTenant` throws `ArgumentException` for them. Upper-case ids are rejected, not folded.
+- **Schemas.** `TenantContext.SchemaName` is `tenant_` plus the id with `-` replaced by `_`, a mapping that no longer merges different ids. `DbSchemaProvider.GetSchemaName` throws when no tenant is resolved instead of falling back to the shared `identity` schema; set `TenantResolutionOptions.UseSharedSchemaWhenNoTenant` to keep the fallback (for example for design-time tooling).
+- **JWT.** `Issuer` and `Audience` are required and always validated. The secret must be at least 32 bytes in UTF-8; `MinimumSecretLength` counts bytes and cannot go below 32. Only HMAC-SHA256 is accepted when validating tokens.
+- **JWT.** `AddPinotechrdSecurity` no longer throws for missing or weak JWT settings. They are validated when the host starts (`ValidateOnStart`), and the host fails with an `OptionsValidationException` naming each setting.
+- **Login.** `LoginAsync` returns `Invalid credentials` for a locked-out account too, instead of `Account locked out`, so the error does not tell which accounts exist. Lockout itself works as before.
+- **Login.** `LoginAsync`, `VerifyTwoFactorCodeAsync` and `RefreshAsync` issue tokens only for the tenant resolved for the request (`TenantContext`). An unset tenant or a different `tenantId` is the generic failure. Before, the caller-supplied tenant went into the `tenant_id` claim unchecked.
+- **Login.** Inactive users (`IsActive` false) can no longer log in, complete two-factor sign-in or refresh.
+- **Two-factor.** `LoginAsync` now asks for the second factor when the user has two-factor enabled. Before, `CheckPasswordSignInAsync` never reported `RequiresTwoFactor`, so a password alone was enough.
+- **Two-factor.** `AuthResult.TwoFactorToken` is now an opaque value protected with ASP.NET Core Data Protection, bound to the user, the tenant and the security stamp, and valid for five minutes. It used to be the user id, which anyone could send to `GetTwoFactorProvidersAsync`, `SendTwoFactorCodeAsync` and `VerifyTwoFactorCodeAsync`. A user id is no longer accepted by those methods.
+- **Two-factor.** `VerifyTwoFactorCodeAsync` fails when `tenantId` is not the tenant the token was issued for, allows five attempts per token, counts a wrong code toward lockout, refuses locked-out users before and after checking the code, rejects providers the user does not have, and renews the security stamp on success, which invalidates the token.
+- **Two-factor.** `SendTwoFactorCodeAsync` refuses locked-out users and answers an unknown provider with a failure instead of an exception.
+- **Refresh tokens.** `IRefreshTokenStore` gains `ConsumeAsync` (atomic validate and invalidate, with reuse detection by token family) and `RevokeAllForUserAsync`. `SaveAsync` gains `familyId` and `securityStamp`, and every method takes a `CancellationToken`. Existing implementations must add the new members. A default interface method could not make consumption atomic, so none is provided.
+- **Refresh tokens.** `RefreshAsync` consumes the token atomically, refuses a token of another tenant without consuming it, and checks that the user exists, is active, is not locked out, may sign in, and still has the security stamp it had when the token was issued. Every failure is `Invalid token`; the store's reason is no longer returned.
+- **Sign-out.** `SignOutAsync` revokes all refresh tokens of the user as well as renewing the security stamp. Access tokens stay valid until they expire.
+- **Users.** `SetUserActiveStatusAsync(userId, false)` revokes the user's refresh tokens and renews its security stamp.
+- `ResetPasswordAsync` answers an unknown e-mail with the same failure as an invalid reset token, instead of `User not found`.
 - `PinotechrdAuthManager<TUser>` requires `TUser` to have a public parameterless constructor (`new()`). `AddPinotechrdSecurity` already required it.
 
 ### Added
 
-- `TenantResolutionOptions.Sources` (`TenantSources.Claim | TenantSources.Header` by default) chooses the sources. The claim of an authenticated user always wins; the header is read only when there is no claim.
-- `TenantResolutionOptions.OnMissingTenant`: `MissingTenantBehavior.Reject` (default, as before) or `Continue`, which lets a request without a tenant reach authorization so an anonymous caller of a protected endpoint gets `401`.
-- `TenantResolutionOptions.RequiredPathPrefix` (default `/api`) replaces the hard-coded prefix.
+- `TenantResolutionOptions.Sources`, `OnMissingTenant` (`MissingTenantBehavior.Reject` by default, or `Continue` so an anonymous caller of a protected endpoint gets `401`), `RequiredPathPrefix` (default `/api`, replaces the hard-coded prefix) and `UseSharedSchemaWhenNoTenant`.
+- `TenantIdentifier` (`IsValid`, `ToSchemaName`, `MaxLength`, `SchemaPrefix`).
 - Tenant rejections go through `IProblemDetailsService` when the application registers one, as `application/problem+json` with a `code` member (`tenant_required` or `tenant_invalid`, see `TenantResolutionErrorCodes`). Without it the plain-text body is unchanged.
-- `PinotechrdAuthManager<TUser>` takes an optional `IDataProtectionProvider`. Without one, two-factor sign-in fails closed.
+- `UseTenantResolution()` throws `InvalidOperationException` when an authentication scheme is configured but `UseAuthentication()` has not run before it. Hosts without authentication are not affected.
+- `ITwoFactorAttemptStore` and its default `InMemoryTwoFactorAttemptStore`, registered by `AddPinotechrdSecurity`.
+- `RefreshTokenConsumeResult` and `RefreshTokenConsumeStatus`. `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` accept a `TimeProvider`.
+- `PinotechrdAuthManager<TUser>` takes optional `IDataProtectionProvider`, `TenantContext`, `ITwoFactorAttemptStore` and `TimeProvider`. Without a `TenantContext` every login and refresh fails; without the first two of the others, two-factor sign-in fails closed. `PinotechrdSecurityManager<TUser, TRole>` takes an optional `IRefreshTokenStore`.
 
 ### Security
 
-- Login for an unknown user, a locked-out user or a user Identity does not allow to sign in verifies the password against a dummy hash, so the response time reveals less about which accounts exist. It is not constant time.
-- An unknown and an inactive tenant get the same status and body.
+- Login for an unknown or inactive user, a user without a password, a locked-out user, a user Identity does not allow to sign in, or a tenant mismatch verifies the password against a dummy hash, so the response time reveals less about which accounts exist. It is not constant time. The dummy hash is made once per password hasher type.
+- An unknown, an inactive and a malformed tenant get the same status and body.
 
 ## [1.2.0-preview.2] - 2026-11-17
 

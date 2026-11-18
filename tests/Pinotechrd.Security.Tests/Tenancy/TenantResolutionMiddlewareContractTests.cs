@@ -58,18 +58,53 @@ public class TenantResolutionMiddlewareContractTests
         await run.Store.DidNotReceive().TenantExistsAsync("tenant-b");
     }
 
-    // Documented behavior (README: "An authenticated principal without the claim falls through to the header").
-    // Risk: a validly signed token that lacks tenant_id lets its holder choose any existing tenant through the header.
-    [Fact]
-    public async Task Header_ShouldBeUsed_WhenUserIsAuthenticatedButHasNoTenantClaim()
+    // README: an authenticated user without the claim is rejected on a path that requires a tenant, and the header is
+    // never read for it. This closes the tenant-hopping risk of letting a claim-less token pick its tenant.
+    [Theory]
+    [InlineData(null, MissingTenantBehavior.Reject, TenantSources.Claim | TenantSources.Header)]
+    [InlineData(null, MissingTenantBehavior.Continue, TenantSources.Claim | TenantSources.Header)]
+    [InlineData("", MissingTenantBehavior.Reject, TenantSources.Claim | TenantSources.Header)]
+    [InlineData("", MissingTenantBehavior.Continue, TenantSources.Claim | TenantSources.Header)]
+    [InlineData(null, MissingTenantBehavior.Reject, TenantSources.Header)]
+    [InlineData(null, MissingTenantBehavior.Continue, TenantSources.Header)]
+    [InlineData(null, MissingTenantBehavior.Reject, TenantSources.Claim)]
+    [InlineData(null, MissingTenantBehavior.Continue, TenantSources.Claim)]
+    [InlineData(null, MissingTenantBehavior.Reject, TenantSources.None)]
+    [InlineData(null, MissingTenantBehavior.Continue, TenantSources.None)]
+    public async Task AuthenticatedWithoutTheClaim_ShouldBeRejectedAsTenantInvalid_OnARequiredPath(
+        string? claim, MissingTenantBehavior onMissing, TenantSources sources)
     {
         var run = await RunAsync(
+            new TenantResolutionOptions { OnMissingTenant = onMissing, Sources = sources },
             headerTenant: "tenant-b",
-            user: Authenticated(tenantClaim: null),
+            user: Authenticated(claim),
+            validTenants: ["tenant-b"],
+            withProblemDetails: true);
+
+        run.NextCalled.Should().BeFalse();
+        run.Context.Response.StatusCode.Should().Be(400);
+        run.Json!.RootElement.GetProperty("code").GetString().Should().Be("tenant_invalid");
+        run.TenantContext.TenantId.Should().BeNull();
+        await run.Store.DidNotReceiveWithAnyArgs().TenantExistsAsync(default!);
+    }
+
+    [Theory]
+    [InlineData(null, MissingTenantBehavior.Reject)]
+    [InlineData(null, MissingTenantBehavior.Continue)]
+    [InlineData("", MissingTenantBehavior.Reject)]
+    public async Task AuthenticatedWithoutTheClaim_ShouldContinueWithoutTenantAndIgnoreTheHeader_OnANonRequiredPath(
+        string? claim, MissingTenantBehavior onMissing)
+    {
+        var run = await RunAsync(
+            new TenantResolutionOptions { OnMissingTenant = onMissing },
+            path: "/health",
+            headerTenant: "tenant-b",
+            user: Authenticated(claim),
             validTenants: ["tenant-b"]);
 
         run.NextCalled.Should().BeTrue();
-        run.TenantContext.TenantId.Should().Be("tenant-b");
+        run.TenantContext.TenantId.Should().BeNull();
+        await run.Store.DidNotReceiveWithAnyArgs().TenantExistsAsync(default!);
     }
 
     [Fact]
@@ -112,7 +147,7 @@ public class TenantResolutionMiddlewareContractTests
     }
 
     [Fact]
-    public async Task SourcesHeader_ShouldIgnoreTheClaimAndUseTheHeader()
+    public async Task SourcesHeader_ShouldBehaveLikeTheDefault_ClaimWinsAndTheHeaderIsNeverAsked()
     {
         var run = await RunAsync(
             new TenantResolutionOptions { Sources = TenantSources.Header },
@@ -121,22 +156,51 @@ public class TenantResolutionMiddlewareContractTests
             validTenants: ["tenant-a", "tenant-b"]);
 
         run.NextCalled.Should().BeTrue();
-        run.TenantContext.TenantId.Should().Be("tenant-b");
-        await run.Store.DidNotReceive().TenantExistsAsync("tenant-a");
+        run.TenantContext.TenantId.Should().Be("tenant-a");
+        await run.Store.DidNotReceive().TenantExistsAsync("tenant-b");
     }
 
     [Fact]
-    public async Task SourcesNone_ShouldTreatEveryRequestAsHavingNoTenant()
+    public async Task SourcesHeader_ShouldStillResolveAnonymousRequestsFromTheHeader()
     {
         var run = await RunAsync(
-            new TenantResolutionOptions { Sources = TenantSources.None },
+            new TenantResolutionOptions { Sources = TenantSources.Header },
+            headerTenant: "tenant-b",
+            validTenants: ["tenant-b"]);
+
+        run.TenantContext.TenantId.Should().Be("tenant-b");
+    }
+
+    [Theory]
+    [InlineData(TenantSources.None)]
+    [InlineData(TenantSources.Claim)]
+    public async Task AnonymousRequests_ShouldIgnoreTheHeader_WhenTheHeaderSourceIsOff(TenantSources sources)
+    {
+        var run = await RunAsync(
+            new TenantResolutionOptions { Sources = sources },
             headerTenant: "tenant-a",
-            user: Authenticated("tenant-a"),
-            validTenants: ["tenant-a"]);
+            validTenants: ["tenant-a"],
+            withProblemDetails: true);
 
         run.NextCalled.Should().BeFalse();
         run.Context.Response.StatusCode.Should().Be(400);
+        run.Json!.RootElement.GetProperty("code").GetString().Should().Be("tenant_required");
         await run.Store.DidNotReceiveWithAnyArgs().TenantExistsAsync(default!);
+    }
+
+    [Fact]
+    public async Task SourcesNone_ShouldStillUseTheClaimOfAnAuthenticatedUser()
+    {
+        // The claim cannot be turned off (README): Sources only decides what anonymous requests may use.
+        var run = await RunAsync(
+            new TenantResolutionOptions { Sources = TenantSources.None },
+            headerTenant: "tenant-b",
+            user: Authenticated("tenant-a"),
+            validTenants: ["tenant-a", "tenant-b"]);
+
+        run.NextCalled.Should().BeTrue();
+        run.TenantContext.TenantId.Should().Be("tenant-a");
+        await run.Store.DidNotReceive().TenantExistsAsync("tenant-b");
     }
 
     [Fact]
@@ -256,14 +320,95 @@ public class TenantResolutionMiddlewareContractTests
         run.Context.Response.StatusCode.Should().Be(400);
     }
 
-    // Characterization (probe): the prefix is a plain string prefix with no segment boundary, as documented
-    // ("path starts with this prefix"). "/apix" is therefore treated as under "/api". Report to the reviewer.
-    [Fact]
-    public async Task RequiredPathPrefix_ShouldMatchAsPlainStringPrefix_WithoutSegmentBoundary()
+    // README: matching is by whole path segments, so "/apix" and "/api-v2" are outside "/api".
+    [Theory]
+    [InlineData("/api")]
+    [InlineData("/API/x")]
+    [InlineData("/api/")]
+    [InlineData("/api/orders/1")]
+    public async Task RequiredPathPrefix_ShouldMatchTheSegmentAndItsChildren(string path)
     {
-        var run = await RunAsync(path: "/apix/foo");
+        var run = await RunAsync(path: path);
+
+        run.NextCalled.Should().BeFalse();
+        run.Context.Response.StatusCode.Should().Be(400);
+    }
+
+    [Theory]
+    [InlineData("/apix")]
+    [InlineData("/apix/foo")]
+    [InlineData("/api-v2")]
+    [InlineData("/api-v2/foo")]
+    [InlineData("/apis/x")]
+    public async Task RequiredPathPrefix_ShouldNotMatchAPathThatOnlySharesTheLeadingCharacters(string path)
+    {
+        var run = await RunAsync(path: path);
+
+        run.NextCalled.Should().BeTrue();
+        run.Context.Response.StatusCode.Should().Be(200);
+    }
+
+    [Theory]
+    [InlineData("api")]
+    [InlineData("/api")]
+    [InlineData("/api/")]
+    [InlineData("api/")]
+    public async Task RequiredPathPrefix_ShouldWorkWithOrWithoutALeadingOrTrailingSlash(string prefix)
+    {
+        var options = new TenantResolutionOptions { RequiredPathPrefix = prefix };
+
+        (await RunAsync(options, path: "/api/x")).Context.Response.StatusCode.Should().Be(400);
+        (await RunAsync(options, path: "/apix")).NextCalled.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("/health", "/health/live", true)]
+    [InlineData("/health", "/health", true)]
+    [InlineData("/health", "/HEALTH/live", true)]
+    [InlineData("/health", "/healthcheck-x", false)]
+    [InlineData("/health", "/healthy", false)]
+    [InlineData("/api/auth", "/api/auth/login", true)]
+    [InlineData("/api/auth", "/api/authors", false)]
+    [InlineData("api/auth", "/api/auth/login", true)]
+    [InlineData("api/auth", "/api/authors", false)]
+    public async Task SkipPaths_ShouldMatchWholeSegmentsOnly(string skip, string path, bool skipped)
+    {
+        var options = new TenantResolutionOptions { RequiredPathPrefix = "/" };
+        options.SkipPaths.Add(skip);
+
+        var run = await RunAsync(options, path: path);
+
+        run.NextCalled.Should().Be(skipped);
+        run.Context.Response.StatusCode.Should().Be(skipped ? 200 : 400);
+    }
+
+    // Probes (A3): what the matcher does with encoded and doubled separators. The middleware compares the path as
+    // the server gives it (Kestrel has already decoded it), so these pin the current behavior.
+    [Fact]
+    public async Task Probe_APercentEncodedSegmentIsNotDecodedByTheMiddleware_SoItIsOutsideTheRequiredPrefix()
+    {
+        var context = NewContext("/");
+        context.Request.Path = new PathString("/%61pi/x");
+
+        var run = await RunAsync(context: context);
+
+        run.NextCalled.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Probe_ADoubleSlashAfterThePrefixStillMatches()
+    {
+        var run = await RunAsync(path: "/api//x");
 
         run.Context.Response.StatusCode.Should().Be(400);
+    }
+
+    [Fact]
+    public async Task Probe_ADoubleSlashBeforeThePrefixDoesNotMatch()
+    {
+        var run = await RunAsync(path: "//api/x");
+
+        run.NextCalled.Should().BeTrue();
     }
 
     // ---- SkipPaths --------------------------------------------------------------------------
@@ -445,6 +590,71 @@ public class TenantResolutionMiddlewareContractTests
         await RunAsync(headerTenant: hostile, logger: logger);
 
         logger.Entries.Where(e => e.Text.Contains("DROP TABLE")).Should().BeEmpty();
+    }
+
+    // ---- Tenant id format (A4/B6) -----------------------------------------------------------
+
+    public static TheoryData<string> MalformedTenantIds() =>
+    [
+        new string('a', 57),
+        "Tenant-A",
+        "ABC",
+        "a_b",
+        "a b",
+        "a.b",
+        "a/b",
+        "tenant-é",
+        "ab",
+        "-abc"
+    ];
+
+    [Theory]
+    [MemberData(nameof(MalformedTenantIds))]
+    public async Task MalformedHeaderTenantId_ShouldBeRejectedAsInvalidWithoutAskingTheStore(string id)
+    {
+        var run = await RunAsync(headerTenant: id, validTenants: [id], withProblemDetails: true);
+
+        run.NextCalled.Should().BeFalse();
+        run.Context.Response.StatusCode.Should().Be(400);
+        run.Json!.RootElement.GetProperty("code").GetString().Should().Be("tenant_invalid");
+        await run.Store.DidNotReceiveWithAnyArgs().TenantExistsAsync(default!);
+    }
+
+    [Theory]
+    [MemberData(nameof(MalformedTenantIds))]
+    public async Task MalformedClaimTenantId_ShouldBeRejectedAsInvalidWithoutAskingTheStore(string id)
+    {
+        var run = await RunAsync(user: Authenticated(id), validTenants: [id], withProblemDetails: true);
+
+        run.NextCalled.Should().BeFalse();
+        run.Context.Response.StatusCode.Should().Be(400);
+        run.Json!.RootElement.GetProperty("code").GetString().Should().Be("tenant_invalid");
+        await run.Store.DidNotReceiveWithAnyArgs().TenantExistsAsync(default!);
+    }
+
+    [Fact]
+    public async Task TenantId_ShouldBeAccepted_At56Characters_AndRejectedAt57()
+    {
+        var ok = new string('a', 56);
+        var tooLong = new string('a', 57);
+
+        var accepted = await RunAsync(headerTenant: ok, validTenants: [ok]);
+        var rejected = await RunAsync(headerTenant: tooLong, validTenants: [tooLong]);
+
+        accepted.NextCalled.Should().BeTrue();
+        accepted.TenantContext.TenantId.Should().Be(ok);
+        rejected.NextCalled.Should().BeFalse();
+        rejected.Context.Response.StatusCode.Should().Be(400);
+    }
+
+    [Fact]
+    public async Task LowerCaseGuidTenantId_ShouldBeAccepted()
+    {
+        const string guid = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+
+        var run = await RunAsync(headerTenant: guid, validTenants: [guid]);
+
+        run.TenantContext.TenantId.Should().Be(guid);
     }
 
     // ---- Support ----------------------------------------------------------------------------

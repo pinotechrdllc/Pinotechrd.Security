@@ -29,17 +29,18 @@ public class JwtSettings
     public string Secret { get; set; } = string.Empty;
 
     /// <summary>
-    /// Minimum accepted length for <see cref="Secret"/>.
+    /// Minimum accepted length of <see cref="Secret"/>, in UTF-8 bytes. Values below 32 are ignored:
+    /// the floor is 32 bytes and cannot be lowered.
     /// </summary>
     public int MinimumSecretLength { get; set; } = 32;
 
     /// <summary>
-    /// Optional expected issuer for JWT validation.
+    /// Expected issuer. Required: the host fails to start without it.
     /// </summary>
     public string? Issuer { get; set; }
 
     /// <summary>
-    /// Optional expected audience for JWT validation.
+    /// Expected audience. Required: the host fails to start without it.
     /// </summary>
     public string? Audience { get; set; }
 

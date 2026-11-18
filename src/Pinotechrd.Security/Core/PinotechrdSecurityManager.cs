@@ -24,18 +24,25 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     private readonly UserManager<TUser> _userManager;
     private readonly RoleManager<TRole> _roleManager;
     private readonly ISecurityDbContext _securityDb;
+    private readonly IRefreshTokenStore? _refreshTokenStore;
 
     /// <summary>
     /// Initializes the security manager.
     /// </summary>
+    /// <remarks>
+    /// Without <paramref name="refreshTokenStore"/>, deactivating a user cannot revoke its refresh tokens;
+    /// refresh still fails for an inactive user. <c>AddPinotechrdSecurity</c> registers the store.
+    /// </remarks>
     public PinotechrdSecurityManager(
         UserManager<TUser> userManager,
         RoleManager<TRole> roleManager,
-        ISecurityDbContext securityDb)
+        ISecurityDbContext securityDb,
+        IRefreshTokenStore? refreshTokenStore = null)
     {
         _userManager = userManager;
         _roleManager = roleManager;
         _securityDb = securityDb;
+        _refreshTokenStore = refreshTokenStore;
     }
 
     #region User Management
@@ -90,6 +97,10 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Deactivating a user also revokes all its refresh tokens and renews its security stamp, which invalidates
+    /// pending two-factor, reset and confirmation tokens. Access tokens already issued stay valid until they expire.
+    /// </remarks>
     public async Task<bool> SetUserActiveStatusAsync(string userId, bool isActive)
     {
         var user = await _userManager.FindByIdAsync(userId);
@@ -100,7 +111,19 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         {
             securityUser.IsActive = isActive;
             var result = await _userManager.UpdateAsync(user);
-            return result.Succeeded;
+            if (!result.Succeeded) return false;
+
+            if (!isActive)
+            {
+                if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(userId);
+                if (_userManager.SupportsUserSecurityStamp)
+                {
+                    var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+                    if (!stampResult.Succeeded) return false;
+                }
+            }
+
+            return true;
         }
 
         return false;

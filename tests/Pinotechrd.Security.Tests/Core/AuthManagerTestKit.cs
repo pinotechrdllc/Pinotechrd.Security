@@ -10,6 +10,7 @@ using Pinotechrd.Security.Core;
 using Pinotechrd.Security.Entities;
 using Pinotechrd.Security.Interfaces;
 using Pinotechrd.Security.Options;
+using Pinotechrd.Security.Tenancy;
 
 namespace Pinotechrd.Security.Tests.Core;
 
@@ -31,7 +32,7 @@ internal sealed class RecordingPasswordHasher<TUser> : IPasswordHasher<TUser> wh
     {
         Interlocked.Increment(ref _hashCalls);
         if (HashDelay > TimeSpan.Zero) Thread.Sleep(HashDelay);
-        return "dummy-hash-" + Interlocked.Increment(ref _counter);
+        return "dummy-hash-" + Interlocked.Increment(ref _counter) + "-" + Guid.NewGuid().ToString("N");
     }
 
     public PasswordVerificationResult VerifyHashedPassword(TUser user, string hashedPassword, string providedPassword)
@@ -50,18 +51,40 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
 {
     public const string Password = "correct-horse";
     public const string Provider = "Email";
+    public const string DefaultTenant = "tenant-a";
 
     private readonly Dictionary<string, TUser> _usersById = new();
     private readonly Dictionary<string, UserState> _state = new();
 
-    public AuthManagerTestKit(bool withDataProtection = true, IPinotechrdMessageService? messageService = null)
+    /// <param name="withDataProtection">Whether a data protection provider is given to the manager.</param>
+    /// <param name="messageService">Optional message service.</param>
+    /// <param name="tenant">Tenant the request context was resolved for; null leaves the context without a tenant.</param>
+    /// <param name="withTenantContext">False builds the manager without any <see cref="TenantContext"/>.</param>
+    /// <param name="withAttemptStore">False builds the manager without a two-factor attempt store.</param>
+    /// <param name="timeProvider">Clock; defaults to a fake clock the test can advance.</param>
+    /// <param name="refreshStore">Refresh token store; defaults to a substitute.</param>
+    public AuthManagerTestKit(
+        bool withDataProtection = true,
+        IPinotechrdMessageService? messageService = null,
+        string? tenant = DefaultTenant,
+        bool withTenantContext = true,
+        bool withAttemptStore = true,
+        FakeTimeProvider? timeProvider = null,
+        IRefreshTokenStore? refreshStore = null)
     {
+        Time = timeProvider ?? new FakeTimeProvider();
+        if (withTenantContext)
+        {
+            TenantContext = new TenantContext();
+            if (tenant != null) TenantContext.SetTenant(tenant);
+        }
+        Attempts = withAttemptStore ? new InMemoryTwoFactorAttemptStore(Time) : null;
         Hasher = new RecordingPasswordHasher<TUser>();
         UserManager = CreateUserManager(Hasher);
         SignInManager = CreateSignInManager(UserManager);
         Engine = Substitute.For<ISecurityEngine>();
         TokenProvider = Substitute.For<ITokenProvider>();
-        RefreshStore = Substitute.For<IRefreshTokenStore>();
+        RefreshStore = refreshStore ?? Substitute.For<IRefreshTokenStore>();
         DataProtection = withDataProtection ? new EphemeralDataProtectionProvider() : null;
 
         UserManager.SupportsUserLockout.Returns(true);
@@ -73,7 +96,8 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
         UserManager.GetEmailAsync(Arg.Any<TUser>()).Returns(ci => Task.FromResult<string?>(ci.Arg<TUser>().Email));
         UserManager.GetTwoFactorEnabledAsync(Arg.Any<TUser>()).Returns(ci => Task.FromResult(StateOf(ci.Arg<TUser>()).TwoFactorEnabled));
         UserManager.GetValidTwoFactorProvidersAsync(Arg.Any<TUser>()).Returns(Task.FromResult<IList<string>>([Provider]));
-        UserManager.GetSecurityStampAsync(Arg.Any<TUser>()).Returns(ci => Task.FromResult<string?>(StateOf(ci.Arg<TUser>()).Stamp));
+        UserManager.GetSecurityStampAsync(Arg.Any<TUser>()).Returns(ci => Task.FromResult(StateOf(ci.Arg<TUser>()).Stamp));
+        UserManager.HasPasswordAsync(Arg.Any<TUser>()).Returns(ci => Task.FromResult(StateOf(ci.Arg<TUser>()).HasPassword));
         UserManager.IsLockedOutAsync(Arg.Any<TUser>()).Returns(ci => Task.FromResult(StateOf(ci.Arg<TUser>()).LockedOut));
         UserManager.UpdateSecurityStampAsync(Arg.Any<TUser>()).Returns(ci =>
         {
@@ -93,10 +117,12 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
         {
             var state = StateOf(ci.Arg<TUser>());
             if (state.LockedOut) return Task.FromResult(Microsoft.AspNetCore.Identity.SignInResult.LockedOut);
-            return Task.FromResult(ci.ArgAt<string>(1) == Password
+            return Task.FromResult(state.HasPassword && ci.ArgAt<string>(1) == Password
                 ? Microsoft.AspNetCore.Identity.SignInResult.Success
                 : Microsoft.AspNetCore.Identity.SignInResult.Failed);
         });
+
+        SignInManager.CanSignInAsync(Arg.Any<TUser>()).Returns(Task.FromResult(true));
 
         Engine.GetPermissionsAsync(Arg.Any<string>()).Returns(new[] { "permissions.read" });
         TokenProvider.GenerateAccessToken(Arg.Any<IEnumerable<Claim>>()).Returns("access-token");
@@ -122,10 +148,19 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
             }),
             customValidator: null,
             messageService: messageService,
-            dataProtectionProvider: DataProtection);
+            dataProtectionProvider: DataProtection,
+            tenantContext: TenantContext,
+            twoFactorAttemptStore: Attempts,
+            timeProvider: Time);
     }
 
     public PinotechrdAuthManager<TUser> Manager { get; }
+
+    public FakeTimeProvider Time { get; }
+
+    public TenantContext? TenantContext { get; }
+
+    public ITwoFactorAttemptStore? Attempts { get; }
 
     public UserManager<TUser> UserManager { get; }
 
@@ -159,6 +194,10 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
 
     public void ChangeStamp(TUser user) => StateOf(user).Stamp = "stamp-changed-" + Guid.NewGuid().ToString("N");
 
+    public void MakeInactive(TUser user) => user.IsActive = false;
+
+    public void RemovePassword(TUser user) => StateOf(user).HasPassword = false;
+
     public void LockOut(TUser user) => StateOf(user).LockedOut = true;
 
     public void MakeStampUpdateFail(TUser user) => StateOf(user).StampUpdateFails = true;
@@ -175,6 +214,8 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
         public string Stamp { get; set; } = string.Empty;
 
         public bool LockedOut { get; set; }
+
+        public bool HasPassword { get; set; } = true;
 
         public bool StampUpdateFails { get; set; }
     }

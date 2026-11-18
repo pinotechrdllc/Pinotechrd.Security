@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.WebUtilities;
 using NSubstitute;
 using Pinotechrd.Security.Entities;
@@ -18,15 +19,18 @@ public class PinotechrdAuthManagerTwoFactorTests
     private const string InvalidSession = "Invalid session";
     private const string InvalidCode = "Invalid or expired code";
 
-    // The purpose string is the only implementation detail the expiry and swap tests rely on.
-    private const string TokenPurpose = "Pinotechrd.Security.TwoFactor.v1";
+    // Implementation details the forgery tests rely on: the purpose strings and the payload layout
+    // [userId, tenantId, stamp, challengeId, expiresAtUnixMs].
+    private const string TokenPurpose = "Pinotechrd.Security.TwoFactor.v2";
+    private const string OldTokenPurpose = "Pinotechrd.Security.TwoFactor.v1";
 
     public sealed class TfUser : BaseSecurityUser;
 
     private static AuthManagerTestKit<TfUser> NewKit(
         bool withDataProtection = true,
-        IPinotechrdMessageService? messageService = null) =>
-        new(withDataProtection, messageService);
+        IPinotechrdMessageService? messageService = null,
+        bool withAttemptStore = true) =>
+        new(withDataProtection, messageService, tenant: Tenant, withAttemptStore: withAttemptStore);
 
     private static async Task<(AuthManagerTestKit<TfUser> Kit, TfUser User, string Token)> LoggedInAsync()
     {
@@ -35,6 +39,15 @@ public class PinotechrdAuthManagerTwoFactorTests
         var login = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<TfUser>.Password, Tenant);
         return (kit, user, login.TwoFactorToken!);
     }
+
+    private static IDataProtector Protector(AuthManagerTestKit<TfUser> kit) =>
+        kit.DataProtection!.CreateProtector(TokenPurpose);
+
+    private static string Payload(string userId, string tenant, string stamp, long expiresAtMs, string challenge = "c1") =>
+        JsonSerializer.Serialize(new[] { userId, tenant, stamp, challenge, expiresAtMs.ToString() });
+
+    private static int VerifyCalls(AuthManagerTestKit<TfUser> kit) =>
+        kit.UserManager.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(UserManager<TfUser>.VerifyTwoFactorTokenAsync));
 
     private static async Task AssertNoTokensIssued(AuthManagerTestKit<TfUser> kit)
     {
@@ -79,9 +92,25 @@ public class PinotechrdAuthManagerTwoFactorTests
         var result = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<TfUser>.Password, Tenant);
 
         result.Succeeded.Should().BeFalse();
+        result.ErrorMessage.Should().Be("Two-factor sign-in is not available");
         result.RequiresTwoFactor.Should().BeFalse();
         result.TwoFactorToken.Should().BeNull();
         result.Token.Should().BeNull();
+        await AssertNoTokensIssued(kit);
+    }
+
+    [Fact]
+    public async Task LoginAsync_ShouldFailWithNotAvailable_WhenTwoFactorIsEnabledAndThereIsNoAttemptStore()
+    {
+        var kit = NewKit(withAttemptStore: false);
+        kit.AddUser("alice@x.test", twoFactor: true);
+
+        var result = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<TfUser>.Password, Tenant);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorMessage.Should().Be("Two-factor sign-in is not available");
+        result.RequiresTwoFactor.Should().BeFalse();
+        result.TwoFactorToken.Should().BeNull();
         await AssertNoTokensIssued(kit);
     }
 
@@ -109,6 +138,21 @@ public class PinotechrdAuthManagerTwoFactorTests
 
         providers.Should().BeEmpty();
         verify.Succeeded.Should().BeFalse();
+        await AssertNoTokensIssued(kit);
+    }
+
+    [Fact]
+    public async Task TwoFactorMethods_ShouldFailClosed_WhenThereIsNoAttemptStore()
+    {
+        var kit = NewKit(withAttemptStore: false);
+        var user = kit.AddUser("alice@x.test", twoFactor: true);
+        // Forged with the manager's own key ring, so only the missing attempt store can make it fail.
+        var expires = kit.Time.GetUtcNow().AddMinutes(1).ToUnixTimeMilliseconds();
+        var token = Protector(kit).Protect(Payload(user.Id.ToString(), Tenant, kit.StampOf(user), expires));
+
+        (await kit.Manager.GetTwoFactorProvidersAsync(token)).Should().BeEmpty();
+        (await kit.Manager.SendTwoFactorCodeAsync(token, "Email")).Succeeded.Should().BeFalse();
+        (await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant)).Succeeded.Should().BeFalse();
         await AssertNoTokensIssued(kit);
     }
 
@@ -169,12 +213,35 @@ public class PinotechrdAuthManagerTwoFactorTests
     public async Task TwoFactorMethods_ShouldRejectATokenProtectedByAnotherKeyRing()
     {
         var (kit, user, _) = await LoggedInAsync();
-        var foreign = new EphemeralDataProtectionProvider().CreateProtector(TokenPurpose).ToTimeLimitedDataProtector()
-            .Protect($"[\"{user.Id}\",\"{Tenant}\",\"{kit.StampOf(user)}\"]", TimeSpan.FromMinutes(5));
+        var expires = kit.Time.GetUtcNow().AddMinutes(5).ToUnixTimeMilliseconds();
+        var foreign = new EphemeralDataProtectionProvider().CreateProtector(TokenPurpose)
+            .Protect(Payload(user.Id.ToString(), Tenant, kit.StampOf(user), expires));
 
         var verify = await kit.Manager.VerifyTwoFactorCodeAsync(foreign, "Email", kit.CodeFor(user), Tenant);
 
         verify.ErrorMessage.Should().Be(InvalidSession);
+    }
+
+    [Fact]
+    public async Task Token_ShouldBeRejected_WhenThePayloadHasTheWrongShape()
+    {
+        var (kit, user, _) = await LoggedInAsync();
+        var id = user.Id.ToString();
+        var shapes = new[]
+        {
+            "[]", "{}", "null", "not json",
+            JsonSerializer.Serialize(new[] { id, Tenant, "s" }),
+            JsonSerializer.Serialize(new[] { id, Tenant, "s", "c", "notanumber" }),
+            JsonSerializer.Serialize(new[] { id, Tenant, "s", "c", "-5" }),
+            JsonSerializer.Serialize(new[] { string.Empty, Tenant, "s", "c", "99999999999999" })
+        };
+
+        foreach (var shape in shapes)
+        {
+            var forged = Protector(kit).Protect(shape);
+            var verify = await kit.Manager.VerifyTwoFactorCodeAsync(forged, "Email", kit.CodeFor(user), Tenant);
+            verify.Succeeded.Should().BeFalse(shape);
+        }
     }
 
     // ---- Verification ------------------------------------------------------------------------
@@ -195,7 +262,9 @@ public class PinotechrdAuthManagerTwoFactorTests
         result.Token!.AccessToken.Should().Be("access-token");
         result.UserId.Should().Be(user.Id.ToString());
         issuedClaims.Should().Contain(c => c.Type == "tenant_id" && c.Value == Tenant);
-        await kit.RefreshStore.Received(1).SaveAsync(user.Id.ToString(), Tenant, "refresh-token", Arg.Any<DateTime>());
+        await kit.RefreshStore.Received(1).SaveAsync(
+            user.Id.ToString(), Tenant, "refresh-token", Arg.Any<DateTime>(),
+            Arg.Is<string?>(f => !string.IsNullOrEmpty(f)), Arg.Is<string?>(st => st == kit.StampOf(user)), Arg.Any<CancellationToken>());
         await kit.UserManager.Received(1).UpdateSecurityStampAsync(user);
         kit.StampOf(user).Should().NotBe(stampBefore);
         await kit.UserManager.Received(1).ResetAccessFailedCountAsync(user);
@@ -306,31 +375,20 @@ public class PinotechrdAuthManagerTwoFactorTests
         kit.TokenProvider.Received(1).GenerateRefreshToken();
     }
 
-    // ---- Expiry (no clock seam; see notes) ---------------------------------------------------
+    // ---- Expiry (TimeProvider) ---------------------------------------------------------------
 
     [Fact]
-    public async Task LoginAsync_ShouldIssueATokenThatExpiresInAboutFiveMinutes()
-    {
-        var (kit, _, token) = await LoggedInAsync();
-
-        var protector = kit.DataProtection!.CreateProtector(TokenPurpose).ToTimeLimitedDataProtector();
-        protector.Unprotect(token, out var expiration);
-
-        expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(5), TimeSpan.FromSeconds(30));
-    }
-
-    [Fact]
-    public async Task TwoFactorMethods_ShouldRejectAnExpiredToken()
+    public async Task Token_ShouldBeAcceptedAtFourFiftyNine_AndRejectedAtFiveMinutes()
     {
         var (kit, user, token) = await LoggedInAsync();
-        var protector = kit.DataProtection!.CreateProtector(TokenPurpose).ToTimeLimitedDataProtector();
-        var payload = protector.Unprotect(token, out _);
-        // Same payload, same key ring, expiry already in the past: the smallest honest stand-in for advancing time.
-        var expired = protector.Protect(payload, DateTimeOffset.UtcNow.AddMinutes(-1));
 
-        (await kit.Manager.GetTwoFactorProvidersAsync(expired)).Should().BeEmpty();
-        (await kit.Manager.SendTwoFactorCodeAsync(expired, "Email")).ErrorMessage.Should().Be(InvalidSession);
-        var verify = await kit.Manager.VerifyTwoFactorCodeAsync(expired, "Email", kit.CodeFor(user), Tenant);
+        kit.Time.Advance(TimeSpan.FromMinutes(4) + TimeSpan.FromSeconds(59));
+        (await kit.Manager.GetTwoFactorProvidersAsync(token)).Should().Equal("Email");
+
+        kit.Time.Advance(TimeSpan.FromSeconds(1));
+        (await kit.Manager.GetTwoFactorProvidersAsync(token)).Should().BeEmpty();
+        (await kit.Manager.SendTwoFactorCodeAsync(token, "Email")).ErrorMessage.Should().Be(InvalidSession);
+        var verify = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
 
         verify.Succeeded.Should().BeFalse();
         verify.ErrorMessage.Should().Be(InvalidSession);
@@ -338,17 +396,243 @@ public class PinotechrdAuthManagerTwoFactorTests
     }
 
     [Fact]
-    public async Task TwoFactorMethods_ShouldAcceptTheSamePayload_WhenItHasNotExpired()
+    public async Task Token_ShouldVerifySuccessfully_AtFourFiftyNine()
     {
-        // Control for the expired-token test: the re-protected payload is only rejected because of its expiry.
         var (kit, user, token) = await LoggedInAsync();
-        var protector = kit.DataProtection!.CreateProtector(TokenPurpose).ToTimeLimitedDataProtector();
-        var payload = protector.Unprotect(token, out _);
-        var fresh = protector.Protect(payload, DateTimeOffset.UtcNow.AddMinutes(1));
+        kit.Time.Advance(TimeSpan.FromMinutes(4) + TimeSpan.FromSeconds(59));
 
-        var verify = await kit.Manager.VerifyTwoFactorCodeAsync(fresh, "Email", kit.CodeFor(user), Tenant);
+        var verify = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
 
         verify.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Token_ShouldBeRejected_WhenItsOwnExpiryIsInThePastEvenIfProtectedCorrectly()
+    {
+        var (kit, user, _) = await LoggedInAsync();
+        var past = kit.Time.GetUtcNow().AddSeconds(-1).ToUnixTimeMilliseconds();
+        var forged = Protector(kit).Protect(Payload(user.Id.ToString(), Tenant, kit.StampOf(user), past));
+
+        var verify = await kit.Manager.VerifyTwoFactorCodeAsync(forged, "Email", kit.CodeFor(user), Tenant);
+
+        verify.ErrorMessage.Should().Be(InvalidSession);
+    }
+
+    // Control for the forged-token tests: the same layout with a future expiry is accepted.
+    [Fact]
+    public async Task Token_ShouldBeAccepted_WhenForgedWithTheSameLayoutAndAFutureExpiry()
+    {
+        var (kit, user, _) = await LoggedInAsync();
+        var future = kit.Time.GetUtcNow().AddMinutes(1).ToUnixTimeMilliseconds();
+        var forged = Protector(kit).Protect(Payload(user.Id.ToString(), Tenant, kit.StampOf(user), future));
+
+        var verify = await kit.Manager.VerifyTwoFactorCodeAsync(forged, "Email", kit.CodeFor(user), Tenant);
+
+        verify.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Token_ShouldBeRejected_WhenMadeWithTheOldV1Purpose()
+    {
+        var (kit, user, _) = await LoggedInAsync();
+        var v1 = kit.DataProtection!.CreateProtector(OldTokenPurpose).ToTimeLimitedDataProtector()
+            .Protect(JsonSerializer.Serialize(new[] { user.Id.ToString(), Tenant, kit.StampOf(user) }), TimeSpan.FromMinutes(5));
+
+        (await kit.Manager.GetTwoFactorProvidersAsync(v1)).Should().BeEmpty();
+        var verify = await kit.Manager.VerifyTwoFactorCodeAsync(v1, "Email", kit.CodeFor(user), Tenant);
+
+        verify.ErrorMessage.Should().Be(InvalidSession);
+        await AssertNoTokensIssued(kit);
+    }
+
+    // ---- Tenant binding ----------------------------------------------------------------------
+
+    [Fact]
+    public async Task TwoFactorMethods_ShouldRejectTheToken_WhenTheRequestContextHoldsAnotherTenant()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        kit.TenantContext!.SetTenant("tenant-other");
+
+        (await kit.Manager.GetTwoFactorProvidersAsync(token)).Should().BeEmpty();
+        (await kit.Manager.SendTwoFactorCodeAsync(token, "Email")).ErrorMessage.Should().Be(InvalidSession);
+        var verify = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+
+        verify.Succeeded.Should().BeFalse();
+        verify.ErrorMessage.Should().Be(InvalidSession);
+        await AssertNoTokensIssued(kit);
+    }
+
+    [Fact]
+    public async Task TwoFactorMethods_ShouldRejectTheToken_WhenTheContextHasNoTenant()
+    {
+        var kit = new AuthManagerTestKit<TfUser>(tenant: null);
+        var user = kit.AddUser("alice@x.test", twoFactor: true);
+        var expires = kit.Time.GetUtcNow().AddMinutes(1).ToUnixTimeMilliseconds();
+        // Forged with the manager's own key ring, so only the missing tenant can make it fail.
+        var token = Protector(kit).Protect(Payload(user.Id.ToString(), Tenant, kit.StampOf(user), expires));
+
+        (await kit.Manager.GetTwoFactorProvidersAsync(token)).Should().BeEmpty();
+        var verify = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+
+        verify.Succeeded.Should().BeFalse();
+        verify.ErrorMessage.Should().Be(InvalidSession);
+    }
+
+    // ---- Inactive users ----------------------------------------------------------------------
+
+    [Fact]
+    public async Task TwoFactorMethods_ShouldRejectWithInvalidSession_WhenTheUserBecameInactive()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        kit.MakeInactive(user);
+
+        (await kit.Manager.GetTwoFactorProvidersAsync(token)).Should().BeEmpty();
+        (await kit.Manager.SendTwoFactorCodeAsync(token, "Email")).ErrorMessage.Should().Be(InvalidSession);
+        var verify = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+
+        verify.ErrorMessage.Should().Be(InvalidSession);
+        await AssertNoTokensIssued(kit);
+    }
+
+    // ---- Attempt limit -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldRefuseTheSixthAttemptWithoutVerifyingTheCode()
+    {
+        var (kit, _, token) = await LoggedInAsync();
+
+        for (var i = 1; i <= 5; i++)
+        {
+            var wrong = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", "000000", Tenant);
+            wrong.ErrorMessage.Should().Be(InvalidCode);
+        }
+        VerifyCalls(kit).Should().Be(5);
+
+        var sixth = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", "000000", Tenant);
+
+        sixth.Succeeded.Should().BeFalse();
+        sixth.ErrorMessage.Should().Be(InvalidCode);
+        VerifyCalls(kit).Should().Be(5);
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldRejectTheCorrectCode_AfterFiveFailuresOnTheSameToken()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        for (var i = 0; i < 5; i++) await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", "000000", Tenant);
+
+        var result = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", kit.CodeFor(user), Tenant);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorMessage.Should().Be(InvalidCode);
+        VerifyCalls(kit).Should().Be(5);
+        await AssertNoTokensIssued(kit);
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldVerifyAtMostFiveTimes_WhenTwentyWrongGuessesRunConcurrently()
+    {
+        var (kit, _, token) = await LoggedInAsync();
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 20)
+            .Select(i => Task.Run(() => kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", $"{i:000000}", Tenant))));
+
+        results.Should().AllSatisfy(r => r.Succeeded.Should().BeFalse());
+        VerifyCalls(kit).Should().BeLessThanOrEqualTo(5);
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldGiveEachTokenItsOwnAttemptBudget()
+    {
+        var (kit, user, first) = await LoggedInAsync();
+        for (var i = 0; i < 6; i++) await kit.Manager.VerifyTwoFactorCodeAsync(first, "Email", "000000", Tenant);
+        var second = (await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<TfUser>.Password, Tenant)).TwoFactorToken!;
+
+        var result = await kit.Manager.VerifyTwoFactorCodeAsync(second, "Email", kit.CodeFor(user), Tenant);
+
+        result.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldFail_WhenCountingTheFailureReturnsFailed()
+    {
+        var (kit, _, token) = await LoggedInAsync();
+        kit.UserManager.AccessFailedAsync(Arg.Any<TfUser>()).Returns(Task.FromResult(IdentityResult.Failed()));
+
+        var result = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", "000000", Tenant);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorMessage.Should().Be(InvalidCode);
+    }
+
+    [Fact]
+    public async Task VerifyTwoFactorCodeAsync_ShouldFailWithoutRenewingTheStamp_WhenTheUserGetsLockedOutAfterTheCodeIsAccepted()
+    {
+        var (kit, user, token) = await LoggedInAsync();
+        var code = kit.CodeFor(user);
+        var stamp = kit.StampOf(user);
+        // The check before the code says free, the check after the code was accepted says locked.
+        kit.UserManager.IsLockedOutAsync(user).Returns(Task.FromResult(false), Task.FromResult(true));
+
+        var result = await kit.Manager.VerifyTwoFactorCodeAsync(token, "Email", code, Tenant);
+
+        result.Succeeded.Should().BeFalse();
+        kit.StampOf(user).Should().Be(stamp);
+        await kit.UserManager.DidNotReceiveWithAnyArgs().UpdateSecurityStampAsync(default!);
+        await AssertNoTokensIssued(kit);
+    }
+
+    // ---- Providers ---------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("Sms")]
+    [InlineData("email")]
+    [InlineData("EMAIL")]
+    [InlineData("")]
+    [InlineData("Email ")]
+    public async Task SendTwoFactorCodeAsync_ShouldFailWithoutGeneratingACode_WhenProviderIsUnknown(string provider)
+    {
+        var messages = Substitute.For<IPinotechrdMessageService>();
+        var kit = NewKit(messageService: messages);
+        kit.AddUser("alice@x.test", twoFactor: true);
+        var token = (await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<TfUser>.Password, Tenant)).TwoFactorToken!;
+
+        var result = await kit.Manager.SendTwoFactorCodeAsync(token, provider);
+
+        result.Succeeded.Should().BeFalse();
+        await kit.UserManager.DidNotReceiveWithAnyArgs().GenerateTwoFactorTokenAsync(default!, default!);
+        await messages.DidNotReceiveWithAnyArgs().SendCodeAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task SendTwoFactorCodeAsync_ShouldReturnInvalidSessionAndSendNothing_WhenTheUserIsLockedOut()
+    {
+        var messages = Substitute.For<IPinotechrdMessageService>();
+        var kit = NewKit(messageService: messages);
+        var user = kit.AddUser("alice@x.test", twoFactor: true);
+        var token = (await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<TfUser>.Password, Tenant)).TwoFactorToken!;
+        kit.LockOut(user);
+
+        var result = await kit.Manager.SendTwoFactorCodeAsync(token, "Email");
+
+        result.ErrorMessage.Should().Be(InvalidSession);
+        await kit.UserManager.DidNotReceiveWithAnyArgs().GenerateTwoFactorTokenAsync(default!, default!);
+        await messages.DidNotReceiveWithAnyArgs().SendCodeAsync(default!, default!, default);
+    }
+
+    [Theory]
+    [InlineData("Sms")]
+    [InlineData("email")]
+    [InlineData("")]
+    public async Task VerifyTwoFactorCodeAsync_ShouldReturnInvalidCodeWithoutThrowing_WhenProviderIsUnknown(string provider)
+    {
+        var (kit, user, token) = await LoggedInAsync();
+
+        var result = await kit.Manager.VerifyTwoFactorCodeAsync(token, provider, kit.CodeFor(user), Tenant);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorMessage.Should().Be(InvalidCode);
+        await AssertNoTokensIssued(kit);
     }
 
     // ---- A token for X never works for Y ----------------------------------------------------
@@ -378,12 +662,12 @@ public class PinotechrdAuthManagerTwoFactorTests
         kit.AddUser("x@x.test", twoFactor: true);
         var y = kit.AddUser("y@x.test", twoFactor: true);
         var tokenX = (await kit.Manager.LoginAsync("x@x.test", AuthManagerTestKit<TfUser>.Password, Tenant)).TwoFactorToken!;
-        var protector = kit.DataProtection!.CreateProtector(TokenPurpose).ToTimeLimitedDataProtector();
+        var protector = Protector(kit);
 
         // Forge, with the real key ring, a payload that keeps X's stamp but names Y.
-        var parts = JsonSerializer.Deserialize<string[]>(protector.Unprotect(tokenX, out _))!;
+        var parts = JsonSerializer.Deserialize<string[]>(protector.Unprotect(tokenX))!;
         parts[0] = y.Id.ToString();
-        var swapped = protector.Protect(JsonSerializer.Serialize(parts), TimeSpan.FromMinutes(5));
+        var swapped = protector.Protect(JsonSerializer.Serialize(parts));
 
         var result = await kit.Manager.VerifyTwoFactorCodeAsync(swapped, "Email", kit.CodeFor(y), Tenant);
 

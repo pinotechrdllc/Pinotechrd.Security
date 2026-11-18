@@ -5,7 +5,7 @@ This document captures the key architecture choices behind Pinotechrd.Security a
 ## ADR-001: Multi-tenant resolution trusts authenticated claims first
 
 - Decision:
-  Tenant resolution uses authenticated user claims as the primary source, then falls back to the `TenantId` header only when the claim is not available. A header never overrides the claim. The JSON body and query string sources were removed after 1.2.0-preview.2: reading the body buffered it without a bound, and a query value ends up in logs and links.
+  For an authenticated principal the verified claim is the only tenant source; the header is never read for it, and a principal without the claim is rejected where a tenant is required. The `TenantId` header serves anonymous requests only, and its value must be a well-formed tenant id that `ITenantStore` accepts. Tokens are issued only for the tenant resolved for the request. The JSON body and query string sources were removed after 1.2.0-preview.2: reading the body buffered it without a bound, and a query value ends up in logs and links.
 - Why:
   Claims come from a validated token and are less spoofable than request metadata.
 - Tradeoff:
@@ -16,7 +16,7 @@ This document captures the key architecture choices behind Pinotechrd.Security a
 ## ADR-002: Refresh tokens are opaque and stateful
 
 - Decision:
-  Refresh tokens are generated as opaque values and validated server-side through a token store.
+  Refresh tokens are generated as opaque values and consumed server-side through a token store, in one atomic operation per refresh. Tokens rotated from one another form a family; presenting an already-consumed token revokes the family (RFC 9700, section 4.14.2).
 - Why:
   Server-side validation allows revocation, replay protection, and rotation control.
 - Tradeoff:

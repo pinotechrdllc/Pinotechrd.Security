@@ -83,7 +83,7 @@ app.UseTenantResolution();
 app.UseAuthorization();
 ```
 
-Keep `UseAuthentication()` before `UseTenantResolution()`, so the tenant claim comes from a validated principal.
+Keep `UseAuthentication()` before `UseTenantResolution()`, so the tenant claim comes from a validated principal. When an authentication scheme is configured and `UseTenantResolution()` runs first, the first anonymous request throws `InvalidOperationException` naming the required order, instead of trusting the header. A host with no authentication scheme at all is not affected.
 
 ### 4. Protect an endpoint
 
@@ -100,45 +100,64 @@ The policy name is `Module.Permission`: `Users.View` checks the `View` permissio
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `Secret` | none | Required. Startup fails if it is empty or shorter than `MinimumSecretLength`. |
-| `MinimumSecretLength` | `32` | Minimum accepted length of `Secret`. |
-| `Issuer` | not set | Validated only when set. |
-| `Audience` | not set | Validated only when set. |
+| `Secret` | none | Required. At least 32 bytes in UTF-8. |
+| `MinimumSecretLength` | `32` | Minimum length of `Secret` in UTF-8 bytes. Can be raised, not lowered below 32. |
+| `Issuer` | not set | Required. Always validated. |
+| `Audience` | not set | Required. Always validated. |
 | `ExpiryMinutes` | `60` | Access token lifetime. |
 | `RefreshTokenExpiryDays` | `7` | Refresh token lifetime. |
 
+The JWT settings are checked when the host starts, not inside `AddPinotechrdSecurity`, so tools that build the host without configuration (such as OpenAPI generation at build time) still work. A missing or weak setting makes the host fail to start with an `OptionsValidationException` that names the setting, for example `PinotechrdSecurityOptions.Jwt.Secret`. Tokens are signed with HMAC-SHA256, and only that algorithm is accepted when they are validated.
+
 ### Tenant resolution (`options.Tenancy`)
 
-The tenant id is taken from the first source that has a value, in this order:
+Where the tenant id comes from depends on whether the request is authenticated:
 
-| Order | Source | Option | Default |
+| Request | Source | Option | Default |
 | --- | --- | --- | --- |
-| 1 | Claim of the authenticated user | `ClaimType` | `tenant_id` |
-| 2 | Request header | `HeaderName` | `TenantId` |
+| Authenticated | Claim of the user, and nothing else | `ClaimType` | `tenant_id` |
+| Anonymous | Request header | `HeaderName` | `TenantId` |
 
-The order is fixed. When an authenticated user has the claim, the header is not read, so a different header value is ignored and does not cause a rejection. The JSON body and the query string are not read.
+For an authenticated user the header is never read, so a header naming another tenant is ignored and does not cause a rejection. An authenticated user without the claim is rejected with `tenant_invalid` on a path that requires a tenant, whatever `OnMissingTenant` says; on other paths it continues without a tenant. The header serves anonymous requests such as login and refresh. The JSON body and the query string are not read.
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `Sources` | `Claim \| Header` | Sources that may be used. `TenantSources.Claim` alone accepts only the verified claim. |
-| `OnMissingTenant` | `Reject` | `Reject` answers `400` when a request that requires a tenant has none. `Continue` lets the request through without a tenant, so authorization can answer `401` to an anonymous caller of a protected endpoint. |
-| `RequiredPathPrefix` | `/api` | Requests whose path starts with this prefix require a tenant. `/` means every path; empty means none. |
-| `SkipPaths` | empty | Paths starting with one of these prefixes bypass tenant resolution. |
+| `Sources` | `Claim \| Header` | Decides only what anonymous requests may use. Without `Header`, anonymous requests have no tenant. The claim is always used for authenticated users and cannot be turned off, so `Header` alone behaves like the default. |
+| `OnMissingTenant` | `Reject` | `Reject` answers `400` when an anonymous request that requires a tenant has none. `Continue` lets it through without a tenant, so authorization can answer `401` to an anonymous caller of a protected endpoint. |
+| `RequiredPathPrefix` | `/api` | Requests under this prefix require a tenant. Matching is by whole path segments, ignoring case: `/api` covers `/api` and `/api/orders`, not `/apix`. `/` means every path; empty means none. |
+| `SkipPaths` | empty | Requests under one of these prefixes bypass tenant resolution. Matched by whole segments too: `/health` does not skip `/healthcheck`. |
+| `UseSharedSchemaWhenNoTenant` | `false` | See [Tenant ids and schemas](#tenant-ids-and-schemas). |
 
-- A tenant id that `ITenantStore` does not recognize is rejected with `400 Bad Request`, whatever `OnMissingTenant` says. An unknown tenant and an inactive one get the same answer.
+- A tenant id that is malformed or that `ITenantStore` does not recognize is rejected with `400 Bad Request`, whatever `OnMissingTenant` says. A malformed id never reaches `ITenantStore`. An unknown tenant and an inactive one get the same answer.
 - When the application registers `IProblemDetailsService` (for example with `builder.Services.AddProblemDetails()`), rejections are `application/problem+json` with a `code` member: `tenant_required` or `tenant_invalid` (constants in `TenantResolutionErrorCodes`). Without it, the body is plain text.
 - Tenant ids and header values are not logged.
 
+### Tenant ids and schemas
+
+- A tenant id is 1 to 56 characters from `a-z`, `0-9` and `-`, and does not start with `-` (`TenantIdentifier.IsValid`). Lower-case GUIDs qualify. Upper case is rejected, not folded.
+- The schema of a tenant is `tenant_` plus the id with `-` replaced by `_` (`TenantIdentifier.ToSchemaName`). Two different ids never share a schema, and the longest name is 63 characters, the PostgreSQL limit.
+- `DbSchemaProvider` throws when no tenant is resolved, instead of falling back to the shared `identity` schema. Set `options.Tenancy.UseSharedSchemaWhenNoTenant = true` only where no tenant is expected, such as design-time tooling.
+
 ### Login and two-factor
 
-- `LoginAsync` returns the same failure, `Invalid credentials`, for an unknown user, a wrong password, a locked-out account and an account Identity does not allow to sign in. Lockout works as in ASP.NET Core Identity.
-- When there is no real password hash to check, the password is checked against a dummy hash made with the same hasher. This makes it harder to tell from the response time whether an account exists. It does not make the response time constant.
-- When the user has two-factor enabled, `LoginAsync` returns `RequiresTwoFactor` and a `TwoFactorToken`. The token is opaque, protected with ASP.NET Core Data Protection, bound to the user and the tenant, and valid for five minutes. Pass it to `GetTwoFactorProvidersAsync`, `SendTwoFactorCodeAsync` and `VerifyTwoFactorCodeAsync`, with the same tenant id as the login. A successful verification invalidates the token. Wrong codes count toward lockout.
+- Tokens are issued only for the tenant the request was resolved for. `LoginAsync`, `VerifyTwoFactorCodeAsync` and `RefreshAsync` fail when no tenant is resolved or when the `tenantId` passed in differs from it. With one schema per tenant, the user is looked up in that tenant's schema, so finding the user proves it belongs to the tenant. With a shared schema, check membership in an `IIdentityValidator<TUser>`.
+- `LoginAsync` returns the same failure, `Invalid credentials`, for an unknown user, an inactive user (`IsActive` false), a wrong password, a user without a password, a locked-out account, an account Identity does not allow to sign in, and a tenant mismatch. Lockout works as in ASP.NET Core Identity.
+- On every path where Identity would not hash the password against a stored hash (unknown, inactive, locked out, not allowed, no password, tenant mismatch), the password is checked against a dummy hash made once with the same hasher. This makes it harder to tell from the response time whether an account exists. It does not make the response time constant.
+- When the user has two-factor enabled, `LoginAsync` returns `RequiresTwoFactor` and a `TwoFactorToken`. That answer shows the password was right, as in every two-step login. The token is opaque, protected with ASP.NET Core Data Protection, bound to the user, the tenant and the security stamp, and valid for five minutes. Pass it to `GetTwoFactorProvidersAsync`, `SendTwoFactorCodeAsync` and `VerifyTwoFactorCodeAsync`, with the same tenant as the login.
+- Each token allows five code attempts, counted through `ITwoFactorAttemptStore` before the code is checked, so concurrent guesses count too. Wrong codes also count toward Identity lockout, and locked-out users are refused. The default `InMemoryTwoFactorAttemptStore` keeps counts per instance: with several instances, register a shared implementation.
+- A successful verification renews the security stamp, which makes the token single use. This depends on a user store that keeps security stamps and detects concurrent updates (the EF Core store does). Renewing the stamp also invalidates pending password reset and e-mail confirmation tokens. E-mail and SMS codes depend on the stamp; authenticator-app codes do not, so with an authenticator the same code stays valid for its time window, though not with the same token.
+- `SendTwoFactorCodeAsync` accepts only providers the user has, and sends a message every time it succeeds. Rate limit it in your API.
 - In a deployment with several instances, Data Protection keys must be shared between them, or a token issued by one instance is rejected by another.
+- `ResetPasswordAsync` answers an unknown e-mail with the same failure as an invalid reset token.
 
-### Refresh tokens
+### Refresh tokens and sign-out
 
-Refresh tokens are opaque values validated through `IRefreshTokenStore`. The default registration is `InMemoryRefreshTokenStore`: tokens are lost on restart and are not shared between instances. Register your own `IRefreshTokenStore` after `AddPinotechrdSecurity` for production or multi-instance deployments.
+- Refresh tokens are opaque values kept through `IRefreshTokenStore`. `RefreshAsync` consumes the presented token atomically: of two concurrent refreshes with one token, exactly one succeeds.
+- Tokens issued by rotating one another form a family. Presenting a token that was already used revokes the whole family (RFC 9700, section 4.14.2), so a client that sends two refreshes at once loses that session.
+- A token of another tenant is refused without being consumed. The user must still exist, be active, not be locked out, be allowed to sign in, and have the security stamp it had when the token was issued. Every failure returns `Invalid token`.
+- `SignOutAsync` revokes all refresh tokens of the user, in every session, and renews the security stamp. Deactivating a user with `SetUserActiveStatusAsync(userId, false)` does the same.
+- Access tokens already issued stay valid until they expire (`ExpiryMinutes`, 60 by default): JWT validation does not ask the server. Keep `ExpiryMinutes` short if that window matters.
+- The default `InMemoryRefreshTokenStore` loses tokens on restart and does not share them between instances. Register your own `IRefreshTokenStore` after `AddPinotechrdSecurity` for production. Its `ConsumeAsync` must be atomic (for example a single conditional `UPDATE ... WHERE consumed = false` that reports the affected rows); a read followed by a write lets two concurrent refreshes through.
 
 ## Sample API
 

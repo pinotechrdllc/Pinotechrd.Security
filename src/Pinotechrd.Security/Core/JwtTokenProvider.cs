@@ -20,19 +20,14 @@ public class JwtTokenProvider : ITokenProvider
     /// <summary>
     /// Initializes the token provider using configured JWT settings.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The secret is missing or shorter than 32 UTF-8 bytes (or <see cref="JwtSettings.MinimumSecretLength"/> if higher),
+    /// or the issuer or audience is missing.
+    /// </exception>
     public JwtTokenProvider(IOptions<PinotechrdSecurityOptions> options)
     {
         _settings = options.Value.Jwt;
-
-        if (string.IsNullOrWhiteSpace(_settings.Secret))
-        {
-            throw new InvalidOperationException("JWT secret is required.");
-        }
-
-        if (_settings.Secret.Length < _settings.MinimumSecretLength)
-        {
-            throw new InvalidOperationException($"JWT secret must be at least {_settings.MinimumSecretLength} characters.");
-        }
+        JwtSettingsRules.ThrowIfInvalid(_settings);
     }
 
     /// <inheritdoc />
@@ -64,16 +59,14 @@ public class JwtTokenProvider : ITokenProvider
     /// <inheritdoc />
     public ClaimsPrincipal GetPrincipalFromExpiredToken(string token)
     {
-        var validateIssuer = !string.IsNullOrWhiteSpace(_settings.Issuer);
-        var validateAudience = !string.IsNullOrWhiteSpace(_settings.Audience);
-
         var tokenValidationParameters = new TokenValidationParameters
         {
-            ValidateAudience = validateAudience,
-            ValidateIssuer = validateIssuer,
+            ValidateAudience = true,
+            ValidateIssuer = true,
             ValidateIssuerSigningKey = true,
             ValidIssuer = _settings.Issuer,
             ValidAudience = _settings.Audience,
+            ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_settings.Secret)),
             ValidateLifetime = false 
         };

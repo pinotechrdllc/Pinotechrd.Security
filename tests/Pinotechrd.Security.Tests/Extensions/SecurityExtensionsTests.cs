@@ -16,7 +16,7 @@ namespace Pinotechrd.Security.Tests.Extensions;
 public class SecurityExtensionsTests
 {
     [Fact]
-    public void AddPinotechrdSecurity_ShouldThrow_WhenJwtSecretTooShort()
+    public void AddPinotechrdSecurity_ShouldNotThrow_WhenJwtSecretTooShort_BecauseValidationRunsAtHostStart()
     {
         var services = new ServiceCollection();
         services.AddDbContext<TestSecurityDbContext>(options => options.UseInMemoryDatabase(Guid.NewGuid().ToString()));
@@ -32,8 +32,30 @@ public class SecurityExtensionsTests
             };
         });
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*at least 32 characters*");
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void ResolvingTheOptions_ShouldThrowOptionsValidationException_WhenJwtSecretTooShort()
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<TestSecurityDbContext>(options => options.UseInMemoryDatabase(Guid.NewGuid().ToString()));
+        services.AddPinotechrdSecurity<TestSecurityDbContext, TestUser, TestRole>(options =>
+        {
+            options.Jwt = new JwtSettings
+            {
+                Secret = "short-secret",
+                MinimumSecretLength = 32,
+                Issuer = "pinotechrd-tests",
+                Audience = "pinotechrd-tests"
+            };
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<Microsoft.Extensions.Options.IOptions<PinotechrdSecurityOptions>>().Value;
+
+        act.Should().Throw<Microsoft.Extensions.Options.OptionsValidationException>()
+            .WithMessage("*Jwt.Secret*");
     }
 
     private sealed class TestUser : BaseSecurityUser

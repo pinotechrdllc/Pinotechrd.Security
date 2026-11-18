@@ -15,7 +15,7 @@ dotnet run --project samples/Pinotechrd.Security.SampleApi/Pinotechrd.Security.S
 - `POST /api/auth/token`
   - Issues access + refresh token for a valid tenant (`demo`, `tenant-a`, `tenant-b`)
 - `POST /api/auth/refresh`
-  - Validates opaque refresh token, revokes old token, returns rotated tokens
+  - Consumes the opaque refresh token atomically for the tenant in the `TenantId` header and returns rotated tokens; presenting a used token again revokes its whole family
 - `GET /api/tenant`
   - Resolves tenant from authenticated claim first; falls back to the `TenantId` header
 - `GET /api/secure`
@@ -49,6 +49,7 @@ curl http://localhost:5000/api/secure \
 ```bash
 curl -X POST http://localhost:5000/api/auth/refresh \
   -H "Content-Type: application/json" \
+  -H "TenantId: tenant-a" \
   -d '{"refreshToken":"<refresh-token>"}'
 ```
 

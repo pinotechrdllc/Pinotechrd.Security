@@ -11,7 +11,8 @@ namespace Pinotechrd.Security.Interfaces;
 public interface IPinotechrdAuthManager<TUser> where TUser : class
 {
     /// <summary>
-    /// Authenticates a user by credentials and generates tokens.
+    /// Authenticates a user by credentials and generates tokens for <paramref name="tenantId"/>,
+    /// which must be the tenant resolved for the current request.
     /// </summary>
     Task<AuthResult> LoginAsync(string email, string password, string tenantId);
 
@@ -21,7 +22,8 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     Task<AuthResult> RefreshAsync(string refreshToken);
 
     /// <summary>
-    /// Invalidates the user's current session.
+    /// Signs the user out of every session: revokes all of its refresh tokens.
+    /// Access tokens already issued stay valid until they expire.
     /// </summary>
     Task SignOutAsync(string userId);
 

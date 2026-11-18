@@ -23,7 +23,6 @@ builder.Services.AddPinotechrdSecurity<SampleSecurityDbContext, SampleUser, Samp
 
     options.Tenancy.SkipPaths.Add("/health");
     options.Tenancy.SkipPaths.Add("/api/auth/token");
-    options.Tenancy.SkipPaths.Add("/api/auth/refresh");
 });
 
 builder.Services.AddScoped<ITenantStore, InMemoryTenantStore>();
@@ -79,17 +78,18 @@ app.MapPost("/api/auth/token", async (
 
 app.MapPost("/api/auth/refresh", async (
     SampleRefreshRequest request,
+    TenantContext tenantContext,
     ITokenProvider tokenProvider,
     IRefreshTokenStore refreshTokenStore,
     IOptions<PinotechrdSecurityOptions> securityOptions) =>
 {
-    var validation = await refreshTokenStore.ValidateAsync(request.RefreshToken);
-    if (!validation.IsValid || string.IsNullOrWhiteSpace(validation.UserId) || string.IsNullOrWhiteSpace(validation.TenantId))
+    // The tenant comes from the request (TenantId header), never from the token itself.
+    // Atomic: of two concurrent refreshes with one token only one succeeds, and reuse revokes the family.
+    var validation = await refreshTokenStore.ConsumeAsync(request.RefreshToken, tenantContext.TenantId!);
+    if (!validation.Succeeded || string.IsNullOrWhiteSpace(validation.UserId) || string.IsNullOrWhiteSpace(validation.TenantId))
     {
         return Results.Unauthorized();
     }
-
-    await refreshTokenStore.RevokeAsync(request.RefreshToken);
 
     var options = securityOptions.Value;
     var refreshedClaims = new List<Claim>
@@ -103,7 +103,7 @@ app.MapPost("/api/auth/refresh", async (
     var refreshToken = tokenProvider.GenerateRefreshToken();
     var expiresAtUtc = DateTime.UtcNow.AddDays(options.Jwt.RefreshTokenExpiryDays);
 
-    await refreshTokenStore.SaveAsync(validation.UserId, validation.TenantId, refreshToken, expiresAtUtc);
+    await refreshTokenStore.SaveAsync(validation.UserId, validation.TenantId, refreshToken, expiresAtUtc, validation.FamilyId);
 
     return Results.Ok(new
     {

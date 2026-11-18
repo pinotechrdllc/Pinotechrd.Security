@@ -35,6 +35,24 @@ public class PinotechrdAuthManagerLoginTests
 
     public sealed class NameLookupUser : BaseSecurityUser;
 
+    public sealed class NoPasswordUser : BaseSecurityUser;
+
+    public sealed class MismatchUser : BaseSecurityUser;
+
+    public sealed class NoContextUser : BaseSecurityUser;
+
+    public sealed class NoTenantUser : BaseSecurityUser;
+
+    public sealed class InactiveUser : BaseSecurityUser;
+
+    public sealed class SharedHasherUser : BaseSecurityUser;
+
+    public sealed class OtherHasherUserA : BaseSecurityUser;
+
+    public sealed class OtherHasherUserB : BaseSecurityUser;
+
+    public sealed class TokenTenantUser : BaseSecurityUser;
+
     [Fact]
     public async Task LoginAsync_ShouldFailWithInvalidCredentialsAndVerifyOnceAgainstDummyHash_WhenUserIsUnknown()
     {
@@ -174,7 +192,9 @@ public class PinotechrdAuthManagerLoginTests
         result.Succeeded.Should().BeTrue();
         result.RequiresTwoFactor.Should().BeFalse();
         result.Token!.AccessToken.Should().Be("access-token");
-        await kit.RefreshStore.Received(1).SaveAsync(user.Id.ToString(), "tenant-a", "refresh-token", Arg.Any<DateTime>());
+        await kit.RefreshStore.Received(1).SaveAsync(
+            user.Id.ToString(), "tenant-a", "refresh-token", Arg.Any<DateTime>(),
+            Arg.Is<string?>(f => !string.IsNullOrEmpty(f)), Arg.Is<string?>(st => st == kit.StampOf(user)), Arg.Any<CancellationToken>());
         kit.Hasher.Verifications.Should().BeEmpty();
     }
 
@@ -189,5 +209,130 @@ public class PinotechrdAuthManagerLoginTests
         var result = await kit.Manager.LoginAsync("alice", AuthManagerTestKit<NameLookupUser>.Password, "tenant-a");
 
         result.Succeeded.Should().BeTrue();
+    }
+
+    // ---- Users without a stored password hash ------------------------------------------------
+
+    [Fact]
+    public async Task LoginAsync_ShouldFailWithSameErrorAndRunDummyVerifyOnce_WhenUserHasNoPassword()
+    {
+        var kit = new AuthManagerTestKit<NoPasswordUser>();
+        var user = kit.AddUser("alice@x.test");
+        kit.RemovePassword(user);
+
+        var result = await kit.Manager.LoginAsync("alice@x.test", "anything", "tenant-a");
+
+        result.Should().Be(AuthResult.Failure(Invalid));
+        kit.Hasher.Verifications.Should().ContainSingle();
+    }
+
+    // ---- Tenant binding ----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("tenant-b")]
+    [InlineData("TENANT-A")]
+    [InlineData("tenant-a ")]
+    [InlineData("")]
+    public async Task LoginAsync_ShouldFailWithoutCheckingThePassword_WhenTenantDiffersFromTheRequestContext(string tenant)
+    {
+        var kit = new AuthManagerTestKit<MismatchUser>();
+        kit.AddUser("alice@x.test");
+
+        var result = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<MismatchUser>.Password, tenant);
+
+        result.Should().Be(AuthResult.Failure(Invalid));
+        kit.Hasher.Verifications.Should().ContainSingle();
+        await kit.SignInManager.DidNotReceiveWithAnyArgs().CheckPasswordSignInAsync(default!, default!, default);
+        kit.TokenProvider.DidNotReceiveWithAnyArgs().GenerateAccessToken(default!);
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task LoginAsync_ShouldFailWithoutCheckingThePassword_WhenThereIsNoTenantContext()
+    {
+        var kit = new AuthManagerTestKit<NoContextUser>(withTenantContext: false);
+        kit.AddUser("alice@x.test");
+
+        var result = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<NoContextUser>.Password, "tenant-a");
+
+        result.Should().Be(AuthResult.Failure(Invalid));
+        kit.Hasher.Verifications.Should().ContainSingle();
+        await kit.SignInManager.DidNotReceiveWithAnyArgs().CheckPasswordSignInAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task LoginAsync_ShouldFailWithoutCheckingThePassword_WhenTheContextHasNoTenant()
+    {
+        var kit = new AuthManagerTestKit<NoTenantUser>(tenant: null);
+        kit.AddUser("alice@x.test");
+
+        var result = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<NoTenantUser>.Password, "tenant-a");
+
+        result.Should().Be(AuthResult.Failure(Invalid));
+        kit.Hasher.Verifications.Should().ContainSingle();
+        await kit.SignInManager.DidNotReceiveWithAnyArgs().CheckPasswordSignInAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task LoginAsync_ShouldIssueTokensForExactlyTheContextTenant()
+    {
+        var kit = new AuthManagerTestKit<TokenTenantUser>(tenant: "tenant-z9");
+        var user = kit.AddUser("alice@x.test");
+        IReadOnlyList<System.Security.Claims.Claim>? claims = null;
+        kit.TokenProvider.GenerateAccessToken(Arg.Do<IEnumerable<System.Security.Claims.Claim>>(c => claims = c.ToList()));
+
+        var result = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<TokenTenantUser>.Password, "tenant-z9");
+
+        result.Succeeded.Should().BeTrue();
+        claims!.Where(c => c.Type == "tenant_id").Select(c => c.Value).Should().Equal("tenant-z9");
+        await kit.RefreshStore.Received(1).SaveAsync(
+            user.Id.ToString(), "tenant-z9", "refresh-token", Arg.Any<DateTime>(),
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    // ---- Inactive users ----------------------------------------------------------------------
+
+    [Fact]
+    public async Task LoginAsync_ShouldFailWithoutCheckingThePassword_WhenUserIsInactive()
+    {
+        var kit = new AuthManagerTestKit<InactiveUser>();
+        var user = kit.AddUser("alice@x.test");
+        kit.MakeInactive(user);
+
+        var result = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<InactiveUser>.Password, "tenant-a");
+
+        result.Should().Be(AuthResult.Failure(Invalid));
+        kit.Hasher.Verifications.Should().ContainSingle();
+        await kit.SignInManager.DidNotReceiveWithAnyArgs().CheckPasswordSignInAsync(default!, default!, default);
+    }
+
+    // ---- Dummy hash cache --------------------------------------------------------------------
+
+    [Fact]
+    public async Task LoginAsync_ShouldHashTheDummyPasswordOnlyOnce_AcrossHasherInstancesOfTheSameType()
+    {
+        var first = new AuthManagerTestKit<SharedHasherUser>();
+        var second = new AuthManagerTestKit<SharedHasherUser>();
+
+        await first.Manager.LoginAsync("nobody@x.test", "pw", "tenant-a");
+        await second.Manager.LoginAsync("nobody@x.test", "pw", "tenant-a");
+
+        (first.Hasher.HashCalls + second.Hasher.HashCalls).Should().Be(1);
+        second.Hasher.Verifications.Should().ContainSingle();
+        second.Hasher.Verifications.Single().Hash.Should().Be(first.Hasher.Verifications.Single().Hash);
+    }
+
+    [Fact]
+    public async Task LoginAsync_ShouldNotShareTheDummyHashBetweenDifferentHasherTypes()
+    {
+        var a = new AuthManagerTestKit<OtherHasherUserA>();
+        var b = new AuthManagerTestKit<OtherHasherUserB>();
+
+        await a.Manager.LoginAsync("nobody@x.test", "pw", "tenant-a");
+        await b.Manager.LoginAsync("nobody@x.test", "pw", "tenant-a");
+
+        a.Hasher.HashCalls.Should().Be(1);
+        b.Hasher.HashCalls.Should().Be(1);
+        b.Hasher.Verifications.Single().Hash.Should().NotBe(a.Hasher.Verifications.Single().Hash);
     }
 }
