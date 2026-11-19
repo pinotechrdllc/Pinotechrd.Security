@@ -135,8 +135,8 @@ public static class SecurityExtensions
         services.AddScoped<IPinotechrdSecurityManager<TUser, TRole>, PinotechrdSecurityManager<TUser, TRole>>();
 
         // The defaults are applied from the configured PinotechrdSecurityOptions, so the flag is honoured however and
-        // whenever the application sets it. Registered here, so a host Configure<AuthenticationOptions> after this call
-        // still wins, as before.
+        // whenever the application sets it. Registered here, after AddIdentity (whose defaults it may clear), so a host
+        // Configure<AuthenticationOptions> after this call still wins, as before.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<AuthenticationOptions>, DefaultAuthenticationSchemesSetup>());
         services.AddAuthentication()
             .AddJwtBearer();
@@ -216,47 +216,44 @@ public static class SecurityExtensions
     /// <see cref="PinotechrdSecurityOptions.SetDefaultAuthenticationSchemes"/> is <see langword="false"/>.
     /// </summary>
     /// <remarks>
-    /// The flag is read by running the configure steps of <see cref="PinotechrdSecurityOptions"/> on a fresh instance,
-    /// without its validators: the authentication options are built on the first request (and by tools that inspect
-    /// the schemes), and must not fail there on JWT or tenant-membership validation, which runs when the host starts.
+    /// When the flag is <see langword="false"/>, the defaults that <c>AddIdentity</c> sets (authenticate and
+    /// challenge to <see cref="IdentityConstants.ApplicationScheme"/>, sign-in to
+    /// <see cref="IdentityConstants.ExternalScheme"/>) are cleared, but only while they still hold Identity's values,
+    /// so the host's <c>DefaultScheme</c> applies and a value the host set explicitly is kept. Registered after
+    /// <c>AddIdentity</c>, so its values are already in place when this runs.
     /// </remarks>
     private sealed class DefaultAuthenticationSchemesSetup : IConfigureOptions<AuthenticationOptions>
     {
-        private readonly IEnumerable<IConfigureOptions<PinotechrdSecurityOptions>> _setups;
-        private readonly IEnumerable<IPostConfigureOptions<PinotechrdSecurityOptions>> _postSetups;
+        private readonly IOptions<PinotechrdSecurityOptions> _security;
 
-        public DefaultAuthenticationSchemesSetup(
-            IEnumerable<IConfigureOptions<PinotechrdSecurityOptions>> setups,
-            IEnumerable<IPostConfigureOptions<PinotechrdSecurityOptions>> postSetups)
+        public DefaultAuthenticationSchemesSetup(IOptions<PinotechrdSecurityOptions> security)
         {
-            _setups = setups;
-            _postSetups = postSetups;
+            _security = security;
         }
 
         public void Configure(AuthenticationOptions options)
         {
-            var security = new PinotechrdSecurityOptions();
-            foreach (var setup in _setups)
+            if (_security.Value.SetDefaultAuthenticationSchemes)
             {
-                if (setup is IConfigureNamedOptions<PinotechrdSecurityOptions> named)
-                {
-                    named.Configure(Microsoft.Extensions.Options.Options.DefaultName, security);
-                }
-                else
-                {
-                    setup.Configure(security);
-                }
+                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+                return;
             }
 
-            foreach (var postSetup in _postSetups)
+            if (options.DefaultAuthenticateScheme == IdentityConstants.ApplicationScheme)
             {
-                postSetup.PostConfigure(Microsoft.Extensions.Options.Options.DefaultName, security);
+                options.DefaultAuthenticateScheme = null;
             }
 
-            if (!security.SetDefaultAuthenticationSchemes) return;
+            if (options.DefaultChallengeScheme == IdentityConstants.ApplicationScheme)
+            {
+                options.DefaultChallengeScheme = null;
+            }
 
-            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-            options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+            if (options.DefaultSignInScheme == IdentityConstants.ExternalScheme)
+            {
+                options.DefaultSignInScheme = null;
+            }
         }
     }
 }
