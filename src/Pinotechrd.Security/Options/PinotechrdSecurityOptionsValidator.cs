@@ -12,6 +12,11 @@ internal sealed class PinotechrdSecurityOptionsValidator : IValidateOptions<Pino
     public ValidateOptionsResult Validate(string? name, PinotechrdSecurityOptions options)
     {
         var errors = JwtSettingsRules.Validate(options.Jwt);
+        if (options.TenantCacheExpiration <= TimeSpan.Zero)
+        {
+            errors.Add("PinotechrdSecurityOptions.TenantCacheExpiration must be positive.");
+        }
+
         return errors.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(errors);
     }
 }

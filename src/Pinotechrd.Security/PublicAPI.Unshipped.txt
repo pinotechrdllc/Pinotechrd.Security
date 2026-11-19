@@ -65,7 +65,7 @@ Pinotechrd.Security.Core.TenantCacheStore
 Pinotechrd.Security.Core.TenantCacheStore.GetActiveModuleCodesAsync(string! tenantId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
 Pinotechrd.Security.Core.TenantCacheStore.IsModuleActiveAsync(string! tenantId, string! moduleCode) -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Core.TenantCacheStore.IsSubscriptionActiveAsync(string! tenantId) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.TenantCacheStore.TenantCacheStore(Pinotechrd.Security.Interfaces.ISecurityStore! inner, Microsoft.Extensions.Caching.Memory.IMemoryCache! cache) -> void
+Pinotechrd.Security.Core.TenantCacheStore.TenantCacheStore(Pinotechrd.Security.Interfaces.ISecurityStore! inner, Microsoft.Extensions.Caching.Distributed.IDistributedCache! cache, Microsoft.Extensions.Options.IOptions<Pinotechrd.Security.Options.PinotechrdSecurityOptions!>! options) -> void
 Pinotechrd.Security.Data.ISchemaAwareContext
 Pinotechrd.Security.Data.ModelSchemaCacheKeyFactory
 Pinotechrd.Security.Data.ModelSchemaCacheKeyFactory.Create(Microsoft.EntityFrameworkCore.DbContext! context) -> object!
@@ -238,3 +238,6 @@ static Pinotechrd.Security.Extensions.PersistentStoreExtensions.AddPinotechrdEfR
 Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapTwoFactorAttempts.get -> bool
 Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapTwoFactorAttempts.set -> void
 static Pinotechrd.Security.Extensions.PersistentStoreExtensions.AddPinotechrdEfTwoFactorAttemptStore<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Pinotechrd.Security.Core.TenantCacheStore.InvalidateTenantAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.TenantCacheExpiration.get -> System.TimeSpan
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.TenantCacheExpiration.set -> void
