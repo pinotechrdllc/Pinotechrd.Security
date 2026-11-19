@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
@@ -17,6 +18,11 @@ namespace Pinotechrd.Security.Tenancy;
 /// <see cref="Claim"/> is always in effect and cannot be turned off. The flags only decide what an
 /// anonymous request may use: with <see cref="Header"/> it may name its tenant in the header; without it,
 /// an anonymous request has no tenant. <c>Header</c> alone therefore behaves like <c>Claim | Header</c>.
+/// "Authenticated" means by the default authenticate scheme when the middleware runs: with
+/// <see cref="Options.PinotechrdSecurityOptions.SetDefaultAuthenticationSchemes"/> set to <see langword="false"/> and
+/// a default other than JWT bearer, a request carrying only a bearer token is anonymous here and must send the tenant
+/// header, unless the default is a policy scheme that forwards to JWT bearer when an <c>Authorization: Bearer</c>
+/// header is present.
 /// </remarks>
 [Flags]
 public enum TenantSources
@@ -96,9 +102,16 @@ public class TenantResolutionOptions
     /// <para>
     /// An authenticated principal is resolved from its claim only; the header is never read for it, so a header
     /// naming another tenant is ignored and causes no rejection. An authenticated principal without the claim
-    /// gets <see cref="TenantResolutionErrorCodes.TenantInvalid"/> on a path that requires a tenant. The claim
-    /// comes from a token whose signature was validated, while the header is caller-supplied; RFC 9700 and
-    /// OWASP ASVS treat the validated token as the only authority for the caller's context. The header serves
+    /// gets <see cref="TenantResolutionErrorCodes.TenantInvalid"/> on a path that requires a tenant. With the
+    /// library's JWT bearer scheme the claim comes from a token whose signature was validated, while the header is
+    /// caller-supplied; RFC 9700 and OWASP ASVS treat the validated token as the only authority for the caller's
+    /// context. For any other scheme (for example cookies or OpenID Connect when
+    /// <see cref="Options.PinotechrdSecurityOptions.SetDefaultAuthenticationSchemes"/> is <see langword="false"/>), the
+    /// host is responsible for a tenant claim whose membership was verified and for exempting it from inbound claim
+    /// mapping. The middleware reads the principal of the default authenticate scheme, so with a default other than
+    /// JWT bearer a request carrying only a bearer token is anonymous here and must send the header, unless the
+    /// default is a policy scheme that forwards to JWT bearer when an <c>Authorization: Bearer</c> header is present.
+    /// The header serves
     /// requests whose principal is not authenticated when the middleware runs, such as login and refresh, and
     /// the tenant it names is checked against <see cref="ITenantStore"/> before it is used.
     /// </para>
@@ -316,8 +329,13 @@ public class TenantResolutionMiddleware
         // The authentication middleware sets IAuthenticationFeature on every request, anonymous or not.
         if (context.Features.Get<IAuthenticationFeature>() != null) return;
 
+        // Either scheme is enough: the JWT bearer scheme that AddPinotechrdSecurity always registers, even when the
+        // host keeps its own defaults (SetDefaultAuthenticationSchemes = false), or any default authenticate scheme
+        // (for example cookies), whose principal also feeds the tenant claim.
         var schemes = context.RequestServices?.GetService<IAuthenticationSchemeProvider>();
-        if (schemes == null || await schemes.GetDefaultAuthenticateSchemeAsync() == null) return;
+        if (schemes == null) return;
+        if (await schemes.GetSchemeAsync(JwtBearerDefaults.AuthenticationScheme) == null
+            && await schemes.GetDefaultAuthenticateSchemeAsync() == null) return;
 
         throw new InvalidOperationException(
             "UseTenantResolution() runs before UseAuthentication(). Call app.UseAuthentication() before " +
