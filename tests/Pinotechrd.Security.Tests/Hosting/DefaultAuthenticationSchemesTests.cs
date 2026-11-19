@@ -265,7 +265,7 @@ public class DefaultAuthenticationSchemesTests
     }
 
     [Fact]
-    public void WithoutAnyJwtConfiguration_ResolvingTheAuthenticationOptions_ShouldNotThrow_AndDefaultToJwtBearer()
+    public async Task WithoutAnyJwtConfiguration_ResolvingTheAuthenticationOptions_ShouldNotThrow_AndDefaultToJwtBearer()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -279,7 +279,7 @@ public class DefaultAuthenticationSchemesTests
         options.DefaultAuthenticateScheme.Should().Be(JwtBearerDefaults.AuthenticationScheme);
         options.DefaultChallengeScheme.Should().Be(JwtBearerDefaults.AuthenticationScheme);
         var schemes = provider.GetRequiredService<IAuthenticationSchemeProvider>();
-        schemes.GetDefaultAuthenticateSchemeAsync().GetAwaiter().GetResult()!.Name.Should().Be(JwtBearerDefaults.AuthenticationScheme);
+        (await schemes.GetDefaultAuthenticateSchemeAsync())!.Name.Should().Be(JwtBearerDefaults.AuthenticationScheme);
     }
 
     [Fact]
