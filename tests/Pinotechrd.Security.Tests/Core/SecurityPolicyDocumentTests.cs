@@ -21,7 +21,9 @@ public class SecurityPolicyDocumentTests
         var rows = Rows();
 
         rows.Should().NotBeEmpty();
-        rows.Should().OnlyContain(r => r.Contains("`<= 1.2.0-preview.2`", StringComparison.Ordinal) && r.Contains("`1.2.0-preview.3`", StringComparison.Ordinal));
+        rows.Should().OnlyContain(r =>
+            (r.Contains("`<= 1.2.0-preview.2`", StringComparison.Ordinal) && r.Contains("`1.2.0-preview.3`", StringComparison.Ordinal))
+            || (r.Contains("`<= 1.2.0-preview.3`", StringComparison.Ordinal) && r.Contains("`1.2.0-preview.4`", StringComparison.Ordinal)));
     }
 
     [Theory]
@@ -40,6 +42,6 @@ public class SecurityPolicyDocumentTests
 
         text.Should().Contain("| Latest 1.2.0 preview | Yes |");
         text.Should().Contain("| Older previews | No |");
-        text.Should().Contain("Upgrade to `1.2.0-preview.3` or later");
+        text.Should().Contain("Upgrade to `1.2.0-preview.4` or later");
     }
 }

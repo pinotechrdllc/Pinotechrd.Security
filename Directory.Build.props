@@ -1,7 +1,7 @@
 <Project>
 
   <PropertyGroup>
-    <Version>1.2.0-preview.3</Version>
+    <Version>1.2.0-preview.4</Version>
 
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -33,7 +33,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnablePackageValidation>true</EnablePackageValidation>
-    <!-- 1.2.0-preview.1 and 1.2.0-preview.2 are published, but previews change the public API on purpose, so no
+    <!-- The 1.2.0 previews are published, but previews change the public API on purpose, so no
          baseline is set. After the first stable release set this to that version (e.g. 1.2.0) so breaking changes fail the pack. -->
     <PackageValidationBaselineVersion></PackageValidationBaselineVersion>
   </PropertyGroup>
