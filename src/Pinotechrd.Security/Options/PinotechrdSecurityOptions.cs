@@ -67,10 +67,21 @@ public class JwtSettings
     /// Earlier secrets still accepted when validating tokens, never used to sign. Default empty.
     /// </summary>
     /// <remarks>
-    /// To rotate, move the current <see cref="Secret"/> here and set a new one; remove the old secret once every
-    /// token it signed has expired (<see cref="ExpiryMinutes"/>, plus the refresh window for
-    /// <c>GetPrincipalFromExpiredToken</c>). Each entry must meet the same minimum length as <see cref="Secret"/>,
-    /// and must not be empty, equal to <see cref="Secret"/>, or repeated.
+    /// <para>
+    /// Rolling rotation across several instances: (1) add the new secret here on every instance, so all of them
+    /// accept it before any signs with it; (2) make it <see cref="Secret"/> and move the old one here, everywhere;
+    /// (3) once the old secret's tokens are no longer needed (access tokens expired and the refresh window over),
+    /// remove it. The library enforces no time limit: a secret here is accepted until it is removed.
+    /// </para>
+    /// <para>
+    /// Never keep a leaked secret here: whoever holds it can forge tokens, and <c>GetPrincipalFromExpiredToken</c>
+    /// accepts them at any age. Remove it and rotate at once. Keys are read once, when the host starts: a change
+    /// takes effect only after a restart.
+    /// </para>
+    /// <para>
+    /// Each entry must meet the same minimum length as <see cref="Secret"/>, and must not be empty, equal to
+    /// <see cref="Secret"/>, or repeated.
+    /// </para>
     /// </remarks>
     public IList<string> PreviousSecrets { get; set; } = new List<string>();
 
