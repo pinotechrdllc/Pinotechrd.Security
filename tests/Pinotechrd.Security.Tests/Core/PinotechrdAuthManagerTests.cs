@@ -389,6 +389,52 @@ public class PinotechrdAuthManagerTests
         await kit.UserManager.DidNotReceiveWithAnyArgs().ChangePasswordAsync(default!, default!, default!);
     }
 
+    [Fact]
+    public async Task SignOutCurrentUserAsync_ShouldReturnFalseButKeepTheTokensRevoked_WhenTheStampCannotBeRenewed()
+    {
+        var provider = Substitute.For<ISecurityDataProvider>();
+        var (kit, a, _) = TwoUsers(provider);
+        provider.GetCurrentUserId().Returns(a.Id.ToString());
+        kit.MakeStampUpdateFail(a);
+
+        var signedOut = await kit.Manager.SignOutCurrentUserAsync();
+
+        signedOut.Should().BeFalse();
+        await kit.RefreshStore.Received(1).RevokeAllForUserAsync(a.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SignOutCurrentUserAsync_ShouldReturnTrueAndRevokeTokensWithoutTouchingTheStamp_WhenTheStoreHasNoSecurityStamps()
+    {
+        var provider = Substitute.For<ISecurityDataProvider>();
+        var (kit, a, _) = TwoUsers(provider);
+        provider.GetCurrentUserId().Returns(a.Id.ToString());
+        kit.UserManager.SupportsUserSecurityStamp.Returns(false);
+
+        var signedOut = await kit.Manager.SignOutCurrentUserAsync();
+
+        signedOut.Should().BeTrue();
+        await kit.RefreshStore.Received(1).RevokeAllForUserAsync(a.Id.ToString(), Arg.Any<CancellationToken>());
+        await kit.UserManager.DidNotReceiveWithAnyArgs().UpdateSecurityStampAsync(default!);
+    }
+
+    [Fact]
+    public async Task SignOutCurrentUserAsync_ShouldRevokeUnderTheStoredId_WhenTheLookupMatchedAnotherSpellingOfTheId()
+    {
+        var provider = Substitute.For<ISecurityDataProvider>();
+        var (kit, a, _) = TwoUsers(provider);
+        var upper = a.Id.ToString().ToUpperInvariant();
+        upper.Should().NotBe(a.Id.ToString());
+        provider.GetCurrentUserId().Returns(upper);
+        kit.UserManager.FindByIdAsync(upper).Returns(Task.FromResult<RefreshUser?>(a));
+
+        var signedOut = await kit.Manager.SignOutCurrentUserAsync();
+
+        signedOut.Should().BeTrue();
+        await kit.RefreshStore.Received(1).RevokeAllForUserAsync(a.Id.ToString(), Arg.Any<CancellationToken>());
+        await kit.RefreshStore.DidNotReceive().RevokeAllForUserAsync(upper, Arg.Any<CancellationToken>());
+    }
+
     // ---- Password reset ----------------------------------------------------------------------
 
     [Fact]

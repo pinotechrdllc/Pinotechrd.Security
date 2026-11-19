@@ -46,4 +46,18 @@ public class SecurityEngineCurrentUserTests
         current.Should().BeEquivalentTo(["MOD_A.READ", "CORE.HOME"], "permissions of inactive modules are filtered like GetPermissionsAsync");
         current.Should().NotContain("MOD_A.ADMIN", "another user's permissions are never reported");
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task GetCurrentUserPermissionsAsync_ShouldBeEmpty_WhenTheTenantIdIsEmpty_EvenIfTheUserHasPermissions(string? tenantId)
+    {
+        _provider.GetCurrentUserId().Returns("user-1");
+        _provider.GetCurrentTenantId().Returns(tenantId);
+        _provider.GetUserPermissionsAsync("user-1").Returns(new List<string> { "MOD_A.READ", "CORE.HOME" });
+
+        var permissions = await _engine.GetCurrentUserPermissionsAsync();
+
+        permissions.Should().BeEmpty();
+    }
 }

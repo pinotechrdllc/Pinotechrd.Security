@@ -80,4 +80,44 @@ public class PinotechrdSecurityManagerRevokeSessionsTests
         ok.Should().BeFalse();
         kit.StampOf(a).Should().Be(stamp);
     }
+
+    [Fact]
+    public async Task RevokeUserSessionsAsync_ShouldReturnFalseButKeepTheTokensRevoked_WhenTheStampCannotBeRenewed()
+    {
+        var (manager, kit, a, _, store) = Setup();
+        kit.MakeStampUpdateFail(a);
+
+        var ok = await manager.RevokeUserSessionsAsync(a.Id.ToString());
+
+        ok.Should().BeFalse();
+        await store.Received(1).RevokeAllForUserAsync(a.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RevokeUserSessionsAsync_ShouldReturnTrueAndRevokeTokensWithoutTouchingTheStamp_WhenTheStoreHasNoSecurityStamps()
+    {
+        var (manager, kit, a, _, store) = Setup();
+        kit.UserManager.SupportsUserSecurityStamp.Returns(false);
+
+        var ok = await manager.RevokeUserSessionsAsync(a.Id.ToString());
+
+        ok.Should().BeTrue();
+        await store.Received(1).RevokeAllForUserAsync(a.Id.ToString(), Arg.Any<CancellationToken>());
+        await kit.UserManager.DidNotReceiveWithAnyArgs().UpdateSecurityStampAsync(default!);
+    }
+
+    [Fact]
+    public async Task RevokeUserSessionsAsync_ShouldRevokeUnderTheStoredId_WhenTheLookupMatchedAnotherSpellingOfTheId()
+    {
+        var (manager, kit, a, _, store) = Setup();
+        var upper = a.Id.ToString().ToUpperInvariant();
+        upper.Should().NotBe(a.Id.ToString());
+        kit.UserManager.FindByIdAsync(upper).Returns(Task.FromResult<SessionUser?>(a));
+
+        var ok = await manager.RevokeUserSessionsAsync(upper);
+
+        ok.Should().BeTrue();
+        await store.Received(1).RevokeAllForUserAsync(a.Id.ToString(), Arg.Any<CancellationToken>());
+        await store.DidNotReceive().RevokeAllForUserAsync(upper, Arg.Any<CancellationToken>());
+    }
 }
