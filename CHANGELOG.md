@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project uses Semantic Versioning.
 
+## [Unreleased]
+
+### Changed
+
+- **Users.** `DeleteUserAsync` revokes the user's refresh tokens before deleting it. If revocation fails the user is not deleted; if the delete fails the tokens stay revoked. Access tokens stay valid until they expire.
+
+### Fixed
+
+- **Users.** `SetUserActiveStatusAsync(userId, false)` revoked nothing when `userId` was spelled differently from the stored id (for example in upper case), because it revoked under the caller's string. It now revokes under the user's stored id, as `DeleteUserAsync` does.
+
 ## [1.2.0-preview.3] - 2026-11-18
 
 ### Removed (breaking)
