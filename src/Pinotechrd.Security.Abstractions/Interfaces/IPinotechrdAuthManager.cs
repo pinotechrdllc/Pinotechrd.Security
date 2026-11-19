@@ -14,47 +14,64 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     /// Authenticates a user by credentials and generates tokens for <paramref name="tenantId"/>,
     /// which must be the tenant resolved for the current request.
     /// </summary>
-    Task<AuthResult> LoginAsync(string email, string password, string tenantId);
+    Task<AuthResult> LoginAsync(string email, string password, string tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Refreshes an expired access token using a refresh token.
     /// </summary>
-    Task<AuthResult> RefreshAsync(string refreshToken);
+    Task<AuthResult> RefreshAsync(string refreshToken, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Signs the user out of every session: revokes all of its refresh tokens.
+    /// Signs the authenticated user out of every session: revokes all of its refresh tokens.
     /// Access tokens already issued stay valid until they expire.
     /// </summary>
-    Task SignOutAsync(string userId);
+    /// <remarks>
+    /// Self-service: the user is the authenticated user of the request (<see cref="ISecurityDataProvider.GetCurrentUserId"/>),
+    /// never an identifier supplied by the caller. To sign out another user, use
+    /// <see cref="IPinotechrdSecurityManager{TUser, TRole}.RevokeUserSessionsAsync"/>.
+    /// </remarks>
+    /// <returns><see langword="false"/>, with nothing changed, when there is no authenticated user or the user is not
+    /// found; <see langword="false"/>, with the tokens already revoked, when renewing the security stamp fails;
+    /// otherwise <see langword="true"/>.</returns>
+    Task<bool> SignOutCurrentUserAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Changes the user's password.
+    /// Changes the authenticated user's password, validating <paramref name="currentPassword"/>.
     /// </summary>
-    Task<AuthResult> ChangePasswordAsync(string userId, string currentPassword, string newPassword);
+    /// <remarks>
+    /// Self-service: the user is the authenticated user of the request (<see cref="ISecurityDataProvider.GetCurrentUserId"/>),
+    /// never an identifier supplied by the caller. To change another user's password, use
+    /// <see cref="IPinotechrdSecurityManager{TUser, TRole}.ChangeUserPasswordAsync"/>.
+    /// </remarks>
+    /// <returns>A failed <see cref="AuthResult"/>, with nothing changed, when there is no authenticated user, the user is
+    /// not found, or Identity refuses the change.</returns>
+    Task<AuthResult> ChangeOwnPasswordAsync(string currentPassword, string newPassword, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Initiates a password reset flow.
     /// </summary>
-    Task<string?> GeneratePasswordResetTokenAsync(string email);
+    Task<string?> GeneratePasswordResetTokenAsync(string email, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Completes the password reset process.
     /// </summary>
-    Task<AuthResult> ResetPasswordAsync(string email, string token, string newPassword);
+    Task<AuthResult> ResetPasswordAsync(string email, string token, string newPassword, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the list of available 2FA providers for the user (Email, Phone, etc).
     /// </summary>
     /// <param name="twoFactorToken">The temporary token obtained during login (<see cref="AuthResult.TwoFactorToken"/>).
     /// It is an opaque, short-lived value bound to the user and the tenant, not the user identifier.</param>
-    Task<IList<string>> GetTwoFactorProvidersAsync(string twoFactorToken);
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<IList<string>> GetTwoFactorProvidersAsync(string twoFactorToken, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sends a 2FA code to the specified provider.
     /// </summary>
     /// <param name="twoFactorToken">The temporary token.</param>
     /// <param name="provider">The selected provider name.</param>
-    Task<AuthResult> SendTwoFactorCodeAsync(string twoFactorToken, string provider);
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<AuthResult> SendTwoFactorCodeAsync(string twoFactorToken, string provider, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Verifies the 2FA code and completes authentication.
@@ -63,5 +80,6 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     /// <param name="provider">The provider used.</param>
     /// <param name="code">The verification code.</param>
     /// <param name="tenantId">The target tenant ID. It must be the tenant the token was issued for.</param>
-    Task<AuthResult> VerifyTwoFactorCodeAsync(string twoFactorToken, string provider, string code, string tenantId);
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<AuthResult> VerifyTwoFactorCodeAsync(string twoFactorToken, string provider, string code, string tenantId, CancellationToken cancellationToken = default);
 }

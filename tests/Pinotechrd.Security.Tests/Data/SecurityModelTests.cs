@@ -286,4 +286,204 @@ public class SecurityModelTests
         statement.Should().Contain("REFERENCES \"subscription_plans\"");
         statement.Should().NotContain("security_modules");
     }
+
+    // ---- Refresh token tables (opt-in) -------------------------------------------------------
+
+    private static IEnumerable<IEntityType> RefreshTokenTables(SecDb db) =>
+        db.Model.GetEntityTypes().Where(t => t.GetTableName() is "refresh_tokens" or "refresh_token_families");
+
+    [Fact]
+    public void Model_ShouldNotMapRefreshTokenTables_ByDefault()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a");
+
+        RefreshTokenTables(db).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Model_ShouldNotMapRefreshTokenTables_WhenTheFlagIsOffInSearchPathMode()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SearchPath(connection, "a");
+
+        RefreshTokenTables(db).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Model_ShouldMapBothRefreshTokenTablesInTheTenantSchema_WhenMapRefreshTokensIsOn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var a = SecDbFactory.Create(connection, "a", configure: o => o.MapRefreshTokens = true);
+        using var b = SecDbFactory.Create(connection, "b", configure: o => o.MapRefreshTokens = true);
+
+        RefreshTokenTables(a).Select(t => t.GetTableName()).Should().BeEquivalentTo("refresh_tokens", "refresh_token_families");
+        RefreshTokenTables(a).Should().OnlyContain(t => t.GetSchema() == a.SchemaName);
+        RefreshTokenTables(b).Should().OnlyContain(t => t.GetSchema() == b.SchemaName);
+        a.SchemaName.Should().NotBe(b.SchemaName);
+    }
+
+    [Fact]
+    public void Model_ShouldKeepRefreshTokenTablesOutOfTheCatalogSchema_EvenWithACustomCatalogSchema()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a", configure: o =>
+        {
+            o.MapRefreshTokens = true;
+            o.CatalogSchema = "platform";
+        });
+
+        RefreshTokenTables(db).Should().HaveCount(2).And.OnlyContain(t => t.GetSchema() == db.SchemaName && t.GetSchema() != "platform");
+    }
+
+    [Fact]
+    public void Model_ShouldMapRefreshTokenTablesWithoutASchema_InSearchPathModeWhenTheFlagIsOn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SearchPath(connection, "a", o => o.MapRefreshTokens = true);
+
+        RefreshTokenTables(db).Should().HaveCount(2).And.OnlyContain(t => t.GetSchema() == null);
+    }
+
+    [Fact]
+    public void Model_ShouldKeyRefreshTokensByAColumnNamedTokenHashAndStoreNoTokenColumn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a", configure: o => o.MapRefreshTokens = true);
+
+        var tokens = RefreshTokenTables(db).Single(t => t.GetTableName() == "refresh_tokens");
+        var table = Microsoft.EntityFrameworkCore.Metadata.StoreObjectIdentifier.Table("refresh_tokens", tokens.GetSchema());
+        var columns = tokens.GetProperties().Select(p => p.GetColumnName(table)).ToList();
+
+        tokens.FindPrimaryKey()!.Properties.Single().GetColumnName(table).Should().Be("token_hash");
+        columns.Should().BeEquivalentTo("token_hash", "tenant_id", "user_id", "family_id", "security_stamp", "expires_at", "consumed_at", "revoked_at");
+    }
+
+    [Fact]
+    public void TheCreateScript_ShouldContainRefreshTokenTables_OnlyWhenTheFlagIsOn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var off = SearchPath(connection, "a");
+        using var on = SearchPath(connection, "a", o => o.MapRefreshTokens = true);
+
+        off.Database.GenerateCreateScript().Should().NotContain("refresh_token");
+        on.Database.GenerateCreateScript().Should().Contain("refresh_tokens").And.Contain("refresh_token_families");
+    }
+
+    // ---- Two-factor attempt table (opt-in) ---------------------------------------------------
+
+    private static IEnumerable<IEntityType> TwoFactorAttemptTables(SecDb db) =>
+        db.Model.GetEntityTypes().Where(t => t.GetTableName() == "two_factor_attempts");
+
+    [Fact]
+    public void Model_ShouldNotMapTheTwoFactorAttemptTable_ByDefault()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a");
+
+        TwoFactorAttemptTables(db).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Model_ShouldNotMapTheTwoFactorAttemptTable_WhenTheFlagIsOffInSearchPathMode()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SearchPath(connection, "a");
+
+        TwoFactorAttemptTables(db).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Model_ShouldMapTheTwoFactorAttemptTableInTheTenantSchema_WhenMapTwoFactorAttemptsIsOn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var a = SecDbFactory.Create(connection, "a", configure: o => o.MapTwoFactorAttempts = true);
+        using var b = SecDbFactory.Create(connection, "b", configure: o => o.MapTwoFactorAttempts = true);
+
+        TwoFactorAttemptTables(a).Should().ContainSingle().Which.GetSchema().Should().Be(a.SchemaName);
+        TwoFactorAttemptTables(b).Should().ContainSingle().Which.GetSchema().Should().Be(b.SchemaName);
+        a.SchemaName.Should().NotBe(b.SchemaName);
+    }
+
+    [Fact]
+    public void Model_ShouldKeepTheTwoFactorAttemptTableOutOfTheCatalogSchema_EvenWithACustomCatalogSchema()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a", configure: o =>
+        {
+            o.MapTwoFactorAttempts = true;
+            o.CatalogSchema = "platform";
+        });
+
+        TwoFactorAttemptTables(db).Should().ContainSingle().Which.GetSchema().Should().Be(db.SchemaName).And.NotBe("platform");
+    }
+
+    [Fact]
+    public void Model_ShouldMapTheTwoFactorAttemptTableWithoutASchema_InSearchPathModeWhenTheFlagIsOn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SearchPath(connection, "a", o => o.MapTwoFactorAttempts = true);
+
+        TwoFactorAttemptTables(db).Should().ContainSingle().Which.GetSchema().Should().BeNull();
+    }
+
+    [Fact]
+    public void Model_ShouldKeyTheTwoFactorAttemptsByAHashColumnAndStoreNoChallengeColumn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a", configure: o => o.MapTwoFactorAttempts = true);
+
+        var attempts = TwoFactorAttemptTables(db).Single();
+        var table = StoreObjectIdentifier.Table("two_factor_attempts", attempts.GetSchema());
+        var columns = attempts.GetProperties().Select(p => p.GetColumnName(table)).ToList();
+
+        attempts.FindPrimaryKey()!.Properties.Single().GetColumnName(table).Should().Be("challenge_hash");
+        columns.Should().BeEquivalentTo("challenge_hash", "count", "exhausted", "expires_at");
+    }
+
+    [Fact]
+    public void Model_ShouldNotMapRefreshTokenTables_WhenOnlyTheTwoFactorFlagIsOn_AndTheOtherWayRound()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var attemptsOnly = SecDbFactory.Create(connection, "a", configure: o => o.MapTwoFactorAttempts = true);
+        using var tokensOnly = SecDbFactory.Create(connection, "a", configure: o => o.MapRefreshTokens = true);
+
+        RefreshTokenTables(attemptsOnly).Should().BeEmpty();
+        TwoFactorAttemptTables(tokensOnly).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void TheCreateScript_ShouldContainTheTwoFactorAttemptTable_OnlyWhenTheFlagIsOn()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var off = SearchPath(connection, "a");
+        using var on = SearchPath(connection, "a", o => o.MapTwoFactorAttempts = true);
+
+        off.Database.GenerateCreateScript().Should().NotContain("two_factor_attempts");
+        on.Database.GenerateCreateScript().Should().Contain("two_factor_attempts").And.Contain("challenge_hash");
+    }
+
+    [Fact]
+    public void Model_ShouldHaveAUniqueIndexOnRoleAndPermission_ForRolePermissions()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a");
+
+        var index = Entity(db, typeof(RolePermission)).GetIndexes()
+            .Single(i => i.Properties.Select(p => p.Name).SequenceEqual(["RoleId", "PermissionId"]));
+
+        index.IsUnique.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Model_ShouldHaveAUniqueIndexOnUserAndPermission_ForUserPermissions()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a");
+
+        var index = Entity(db, typeof(UserModulePermission)).GetIndexes()
+            .Single(i => i.Properties.Select(p => p.Name).SequenceEqual(["UserId", "PermissionId"]));
+
+        index.IsUnique.Should().BeTrue();
+    }
 }

@@ -1,6 +1,4 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
-using System.Text;
 using Pinotechrd.Security.Interfaces;
 
 namespace Pinotechrd.Security.Core;
@@ -267,9 +265,5 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
         }
     }
 
-    private static string HashToken(string token)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
-        return Convert.ToHexString(bytes);
-    }
+    private static string HashToken(string token) => RefreshTokenHash.ComputeHex(token);
 }

@@ -250,12 +250,28 @@ public abstract class PinotechrdSecurityDbContext<TUser, TRole> : IdentityDbCont
         {
             entity.ToTable("role_permissions", dynamicSchema);
             entity.HasOne(e => e.Permission).WithMany(p => p.RolePermissions).HasForeignKey(e => e.PermissionId);
+            // A role holds a permission once, whatever concurrent replaces do.
+            entity.HasIndex(e => new { e.RoleId, e.PermissionId }).IsUnique();
         });
 
         modelBuilder.Entity<UserModulePermission>(entity => 
         {
             entity.ToTable("user_permissions", dynamicSchema);
             entity.HasOne(e => e.Permission).WithMany().HasForeignKey(e => e.PermissionId);
+            // A user has one override per permission, whatever concurrent replaces do.
+            entity.HasIndex(e => new { e.UserId, e.PermissionId }).IsUnique();
         });
+
+        // Persistent refresh token store (opt-in): tenant schema only, so another tenant's token is not even visible.
+        if (_settings.MapRefreshTokens)
+        {
+            AuthStoreModel.MapRefreshTokens(modelBuilder, dynamicSchema);
+        }
+
+        // Persistent two-factor attempt store (opt-in): tenant schema only, like the refresh tokens.
+        if (_settings.MapTwoFactorAttempts)
+        {
+            AuthStoreModel.MapTwoFactorAttempts(modelBuilder, dynamicSchema);
+        }
     }
 }

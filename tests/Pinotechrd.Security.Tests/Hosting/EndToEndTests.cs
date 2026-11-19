@@ -42,6 +42,7 @@ public class EndToEndTests
                     o.Jwt.Secret = "end-to-end-secret-key-with-more-than-32-bytes";
                     o.Jwt.Issuer = "e2e";
                     o.Jwt.Audience = "e2e-clients";
+                    o.AllowUnverifiedTenantMembership = true;
                 });
                 builder.Services.AddHostStubs();
             },
@@ -67,9 +68,9 @@ public class EndToEndTests
                         : Results.Json(new { error = result.ErrorMessage }, statusCode: 401);
                 });
 
-                app.MapPost("/api/auth/logout", [Authorize] async (HttpContext http, IPinotechrdAuthManager<HostUser> auth) =>
+                app.MapPost("/api/auth/logout", [Authorize] async (IPinotechrdAuthManager<HostUser> auth) =>
                 {
-                    await auth.SignOutAsync(http.User.FindFirst("id")!.Value);
+                    await auth.SignOutCurrentUserAsync();
                     return Results.NoContent();
                 });
 

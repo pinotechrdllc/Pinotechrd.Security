@@ -17,122 +17,201 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// <summary>
     /// Returns all registered users.
     /// </summary>
-    Task<IEnumerable<TUser>> GetUsersAsync();
+    Task<IEnumerable<TUser>> GetUsersAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets a user by unique identifier.
     /// </summary>
-    Task<TUser?> GetUserByIdAsync(string userId);
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    Task<TUser?> GetUserByIdAsync(string userId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets a user by email address.
     /// </summary>
-    Task<TUser?> GetUserByEmailAsync(string email);
+    Task<TUser?> GetUserByEmailAsync(string email, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates a user and optionally assigns roles.
     /// </summary>
-    Task<bool> CreateUserAsync(TUser user, string password, IEnumerable<string>? roles = null);
+    /// <remarks>
+    /// <para>
+    /// Every role in <paramref name="roles"/> must exist, and no name may be empty; otherwise no user is created and
+    /// the method returns <c>false</c>. Repeated names are assigned once. If creating the user or assigning a role
+    /// fails, the method returns <c>false</c>; exceptions from the store propagate.
+    /// </para>
+    /// <para>
+    /// The user and its roles are written atomically on a relational EF Core provider: in a transaction of their own
+    /// (run through the context's execution strategy), or, when the context already has a transaction, behind a
+    /// savepoint inside it, where the caller keeps the commit. They are not atomic on a non-relational provider, or in
+    /// a caller transaction on a provider without savepoints. Inside a <c>TransactionScope</c> they are rolled back
+    /// only if the caller abandons the scope.
+    /// </para>
+    /// <para>
+    /// On a relational provider the context must have no pending changes, or the method throws
+    /// <see cref="System.InvalidOperationException"/>: the Identity store saves every pending change of the context,
+    /// and a rollback would lose them.
+    /// </para>
+    /// </remarks>
+    /// <returns><c>true</c> when the user was created with the requested roles; otherwise <c>false</c>.</returns>
+    Task<bool> CreateUserAsync(TUser user, string password, IEnumerable<string>? roles = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Persists updates for an existing user.
     /// </summary>
-    Task<bool> UpdateUserAsync(TUser user);
+    Task<bool> UpdateUserAsync(TUser user, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Deletes a user by identifier.
     /// </summary>
-    Task<bool> DeleteUserAsync(string userId);
+    /// <remarks>
+    /// <para>Administrative: the caller must authorize acting on this user.</para>
+    /// <para>
+    /// The user's refresh tokens are revoked first. An exception from the refresh token store propagates and the
+    /// user is not deleted; a failed delete returns <c>false</c> with the tokens already revoked.
+    /// </para>
+    /// </remarks>
+    Task<bool> DeleteUserAsync(string userId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Enables or disables a user account.
     /// </summary>
-    Task<bool> SetUserActiveStatusAsync(string userId, bool isActive);
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    Task<bool> SetUserActiveStatusAsync(string userId, bool isActive, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Signs a user out of every session: revokes all of its refresh tokens and renews its security stamp.
+    /// Access tokens already issued stay valid until they expire.
+    /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    /// <returns><see langword="false"/>, with nothing changed, when the user is not found or no refresh token store is
+    /// registered; <see langword="false"/>, with the tokens already revoked, when renewing the stamp fails; otherwise
+    /// <see langword="true"/>.</returns>
+    Task<bool> RevokeUserSessionsAsync(string userId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Resets the user password without requiring the current password.
     /// </summary>
-    Task<bool> ResetUserPasswordAsync(string userId, string newPassword);
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    Task<bool> ResetUserPasswordAsync(string userId, string newPassword, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Changes the user password using current password validation.
     /// </summary>
-    Task<bool> ChangeUserPasswordAsync(string userId, string currentPassword, string newPassword);
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    Task<bool> ChangeUserPasswordAsync(string userId, string currentPassword, string newPassword, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns all registered roles.
     /// </summary>
-    Task<IEnumerable<TRole>> GetRolesAsync();
+    Task<IEnumerable<TRole>> GetRolesAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets a role by unique identifier.
     /// </summary>
-    Task<TRole?> GetRoleByIdAsync(string roleId);
+    Task<TRole?> GetRoleByIdAsync(string roleId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets a role by its display name.
     /// </summary>
-    Task<TRole?> GetRoleByNameAsync(string roleName);
+    Task<TRole?> GetRoleByNameAsync(string roleName, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates a role with an optional description.
     /// </summary>
-    Task<bool> CreateRoleAsync(TRole role, string? description = null);
+    Task<bool> CreateRoleAsync(TRole role, string? description = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Persists updates for an existing role.
     /// </summary>
-    Task<bool> UpdateRoleAsync(TRole role);
+    Task<bool> UpdateRoleAsync(TRole role, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Deletes a role by identifier.
     /// </summary>
-    Task<bool> DeleteRoleAsync(string roleId);
+    Task<bool> DeleteRoleAsync(string roleId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the role names currently assigned to the user.
     /// </summary>
-    Task<IEnumerable<string>> GetUserRolesAsync(string userId);
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    Task<IEnumerable<string>> GetUserRolesAsync(string userId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Assigns one or more roles to a user.
     /// </summary>
-    Task<bool> AssignRolesToUserAsync(string userId, IEnumerable<string> roleNames);
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    Task<bool> AssignRolesToUserAsync(string userId, IEnumerable<string> roleNames, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Removes one or more roles from a user.
     /// </summary>
-    Task<bool> RemoveRolesFromUserAsync(string userId, IEnumerable<string> roleNames);
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    Task<bool> RemoveRolesFromUserAsync(string userId, IEnumerable<string> roleNames, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets all available security permissions defined in the system.
     /// </summary>
-    Task<IEnumerable<Pinotechrd.Security.Entities.SecurityPermission>> GetPermissionsAsync();
+    Task<IEnumerable<Pinotechrd.Security.Entities.SecurityPermission>> GetPermissionsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the permission codes assigned to a specific role.
     /// </summary>
-    Task<IEnumerable<string>> GetRolePermissionsAsync(string roleId);
+    Task<IEnumerable<string>> GetRolePermissionsAsync(string roleId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Synchronizes the permissions assigned to a role.
+    /// Replaces the permissions assigned to a role with <paramref name="permissionCodes"/>. An empty list clears them.
     /// </summary>
-    Task<bool> AssignPermissionsToRoleAsync(string roleId, IEnumerable<string> permissionCodes);
+    /// <remarks>
+    /// The replace is atomic: a failure leaves the previous assignments intact. Concurrent replaces for the same role
+    /// run one after the other, so the final assignments are exactly one of the requested sets. Outside a transaction, a
+    /// <c>DbUpdateException</c> from saving the new rows is retried up to five times; any other error, and the last
+    /// <c>DbUpdateException</c>, propagates. Inside a transaction the caller opened, the replace runs once behind a
+    /// savepoint and is not retried. The role row receives a no-op <c>UPDATE</c> that serializes the replaces, so
+    /// <c>UPDATE</c> triggers on it fire and a row version (<c>xmin</c>, <c>rowversion</c>) changes.
+    /// See the README for the details.
+    /// </remarks>
+    /// <exception cref="System.InvalidOperationException">
+    /// The context has pending changes (save or discard them first), or its provider is not relational.
+    /// </exception>
+    /// <returns>
+    /// <see langword="false"/>, with nothing changed, when the role id is not a guid, the role does not exist, or a
+    /// code is invalid or names a permission that does not exist.
+    /// </returns>
+    Task<bool> AssignPermissionsToRoleAsync(string roleId, IEnumerable<string> permissionCodes, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the modules on the tenant's active plan, each with its active permissions.
     /// A module that the plan does not include is absent.
     /// </summary>
-    Task<IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule>> GetActiveCatalogAsync(string tenantId);
+    Task<IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule>> GetActiveCatalogAsync(string tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the Allow and Deny overrides written for one user.
     /// </summary>
-    Task<IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride>> GetUserOverridesAsync(string userId);
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    Task<IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride>> GetUserOverridesAsync(string userId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Replaces the user's Allow and Deny overrides. An empty list clears them.
-    /// Returns false when the user id is not a guid or a permission code does not exist.
     /// </summary>
-    Task<bool> ReplaceUserOverridesAsync(string userId, IEnumerable<Pinotechrd.Security.Models.UserPermissionOverride> overrides);
+    /// <remarks>
+    /// <para>Administrative: the caller must authorize acting on this user.</para>
+    /// <para>
+    /// The replace is atomic: a failure leaves the previous overrides intact. Concurrent replaces for the same user
+    /// run one after the other, so the final overrides are exactly one of the requested sets. Outside a transaction, a
+    /// <c>DbUpdateException</c> from saving the new rows is retried up to five times; any other error, and the last
+    /// <c>DbUpdateException</c>, propagates. Inside a transaction the caller opened, the replace runs once behind a
+    /// savepoint and is not retried. The user row receives a no-op <c>UPDATE</c> that serializes the replaces, so
+    /// <c>UPDATE</c> triggers on it fire and a row version (<c>xmin</c>, <c>rowversion</c>) changes.
+    /// See the README for the details.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="System.InvalidOperationException">
+    /// The context has pending changes (save or discard them first), or its provider is not relational.
+    /// </exception>
+    /// <returns>
+    /// <see langword="false"/>, with nothing changed, when the user id is not a guid, the user does not exist, or a
+    /// code is invalid or names a permission that does not exist.
+    /// </returns>
+    Task<bool> ReplaceUserOverridesAsync(string userId, IEnumerable<Pinotechrd.Security.Models.UserPermissionOverride> overrides, CancellationToken cancellationToken = default);
 }

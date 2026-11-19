@@ -22,8 +22,11 @@ Only preview versions have been published so far. Security fixes are released as
 | `<= 1.2.0-preview.2` | `1.2.0-preview.3` | A bare permission name (for example `VIEW`) granted that permission in every module. |
 | `<= 1.2.0-preview.2` | `1.2.0-preview.3` | The tenant-id-to-schema mapping merged different ids (`a-b`, `a_b`, `A-B`) into one schema, so those tenants shared data. |
 | `<= 1.2.0-preview.2` | `1.2.0-preview.3` | A user authenticated by an endpoint's own scheme ran with the tenant named in the request header. |
+| `<= 1.2.0-preview.3` | `1.2.0-preview.4` | Tenant membership was not checked when the context passed to `AddPinotechrdSecurity` did not derive from `PinotechrdSecurityDbContext` with `UsePinotechrdSecurity()` (or in `SearchPath` mode with the application owning the search path) and no `IIdentityValidator<TUser>` was registered, so a user of one tenant could obtain a token for another. |
+| `<= 1.2.0-preview.3` | `1.2.0-preview.4` | In `SearchPath` mode, a provider error reading the connection's session id disabled the check that keeps every command in the tenant's schema. |
+| `<= 1.2.0-preview.3` | `1.2.0-preview.4` | Sign-out, password change and permission listing meant for the current user acted on any user id the caller passed (IDOR when exposed as self-service endpoints). |
 
-Upgrade to `1.2.0-preview.3` or later; see the changelog for the breaking changes and the migration steps.
+Upgrade to `1.2.0-preview.4` or later; see the changelog for the breaking changes and the migration steps.
 
 ## Reporting a Vulnerability
 

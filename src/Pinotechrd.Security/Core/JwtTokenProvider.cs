@@ -2,7 +2,6 @@ using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Pinotechrd.Security.Interfaces;
@@ -35,8 +34,8 @@ public class JwtTokenProvider : ITokenProvider
     /// <inheritdoc />
     public string GenerateAccessToken(IEnumerable<Claim> claims)
     {
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_settings.Secret));
-        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        // Signed with the current secret only; the header carries its kid.
+        var creds = JwtSigningKeys.CreateSigningCredentials(_settings);
 
         var token = new JwtSecurityToken(
             issuer: _settings.Issuer,
@@ -69,7 +68,7 @@ public class JwtTokenProvider : ITokenProvider
             ValidIssuer = _settings.Issuer,
             ValidAudience = _settings.Audience,
             ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_settings.Secret)),
+            IssuerSigningKeys = JwtSigningKeys.ValidationKeys(_settings),
             ValidateLifetime = false 
         };
 

@@ -36,6 +36,7 @@ public class JwtBearerConfigurationTests
             o.Jwt.Secret = Secret;
             o.Jwt.Issuer = "the-issuer";
             o.Jwt.Audience = "the-audience";
+            o.AllowUnverifiedTenantMembership = true;
         });
         after?.Invoke(services);
         using var provider = services.BuildServiceProvider();
@@ -54,7 +55,10 @@ public class JwtBearerConfigurationTests
         parameters.ValidIssuer.Should().Be("the-issuer");
         parameters.ValidAudience.Should().Be("the-audience");
         parameters.ValidAlgorithms.Should().Equal(SecurityAlgorithms.HmacSha256);
-        parameters.IssuerSigningKey.Should().NotBeNull();
+        parameters.IssuerSigningKey.Should().BeNull();
+        parameters.IssuerSigningKeys.Should().ContainSingle()
+            .Which.Should().BeOfType<SymmetricSecurityKey>()
+            .Which.Key.Should().Equal(Encoding.UTF8.GetBytes(Secret));
     }
 
     [Fact]
@@ -143,7 +147,10 @@ public class JwtBearerConfigurationTests
         parameters.ValidateAudience.Should().BeTrue();
         parameters.ValidIssuer.Should().Be("the-issuer");
         parameters.ValidAudience.Should().Be("the-audience");
-        parameters.IssuerSigningKey.Should().NotBeNull();
+        parameters.IssuerSigningKey.Should().BeNull();
+        parameters.IssuerSigningKeys.Should().ContainSingle()
+            .Which.Should().BeOfType<SymmetricSecurityKey>()
+            .Which.Key.Should().Equal(Encoding.UTF8.GetBytes(Secret));
     }
 
     [Fact]
@@ -160,7 +167,10 @@ public class JwtBearerConfigurationTests
         parameters.ValidateIssuerSigningKey.Should().BeTrue();
         parameters.ValidIssuer.Should().Be("the-issuer");
         parameters.ValidAudience.Should().Be("the-audience");
-        parameters.IssuerSigningKey.Should().NotBeNull();
+        parameters.IssuerSigningKey.Should().BeNull();
+        parameters.IssuerSigningKeys.Should().ContainSingle()
+            .Which.Should().BeOfType<SymmetricSecurityKey>()
+            .Which.Key.Should().Equal(Encoding.UTF8.GetBytes(Secret));
         parameters.ValidAlgorithms.Should().Equal(SecurityAlgorithms.HmacSha256);
     }
 
@@ -225,6 +235,7 @@ public class JwtBearerConfigurationTests
                     o.Jwt.Secret = Secret;
                     o.Jwt.Issuer = "the-issuer";
                     o.Jwt.Audience = "the-audience";
+                    o.AllowUnverifiedTenantMembership = true;
                 });
                 builder.Services.AddHostStubs();
                 if (replaceWithWeakParameters)

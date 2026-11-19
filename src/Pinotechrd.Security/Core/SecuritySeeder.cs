@@ -27,10 +27,10 @@ public class SecuritySeeder
     /// <see cref="SecurityModuleId.FromCode"/>, the same in every tenant, so a plan in the shared catalog can
     /// refer to it. Every permission is linked to the module; an existing permission without a module is linked.
     /// </remarks>
-    public async Task SeedModuleAsync(string name, string code, string? description, int displayOrder, IEnumerable<(string Name, string Code, string? Description)> permissions)
+    public async Task SeedModuleAsync(string name, string code, string? description, int displayOrder, IEnumerable<(string Name, string Code, string? Description)> permissions, CancellationToken cancellationToken = default)
     {
         var moduleCode = SecurityCodes.Normalize(code);
-        var existingModule = await _db.Modules.FirstOrDefaultAsync(m => m.Code == moduleCode);
+        var existingModule = await _db.Modules.FirstOrDefaultAsync(m => m.Code == moduleCode, cancellationToken);
 
         if (existingModule == null)
         {
@@ -53,7 +53,7 @@ public class SecuritySeeder
         foreach (var p in permissions)
         {
             var permissionCode = SecurityCodes.Normalize(p.Code);
-            var existingPermission = await _db.Permissions.FirstOrDefaultAsync(perm => perm.Code == permissionCode);
+            var existingPermission = await _db.Permissions.FirstOrDefaultAsync(perm => perm.Code == permissionCode, cancellationToken);
             if (existingPermission == null)
             {
                 var newPermission = new SecurityPermission
@@ -79,7 +79,7 @@ public class SecuritySeeder
 
         if (_db is DbContext dbContext)
         {
-            await dbContext.SaveChangesAsync();
+            await dbContext.SaveChangesAsync(cancellationToken);
         }
     }
 }

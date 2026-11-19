@@ -82,7 +82,7 @@ public sealed class FixedTenantStore : ITenantStore
 
     public System.Collections.Concurrent.ConcurrentQueue<string> Asked { get; } = new();
 
-    public Task<bool> TenantExistsAsync(string tenantId)
+    public Task<bool> TenantExistsAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         Asked.Enqueue(tenantId);
         return Task.FromResult(_tenants.Contains(tenantId));
@@ -98,7 +98,15 @@ internal static class HostStubs
     public static IServiceCollection AddHostStubs(this IServiceCollection services, FixedTenantStore? tenants = null)
     {
         services.AddSingleton<ITenantStore>(tenants ?? new FixedTenantStore("tenant-a", "tenant-b"));
-        services.AddSingleton(Substitute.For<ISecurityDataProvider>());
+        // The current user is the authenticated request's "id" claim, as an application's provider would read it.
+        services.AddHttpContextAccessor();
+        services.AddSingleton(sp =>
+        {
+            var http = sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>();
+            var provider = Substitute.For<ISecurityDataProvider>();
+            provider.GetCurrentUserId().Returns(_ => http.HttpContext?.User.FindFirst("id")?.Value);
+            return provider;
+        });
         var engine = Substitute.For<ISecurityEngine>();
         engine.GetPermissionsAsync(Arg.Any<string>()).Returns(new[] { "permissions.read" });
         services.AddScoped(_ => engine);

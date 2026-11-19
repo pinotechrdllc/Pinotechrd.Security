@@ -136,7 +136,7 @@ public class CredentialHeaderPipelineTests
     public async Task LibraryWiring_ShouldAnswer200_WhenTheClaimMatchesTheResolvedTenant_AndIgnoreTheHeader()
     {
         var engine = Substitute.For<ISecurityEngine>();
-        engine.CanAccessAsync("SALES", "VIEW").Returns(true);
+        engine.CanAccessAsync("SALES", "VIEW", Arg.Any<CancellationToken>()).Returns(true);
         await using var host = await InProcessHost.StartAsync(
             builder =>
             {
@@ -146,6 +146,7 @@ public class CredentialHeaderPipelineTests
                     o.Jwt.Secret = "credential-pipeline-signing-key-32-bytes!!";
                     o.Jwt.Issuer = "iss";
                     o.Jwt.Audience = "aud";
+                    o.AllowUnverifiedTenantMembership = true;
                 });
                 builder.Services.AddHostStubs(new FixedTenantStore("acme", "globex"));
                 builder.Services.AddScoped(_ => engine);

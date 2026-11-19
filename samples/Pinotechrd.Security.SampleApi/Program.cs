@@ -61,18 +61,20 @@ app.MapGet("/health", () => Results.Ok(new
 app.MapPost("/api/auth/login", async (
     SampleLoginRequest request,
     TenantContext tenantContext,
-    IPinotechrdAuthManager<SampleUser> auth) =>
+    IPinotechrdAuthManager<SampleUser> auth,
+    CancellationToken cancellationToken) =>
 {
-    var result = await auth.LoginAsync(request.Email, request.Password, tenantContext.TenantId!);
+    var result = await auth.LoginAsync(request.Email, request.Password, tenantContext.TenantId!, cancellationToken);
     return ToResponse(result);
 });
 
 // Anonymous: the tenant comes from the TenantId header, never from the token itself.
 app.MapPost("/api/auth/refresh", async (
     SampleRefreshRequest request,
-    IPinotechrdAuthManager<SampleUser> auth) =>
+    IPinotechrdAuthManager<SampleUser> auth,
+    CancellationToken cancellationToken) =>
 {
-    var result = await auth.RefreshAsync(request.RefreshToken);
+    var result = await auth.RefreshAsync(request.RefreshToken, cancellationToken);
     return ToResponse(result);
 });
 
@@ -136,7 +138,7 @@ public sealed class InMemoryTenantStore : ITenantStore
         "tenant-b"
     };
 
-    public Task<bool> TenantExistsAsync(string tenantId)
+    public Task<bool> TenantExistsAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         return Task.FromResult(ValidTenantIds.Contains(tenantId));
     }
@@ -166,25 +168,25 @@ public sealed class SampleSecurityDataProvider : ISecurityDataProvider
     // (or, for anonymous requests and background work, with TenantContext) and denies on any difference.
     public string? GetCurrentTenantId() => _tenantContext.TenantId;
 
-    public Task<IEnumerable<string>> GetUserRolesAsync(string userId)
+    public Task<IEnumerable<string>> GetUserRolesAsync(string userId, CancellationToken cancellationToken = default)
         => Task.FromResult<IEnumerable<string>>(["sample-role"]);
 
-    public Task<IEnumerable<string>> GetUserPermissionsAsync(string userId)
+    public Task<IEnumerable<string>> GetUserPermissionsAsync(string userId, CancellationToken cancellationToken = default)
         => Task.FromResult<IEnumerable<string>>(["sample.read", "sample.write"]);
 }
 
 public sealed class SampleSecurityStore : ISecurityStore
 {
-    public Task<bool> IsSubscriptionActiveAsync(string tenantId) => Task.FromResult(true);
+    public Task<bool> IsSubscriptionActiveAsync(string tenantId, CancellationToken cancellationToken = default) => Task.FromResult(true);
 
-    public Task<bool> IsModuleActiveAsync(string tenantId, string moduleCode) => Task.FromResult(true);
+    public Task<bool> IsModuleActiveAsync(string tenantId, string moduleCode, CancellationToken cancellationToken = default) => Task.FromResult(true);
 
-    public Task<IEnumerable<string>> GetActiveModuleCodesAsync(string tenantId)
+    public Task<IEnumerable<string>> GetActiveModuleCodesAsync(string tenantId, CancellationToken cancellationToken = default)
         => Task.FromResult<IEnumerable<string>>(["CORE", "SAMPLE"]);
 
-    public Task<IReadOnlyList<SecurityModule>> GetActiveCatalogAsync(string tenantId)
+    public Task<IReadOnlyList<SecurityModule>> GetActiveCatalogAsync(string tenantId, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<SecurityModule>>([]);
 
-    public Task<IReadOnlyList<UserPermissionOverride>> GetUserOverridesAsync(string userId)
+    public Task<IReadOnlyList<UserPermissionOverride>> GetUserOverridesAsync(string userId, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<UserPermissionOverride>>([]);
 }

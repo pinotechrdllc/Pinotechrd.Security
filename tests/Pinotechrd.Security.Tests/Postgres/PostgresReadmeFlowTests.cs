@@ -59,7 +59,7 @@ public class PostgresReadmeFlowTests(PostgresFixture postgres) : IAsyncLifetime
     // The README's AppTenantStore.
     private sealed class AppTenantStore(NpgsqlDataSource dataSource) : ITenantStore
     {
-        public async Task<bool> TenantExistsAsync(string tenantId)
+        public async Task<bool> TenantExistsAsync(string tenantId, CancellationToken cancellationToken = default)
         {
             await using var command = dataSource.CreateCommand(
                 "SELECT EXISTS (SELECT 1 FROM public.tenants WHERE \"Identifier\" = $1 AND \"Status\" = $2)");
@@ -77,9 +77,9 @@ public class PostgresReadmeFlowTests(PostgresFixture postgres) : IAsyncLifetime
 
         public string? GetCurrentTenantId() => tenant.TenantId;
 
-        public Task<IEnumerable<string>> GetUserRolesAsync(string userId) => security.GetUserRolesAsync(userId);
+        public Task<IEnumerable<string>> GetUserRolesAsync(string userId, CancellationToken cancellationToken = default) => security.GetUserRolesAsync(userId);
 
-        public async Task<IEnumerable<string>> GetUserPermissionsAsync(string userId)
+        public async Task<IEnumerable<string>> GetUserPermissionsAsync(string userId, CancellationToken cancellationToken = default)
         {
             var codes = new List<string>();
             foreach (var name in await security.GetUserRolesAsync(userId))

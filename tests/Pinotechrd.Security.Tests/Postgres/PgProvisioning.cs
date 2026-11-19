@@ -33,12 +33,24 @@ internal static class PgProvisioning
     /// Provisions tenants as the README documents: create the schema, then run the generated create script from a context
     /// whose tenant is set. The first tenant's script also creates the catalog tables; later tenants exclude them.
     /// </summary>
-    public static async Task ProvisionAsync(string connectionString, TenantSchemaMode mode, params string[] tenants)
+    public static Task ProvisionAsync(string connectionString, TenantSchemaMode mode, params string[] tenants) =>
+        ProvisionAsync(connectionString, mode, null, tenants);
+
+    /// <summary>Same as above, with extra model options (for example <c>MapRefreshTokens</c>) applied to every tenant's script.</summary>
+    public static async Task ProvisionAsync(
+        string connectionString,
+        TenantSchemaMode mode,
+        Action<PinotechrdSecurityModelOptions>? configure,
+        params string[] tenants)
     {
         for (var i = 0; i < tenants.Length; i++)
         {
             var first = i == 0;
-            await using var db = NewContext(connectionString, mode, tenants[i], o => o.ExcludeCatalogFromMigrations = !first);
+            await using var db = NewContext(connectionString, mode, tenants[i], o =>
+            {
+                o.ExcludeCatalogFromMigrations = !first;
+                configure?.Invoke(o);
+            });
             var schema = TenantIdentifier.ToSchemaName(tenants[i]);
             var createSchema = $"CREATE SCHEMA IF NOT EXISTS \"{schema}\"";
             await db.Database.ExecuteSqlRawAsync(createSchema);

@@ -174,8 +174,11 @@ internal static partial class SearchPathBinder
 
     /// <summary>
     /// The server process id of the physical session (Npgsql's <c>ProcessID</c>, read on the client without a round trip),
-    /// or <see langword="null"/> when the provider does not expose one.
+    /// or <see langword="null"/> when the provider does not expose one or the connection is not open.
     /// </summary>
+    /// <exception cref="InvalidOperationException">The provider exposes <c>ProcessID</c> but reading it threw; the
+    /// provider's exception is the <see cref="Exception.InnerException"/>. The session cannot be verified, so the
+    /// caller fails closed instead of skipping the session-identity check.</exception>
     private static int? ProcessIdOf(DbConnection connection)
     {
         var property = ProcessIdProperties.GetOrAdd(connection.GetType(), t => t.GetProperty("ProcessID", typeof(int)));
@@ -184,9 +187,11 @@ internal static partial class SearchPathBinder
         {
             return (int?)property.GetValue(connection);
         }
-        catch (System.Reflection.TargetInvocationException)
+        catch (System.Reflection.TargetInvocationException ex)
         {
-            return null;
+            throw new InvalidOperationException(
+                "The connection's database session id (ProcessID) could not be read, so the session bound to the tenant schema cannot be verified.",
+                ex.InnerException ?? ex);
         }
     }
 

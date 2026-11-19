@@ -12,9 +12,9 @@ Pinotechrd.Security.Authorization.PermissionRequirement.Permission.get -> string
 Pinotechrd.Security.Authorization.PermissionRequirement.PermissionRequirement(string! fullName) -> void
 Pinotechrd.Security.Core.DbSecurityStore
 Pinotechrd.Security.Core.DbSecurityStore.DbSecurityStore(Pinotechrd.Security.Interfaces.ISecurityDbContext! db) -> void
-Pinotechrd.Security.Core.DbSecurityStore.GetActiveModuleCodesAsync(string! tenantId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
-Pinotechrd.Security.Core.DbSecurityStore.IsModuleActiveAsync(string! tenantId, string! moduleCode) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.DbSecurityStore.IsSubscriptionActiveAsync(string! tenantId) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.DbSecurityStore.GetActiveModuleCodesAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Core.DbSecurityStore.IsModuleActiveAsync(string! tenantId, string! moduleCode, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.DbSecurityStore.IsSubscriptionActiveAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Core.InMemoryRefreshTokenStore
 Pinotechrd.Security.Core.InMemoryRefreshTokenStore.InMemoryRefreshTokenStore() -> void
 Pinotechrd.Security.Core.JwtTokenProvider
@@ -23,49 +23,49 @@ Pinotechrd.Security.Core.JwtTokenProvider.GenerateRefreshToken() -> string!
 Pinotechrd.Security.Core.JwtTokenProvider.GetPrincipalFromExpiredToken(string! token) -> System.Security.Claims.ClaimsPrincipal!
 Pinotechrd.Security.Core.JwtTokenProvider.JwtTokenProvider(Microsoft.Extensions.Options.IOptions<Pinotechrd.Security.Options.PinotechrdSecurityOptions!>! options) -> void
 Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.ChangePasswordAsync(string! userId, string! currentPassword, string! newPassword) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.GeneratePasswordResetTokenAsync(string! email) -> System.Threading.Tasks.Task<string?>!
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.GetTwoFactorProvidersAsync(string! twoFactorToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IList<string!>!>!
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.LoginAsync(string! emailOrUsername, string! password, string! tenantId) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.RefreshAsync(string! refreshToken) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.ResetPasswordAsync(string! email, string! token, string! newPassword) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.SendTwoFactorCodeAsync(string! twoFactorToken, string! provider) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.SignOutAsync(string! userId) -> System.Threading.Tasks.Task!
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.VerifyTwoFactorCodeAsync(string! twoFactorToken, string! provider, string! code, string! tenantId) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.ChangeOwnPasswordAsync(string! currentPassword, string! newPassword, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.GeneratePasswordResetTokenAsync(string! email, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string?>!
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.GetTwoFactorProvidersAsync(string! twoFactorToken, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IList<string!>!>!
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.LoginAsync(string! emailOrUsername, string! password, string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.RefreshAsync(string! refreshToken, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.ResetPasswordAsync(string! email, string! token, string! newPassword, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.SendTwoFactorCodeAsync(string! twoFactorToken, string! provider, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.SignOutCurrentUserAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.VerifyTwoFactorCodeAsync(string! twoFactorToken, string! provider, string! code, string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
 Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.AssignPermissionsToRoleAsync(string! roleId, System.Collections.Generic.IEnumerable<string!>! permissionCodes) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.AssignRolesToUserAsync(string! userId, System.Collections.Generic.IEnumerable<string!>! roleNames) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.ChangeUserPasswordAsync(string! userId, string! currentPassword, string! newPassword) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.CreateRoleAsync(TRole! role, string? description = null) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.CreateUserAsync(TUser! user, string! password, System.Collections.Generic.IEnumerable<string!>? roles = null) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.DeleteRoleAsync(string! roleId) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.DeleteUserAsync(string! userId) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetPermissionsAsync() -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Pinotechrd.Security.Entities.SecurityPermission!>!>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetRoleByIdAsync(string! roleId) -> System.Threading.Tasks.Task<TRole?>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetRoleByNameAsync(string! roleName) -> System.Threading.Tasks.Task<TRole?>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetRolePermissionsAsync(string! roleId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetRolesAsync() -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<TRole!>!>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetUserByEmailAsync(string! email) -> System.Threading.Tasks.Task<TUser?>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetUserByIdAsync(string! userId) -> System.Threading.Tasks.Task<TUser?>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetUserRolesAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetUsersAsync() -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<TUser!>!>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.RemoveRolesFromUserAsync(string! userId, System.Collections.Generic.IEnumerable<string!>! roleNames) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.ResetUserPasswordAsync(string! userId, string! newPassword) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.SetUserActiveStatusAsync(string! userId, bool isActive) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.UpdateRoleAsync(TRole! role) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.UpdateUserAsync(TUser! user) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.AssignPermissionsToRoleAsync(string! roleId, System.Collections.Generic.IEnumerable<string!>! permissionCodes, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.AssignRolesToUserAsync(string! userId, System.Collections.Generic.IEnumerable<string!>! roleNames, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.ChangeUserPasswordAsync(string! userId, string! currentPassword, string! newPassword, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.CreateRoleAsync(TRole! role, string? description = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.CreateUserAsync(TUser! user, string! password, System.Collections.Generic.IEnumerable<string!>? roles = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.DeleteRoleAsync(string! roleId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.DeleteUserAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetPermissionsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<Pinotechrd.Security.Entities.SecurityPermission!>!>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetRoleByIdAsync(string! roleId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TRole?>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetRoleByNameAsync(string! roleName, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TRole?>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetRolePermissionsAsync(string! roleId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetRolesAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<TRole!>!>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetUserByEmailAsync(string! email, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TUser?>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetUserByIdAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TUser?>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetUserRolesAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetUsersAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<TUser!>!>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.RemoveRolesFromUserAsync(string! userId, System.Collections.Generic.IEnumerable<string!>! roleNames, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.ResetUserPasswordAsync(string! userId, string! newPassword, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.SetUserActiveStatusAsync(string! userId, bool isActive, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.UpdateRoleAsync(TRole! role, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.UpdateUserAsync(TUser! user, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Core.SecurityEngine
-Pinotechrd.Security.Core.SecurityEngine.CanAccessAsync(string! moduleCode, string! permissionName) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.SecurityEngine.GetAuthorizedMenuAsync(System.Collections.Generic.IEnumerable<Pinotechrd.Security.Entities.SecurityMenuItem!>! fullMenu) -> System.Threading.Tasks.Task<System.Collections.Generic.List<Pinotechrd.Security.Entities.SecurityMenuItem!>!>!
-Pinotechrd.Security.Core.SecurityEngine.GetPermissionsAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Core.SecurityEngine.CanAccessAsync(string! moduleCode, string! permissionName, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.SecurityEngine.GetAuthorizedMenuAsync(System.Collections.Generic.IEnumerable<Pinotechrd.Security.Entities.SecurityMenuItem!>! fullMenu, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.List<Pinotechrd.Security.Entities.SecurityMenuItem!>!>!
+Pinotechrd.Security.Core.SecurityEngine.GetPermissionsAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
 Pinotechrd.Security.Core.SecuritySeeder
 Pinotechrd.Security.Core.SecuritySeeder.SecuritySeeder(Pinotechrd.Security.Interfaces.ISecurityDbContext! db) -> void
-Pinotechrd.Security.Core.SecuritySeeder.SeedModuleAsync(string! name, string! code, string? description, int displayOrder, System.Collections.Generic.IEnumerable<(string! Name, string! Code, string? Description)>! permissions) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Core.SecuritySeeder.SeedModuleAsync(string! name, string! code, string? description, int displayOrder, System.Collections.Generic.IEnumerable<(string! Name, string! Code, string? Description)>! permissions, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Pinotechrd.Security.Core.TenantCacheStore
-Pinotechrd.Security.Core.TenantCacheStore.GetActiveModuleCodesAsync(string! tenantId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
-Pinotechrd.Security.Core.TenantCacheStore.IsModuleActiveAsync(string! tenantId, string! moduleCode) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.TenantCacheStore.IsSubscriptionActiveAsync(string! tenantId) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.TenantCacheStore.TenantCacheStore(Pinotechrd.Security.Interfaces.ISecurityStore! inner, Microsoft.Extensions.Caching.Memory.IMemoryCache! cache) -> void
+Pinotechrd.Security.Core.TenantCacheStore.GetActiveModuleCodesAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Core.TenantCacheStore.IsModuleActiveAsync(string! tenantId, string! moduleCode, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.TenantCacheStore.IsSubscriptionActiveAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.TenantCacheStore.TenantCacheStore(Pinotechrd.Security.Interfaces.ISecurityStore! inner, Microsoft.Extensions.Caching.Distributed.IDistributedCache! cache, Microsoft.Extensions.Options.IOptions<Pinotechrd.Security.Options.PinotechrdSecurityOptions!>! options) -> void
 Pinotechrd.Security.Data.ISchemaAwareContext
 Pinotechrd.Security.Data.ModelSchemaCacheKeyFactory
 Pinotechrd.Security.Data.ModelSchemaCacheKeyFactory.Create(Microsoft.EntityFrameworkCore.DbContext! context) -> object!
@@ -82,13 +82,13 @@ Pinotechrd.Security.Interfaces.ISecurityDbContext.SaveChangesAsync(System.Thread
 Pinotechrd.Security.Interfaces.ISecurityDbContext.SubscriptionPlanModules.get -> System.Linq.IQueryable<Pinotechrd.Security.Entities.SubscriptionPlanModule!>!
 Pinotechrd.Security.Interfaces.ISecurityDbContext.SystemSubscriptions.get -> System.Linq.IQueryable<Pinotechrd.Security.Entities.SystemSubscription!>!
 Pinotechrd.Security.Interfaces.ISecurityEngine
-Pinotechrd.Security.Interfaces.ISecurityEngine.CanAccessAsync(string! moduleCode, string! permissionName) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Interfaces.ISecurityEngine.GetAuthorizedMenuAsync(System.Collections.Generic.IEnumerable<Pinotechrd.Security.Entities.SecurityMenuItem!>! fullMenu) -> System.Threading.Tasks.Task<System.Collections.Generic.List<Pinotechrd.Security.Entities.SecurityMenuItem!>!>!
-Pinotechrd.Security.Interfaces.ISecurityEngine.GetPermissionsAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Interfaces.ISecurityEngine.CanAccessAsync(string! moduleCode, string! permissionName, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.ISecurityEngine.GetAuthorizedMenuAsync(System.Collections.Generic.IEnumerable<Pinotechrd.Security.Entities.SecurityMenuItem!>! fullMenu, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.List<Pinotechrd.Security.Entities.SecurityMenuItem!>!>!
+Pinotechrd.Security.Interfaces.ISecurityEngine.GetPermissionsAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
 Pinotechrd.Security.Interfaces.ISecurityStore
-Pinotechrd.Security.Interfaces.ISecurityStore.GetActiveModuleCodesAsync(string! tenantId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
-Pinotechrd.Security.Interfaces.ISecurityStore.IsModuleActiveAsync(string! tenantId, string! moduleCode) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Interfaces.ISecurityStore.IsSubscriptionActiveAsync(string! tenantId) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.ISecurityStore.GetActiveModuleCodesAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Interfaces.ISecurityStore.IsModuleActiveAsync(string! tenantId, string! moduleCode, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.ISecurityStore.IsSubscriptionActiveAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Options.JwtSettings
 Pinotechrd.Security.Options.JwtSettings.Audience.get -> string?
 Pinotechrd.Security.Options.JwtSettings.Audience.set -> void
@@ -99,6 +99,8 @@ Pinotechrd.Security.Options.JwtSettings.Issuer.set -> void
 Pinotechrd.Security.Options.JwtSettings.JwtSettings() -> void
 Pinotechrd.Security.Options.JwtSettings.MinimumSecretLength.get -> int
 Pinotechrd.Security.Options.JwtSettings.MinimumSecretLength.set -> void
+Pinotechrd.Security.Options.JwtSettings.PreviousSecrets.get -> System.Collections.Generic.IList<string!>!
+Pinotechrd.Security.Options.JwtSettings.PreviousSecrets.set -> void
 Pinotechrd.Security.Options.JwtSettings.RefreshTokenExpiryDays.get -> int
 Pinotechrd.Security.Options.JwtSettings.RefreshTokenExpiryDays.set -> void
 Pinotechrd.Security.Options.JwtSettings.Secret.get -> string!
@@ -107,15 +109,18 @@ Pinotechrd.Security.Options.PinotechrdSecurityOptions
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.Jwt.get -> Pinotechrd.Security.Options.JwtSettings!
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.Jwt.set -> void
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.PinotechrdSecurityOptions() -> void
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.AllowUnverifiedTenantMembership.get -> bool
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.AllowUnverifiedTenantMembership.set -> void
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.Tenancy.get -> Pinotechrd.Security.Tenancy.TenantResolutionOptions!
 Pinotechrd.Security.Tenancy.DbSchemaProvider
 Pinotechrd.Security.Tenancy.DbSchemaProvider.DbSchemaProvider(Pinotechrd.Security.Tenancy.TenantContext! tenantContext) -> void
 Pinotechrd.Security.Tenancy.DbSchemaProvider.GetDefaultSchema() -> string!
 Pinotechrd.Security.Tenancy.DbSchemaProvider.GetSchemaName() -> string!
 Pinotechrd.Security.Tenancy.SchemaManager
-Pinotechrd.Security.Tenancy.SchemaManager.ApplyMigrationsAsync() -> System.Threading.Tasks.Task!
-Pinotechrd.Security.Tenancy.SchemaManager.CreateSchemaAsync(string! schemaName) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Tenancy.SchemaManager.ApplyMigrationsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Tenancy.SchemaManager.CreateSchemaAsync(string! schemaName, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Pinotechrd.Security.Tenancy.SchemaManager.SchemaManager(Pinotechrd.Security.Interfaces.ISecurityDbContext! db) -> void
+Pinotechrd.Security.Tenancy.SchemaManager.CreateTenantSchemaAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Pinotechrd.Security.Tenancy.TenantContext
 Pinotechrd.Security.Tenancy.TenantContext.SchemaName.get -> string?
 Pinotechrd.Security.Tenancy.TenantContext.SetTenant(string! tenantId) -> void
@@ -152,16 +157,16 @@ virtual Pinotechrd.Security.Data.PinotechrdSecurityDbContext<TUser, TRole>.Tenan
 virtual Pinotechrd.Security.Data.PinotechrdSecurityDbContext<TUser, TRole>.Tenants.set -> void
 virtual Pinotechrd.Security.Data.PinotechrdSecurityDbContext<TUser, TRole>.UserModulePermissions.get -> Microsoft.EntityFrameworkCore.DbSet<Pinotechrd.Security.Entities.UserModulePermission!>!
 virtual Pinotechrd.Security.Data.PinotechrdSecurityDbContext<TUser, TRole>.UserModulePermissions.set -> void
-Pinotechrd.Security.Core.DbSecurityStore.GetActiveCatalogAsync(string! tenantId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule!>!>!
-Pinotechrd.Security.Core.DbSecurityStore.GetUserOverridesAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride!>!>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetActiveCatalogAsync(string! tenantId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule!>!>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetUserOverridesAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride!>!>!
-Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.ReplaceUserOverridesAsync(string! userId, System.Collections.Generic.IEnumerable<Pinotechrd.Security.Models.UserPermissionOverride!>! overrides) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.TenantCacheStore.GetActiveCatalogAsync(string! tenantId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule!>!>!
-Pinotechrd.Security.Core.TenantCacheStore.GetUserOverridesAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride!>!>!
+Pinotechrd.Security.Core.DbSecurityStore.GetActiveCatalogAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule!>!>!
+Pinotechrd.Security.Core.DbSecurityStore.GetUserOverridesAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride!>!>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetActiveCatalogAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule!>!>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.GetUserOverridesAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride!>!>!
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.ReplaceUserOverridesAsync(string! userId, System.Collections.Generic.IEnumerable<Pinotechrd.Security.Models.UserPermissionOverride!>! overrides, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.TenantCacheStore.GetActiveCatalogAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule!>!>!
+Pinotechrd.Security.Core.TenantCacheStore.GetUserOverridesAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride!>!>!
 Pinotechrd.Security.Interfaces.ISecurityDbContext.UserModulePermissions.get -> System.Linq.IQueryable<Pinotechrd.Security.Entities.UserModulePermission!>!
-Pinotechrd.Security.Interfaces.ISecurityStore.GetActiveCatalogAsync(string! tenantId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule!>!>!
-Pinotechrd.Security.Interfaces.ISecurityStore.GetUserOverridesAsync(string! userId) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride!>!>!
+Pinotechrd.Security.Interfaces.ISecurityStore.GetActiveCatalogAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule!>!>!
+Pinotechrd.Security.Interfaces.ISecurityStore.GetUserOverridesAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride!>!>!
 const Pinotechrd.Security.Tenancy.TenantResolutionErrorCodes.TenantInvalid = "tenant_invalid" -> string!
 const Pinotechrd.Security.Tenancy.TenantResolutionErrorCodes.TenantRequired = "tenant_required" -> string!
 Pinotechrd.Security.Tenancy.MissingTenantBehavior
@@ -228,4 +233,39 @@ Pinotechrd.Security.Tenancy.TenantOutputCachePolicy.ServeResponseAsync(Microsoft
 Pinotechrd.Security.Tenancy.TenantOutputCachePolicy.TenantOutputCachePolicy() -> void
 const Pinotechrd.Security.Tenancy.TenantOutputCachePolicy.VaryByKey = "pinotechrd-tenant" -> string!
 static Pinotechrd.Security.Tenancy.TenantOutputCacheExtensions.CacheOutputPerTenant<TBuilder>(this TBuilder builder, System.Action<Microsoft.AspNetCore.OutputCaching.OutputCachePolicyBuilder!>? configure = null) -> TBuilder
-Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.PinotechrdAuthManager(Microsoft.AspNetCore.Identity.UserManager<TUser!>! userManager, Microsoft.AspNetCore.Identity.SignInManager<TUser!>! signInManager, Pinotechrd.Security.Interfaces.ISecurityEngine! securityEngine, Pinotechrd.Security.Interfaces.ITokenProvider! tokenProvider, Pinotechrd.Security.Interfaces.IRefreshTokenStore! refreshTokenStore, Microsoft.Extensions.Options.IOptions<Pinotechrd.Security.Options.PinotechrdSecurityOptions!>! options, Pinotechrd.Security.Interfaces.IIdentityValidator<TUser!>? customValidator = null, Pinotechrd.Security.Interfaces.IPinotechrdMessageService? messageService = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider? dataProtectionProvider = null, Pinotechrd.Security.Tenancy.TenantContext? tenantContext = null, Pinotechrd.Security.Interfaces.ITwoFactorAttemptStore? twoFactorAttemptStore = null, System.TimeProvider? timeProvider = null, Pinotechrd.Security.Interfaces.ISecurityDbContext? securityDbContext = null, Pinotechrd.Security.Tenancy.TenantResolutionOptions? tenantOptions = null) -> void
+Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.PinotechrdAuthManager(Microsoft.AspNetCore.Identity.UserManager<TUser!>! userManager, Microsoft.AspNetCore.Identity.SignInManager<TUser!>! signInManager, Pinotechrd.Security.Interfaces.ISecurityEngine! securityEngine, Pinotechrd.Security.Interfaces.ITokenProvider! tokenProvider, Pinotechrd.Security.Interfaces.IRefreshTokenStore! refreshTokenStore, Microsoft.Extensions.Options.IOptions<Pinotechrd.Security.Options.PinotechrdSecurityOptions!>! options, Pinotechrd.Security.Interfaces.IIdentityValidator<TUser!>? customValidator = null, Pinotechrd.Security.Interfaces.IPinotechrdMessageService? messageService = null, Microsoft.AspNetCore.DataProtection.IDataProtectionProvider? dataProtectionProvider = null, Pinotechrd.Security.Tenancy.TenantContext? tenantContext = null, Pinotechrd.Security.Interfaces.ITwoFactorAttemptStore? twoFactorAttemptStore = null, System.TimeProvider? timeProvider = null, Pinotechrd.Security.Interfaces.ISecurityDbContext? securityDbContext = null, Pinotechrd.Security.Tenancy.TenantResolutionOptions? tenantOptions = null, Pinotechrd.Security.Interfaces.ISecurityDataProvider? dataProvider = null) -> void
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapRefreshTokens.get -> bool
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapRefreshTokens.set -> void
+Pinotechrd.Security.Extensions.PersistentStoreExtensions
+static Pinotechrd.Security.Extensions.PersistentStoreExtensions.AddPinotechrdEfRefreshTokenStore<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapTwoFactorAttempts.get -> bool
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapTwoFactorAttempts.set -> void
+static Pinotechrd.Security.Extensions.PersistentStoreExtensions.AddPinotechrdEfTwoFactorAttemptStore<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Pinotechrd.Security.Interfaces.IPinotechrdSessionPurger
+Pinotechrd.Security.Interfaces.IPinotechrdSessionPurger.PurgeExpiredAsync(System.TimeSpan? margin = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Pinotechrd.Security.Interfaces.SessionPurgeResult!>!
+readonly Pinotechrd.Security.Interfaces.IPinotechrdSessionPurger.DefaultMargin -> System.TimeSpan
+readonly Pinotechrd.Security.Interfaces.IPinotechrdSessionPurger.MinimumMargin -> System.TimeSpan
+Pinotechrd.Security.Interfaces.SessionPurgeResult
+Pinotechrd.Security.Interfaces.SessionPurgeResult.RefreshTokens.get -> int
+Pinotechrd.Security.Interfaces.SessionPurgeResult.RefreshTokens.init -> void
+Pinotechrd.Security.Interfaces.SessionPurgeResult.RefreshTokenFamilies.get -> int
+Pinotechrd.Security.Interfaces.SessionPurgeResult.RefreshTokenFamilies.init -> void
+Pinotechrd.Security.Interfaces.SessionPurgeResult.TwoFactorAttempts.get -> int
+Pinotechrd.Security.Interfaces.SessionPurgeResult.TwoFactorAttempts.init -> void
+Pinotechrd.Security.Interfaces.SessionPurgeResult.SessionPurgeResult(int RefreshTokens, int RefreshTokenFamilies, int TwoFactorAttempts) -> void
+Pinotechrd.Security.Interfaces.SessionPurgeResult.Deconstruct(out int RefreshTokens, out int RefreshTokenFamilies, out int TwoFactorAttempts) -> void
+Pinotechrd.Security.Interfaces.SessionPurgeResult.<Clone>$() -> Pinotechrd.Security.Interfaces.SessionPurgeResult!
+Pinotechrd.Security.Interfaces.SessionPurgeResult.Equals(Pinotechrd.Security.Interfaces.SessionPurgeResult? other) -> bool
+override Pinotechrd.Security.Interfaces.SessionPurgeResult.Equals(object? obj) -> bool
+override Pinotechrd.Security.Interfaces.SessionPurgeResult.GetHashCode() -> int
+override Pinotechrd.Security.Interfaces.SessionPurgeResult.ToString() -> string!
+static Pinotechrd.Security.Interfaces.SessionPurgeResult.operator !=(Pinotechrd.Security.Interfaces.SessionPurgeResult? left, Pinotechrd.Security.Interfaces.SessionPurgeResult? right) -> bool
+static Pinotechrd.Security.Interfaces.SessionPurgeResult.operator ==(Pinotechrd.Security.Interfaces.SessionPurgeResult? left, Pinotechrd.Security.Interfaces.SessionPurgeResult? right) -> bool
+Pinotechrd.Security.Core.TenantCacheStore.InvalidateTenantAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.TenantCacheExpiration.get -> System.TimeSpan
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.TenantCacheExpiration.set -> void
+Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.RevokeUserSessionsAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Core.SecurityEngine.GetCurrentUserPermissionsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Interfaces.ISecurityEngine.GetCurrentUserPermissionsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.SetDefaultAuthenticationSchemes.get -> bool
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.SetDefaultAuthenticationSchemes.set -> void

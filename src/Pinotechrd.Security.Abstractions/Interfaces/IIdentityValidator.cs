@@ -15,8 +15,9 @@ public interface IIdentityValidator<TUser> where TUser : class
     /// </summary>
     /// <param name="user">The validated identity user.</param>
     /// <param name="tenantId">The target tenant identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A result indicating if the validation passed and optional extra claims.</returns>
-    Task<IdentityValidationResult> ValidateAsync(TUser user, string tenantId);
+    Task<IdentityValidationResult> ValidateAsync(TUser user, string tenantId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
