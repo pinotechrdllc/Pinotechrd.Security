@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -76,6 +76,7 @@ public static class SecurityExtensions
             {
                 o.Jwt = options.Jwt;
                 o.AllowUnverifiedTenantMembership = options.AllowUnverifiedTenantMembership;
+                o.TenantCacheExpiration = options.TenantCacheExpiration;
                 // Keep IOptions<PinotechrdSecurityOptions>.Value.Tenancy equal to the registered TenantResolutionOptions.
                 var tenancy = o.Tenancy;
                 tenancy.HeaderName = options.Tenancy.HeaderName;
@@ -93,15 +94,17 @@ public static class SecurityExtensions
         services.AddScoped<TenantContext>();
         services.AddSingleton(options.Tenancy);
 
-        services.AddMemoryCache();
+        // TryAdd inside: an IDistributedCache registered before this call is kept, and the usual providers (Redis,
+        // SQL Server) use Add, so one registered after it wins too. The in-memory default is per instance.
+        services.AddDistributedMemoryCache();
 
         services.AddScoped<DbSecurityStore>();
-        services.AddScoped<ISecurityStore>(sp => 
-        {
-            var dbStore = sp.GetRequiredService<DbSecurityStore>();
-            var cache = sp.GetRequiredService<IMemoryCache>();
-            return new TenantCacheStore(dbStore, cache);
-        });
+        services.AddScoped(sp => new TenantCacheStore(
+            sp.GetRequiredService<DbSecurityStore>(),
+            sp.GetRequiredService<IDistributedCache>(),
+            sp.GetRequiredService<IOptions<PinotechrdSecurityOptions>>()));
+        services.AddScoped<ISecurityStore>(sp => sp.GetRequiredService<TenantCacheStore>());
+        services.AddScoped<ISecurityCacheInvalidator>(sp => sp.GetRequiredService<TenantCacheStore>());
 
         services.AddScoped<ISecurityEngine, SecurityEngine>();
         services.AddScoped<SecuritySeeder>();

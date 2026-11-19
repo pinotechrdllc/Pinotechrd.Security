@@ -39,6 +39,17 @@ public class PinotechrdSecurityOptions
     /// </para>
     /// </remarks>
     public bool AllowUnverifiedTenantMembership { get; set; }
+
+    /// <summary>
+    /// How long a tenant's subscription state and active module codes stay in the distributed cache. Default
+    /// 5 minutes. Must be positive.
+    /// </summary>
+    /// <remarks>
+    /// After a change, call <see cref="Interfaces.ISecurityCacheInvalidator.InvalidateTenantAsync"/> for the next check
+    /// to see it. This expiration bounds how long a change that is not followed by an invalidation (a subscription
+    /// reaching its end date, an edit made directly in the database) keeps the old answer.
+    /// </remarks>
+    public TimeSpan TenantCacheExpiration { get; set; } = TimeSpan.FromMinutes(5);
 }
 
 /// <summary>
