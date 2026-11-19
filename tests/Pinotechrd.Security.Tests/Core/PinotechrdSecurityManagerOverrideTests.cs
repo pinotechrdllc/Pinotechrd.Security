@@ -26,33 +26,52 @@ public class PinotechrdSecurityManagerOverrideTests
     [Fact]
     public async Task ReplaceUserOverridesAsync_ShouldKeepDenyWhenBothAreSent_AndClearOnAnEmptyList()
     {
-        await using var db = NewDb();
-        var permission = SecurityPermission.Create(Guid.NewGuid(), "Read", "mod_on.read");
-        db.PermissionRows.Add(permission);
-        await db.SaveChangesAsync();
-
-        var manager = new PinotechrdSecurityManager<TestUser, TestRole>(null!, null!, db);
-        var userId = Guid.NewGuid().ToString();
+        await using var rig = await SqliteSecurityManagerRig.CreateAsync();
+        var db = rig.Db;
+        var manager = rig.Manager;
+        var userId = rig.UserId.ToString();
 
         var replaced = await manager.ReplaceUserOverridesAsync(userId, [
-            new UserPermissionOverride("mod_on.read", PermissionAccessType.Allow),
-            new UserPermissionOverride("MOD_ON.READ", PermissionAccessType.Deny)
+            new UserPermissionOverride("sales.view", PermissionAccessType.Allow),
+            new UserPermissionOverride("SALES.VIEW", PermissionAccessType.Deny)
         ]);
 
         replaced.Should().BeTrue();
-        var stored = await db.OverrideRows.SingleAsync();
+        db.ChangeTracker.Clear();
+        var stored = await db.UserModulePermissions.SingleAsync();
         stored.AccessType.Should().Be(PermissionAccessType.Deny);
-        stored.PermissionId.Should().Be(permission.Id);
 
         var unknown = await manager.ReplaceUserOverridesAsync(userId, [
             new UserPermissionOverride("MISSING.CODE", PermissionAccessType.Allow)
         ]);
         unknown.Should().BeFalse();
-        (await db.OverrideRows.CountAsync()).Should().Be(1);
+        (await db.UserModulePermissions.CountAsync()).Should().Be(1);
 
         var cleared = await manager.ReplaceUserOverridesAsync(userId, []);
         cleared.Should().BeTrue();
-        (await db.OverrideRows.CountAsync()).Should().Be(0);
+        (await db.UserModulePermissions.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AssignPermissionsToRoleAsync_ShouldThrow_WhenTheProviderIsNotRelational()
+    {
+        await using var db = NewDb();
+        var manager = new PinotechrdSecurityManager<TestUser, TestRole>(null!, null!, db);
+
+        var act = () => manager.AssignPermissionsToRoleAsync(Guid.NewGuid().ToString(), []);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*relational*");
+    }
+
+    [Fact]
+    public async Task ReplaceUserOverridesAsync_ShouldThrow_WhenTheProviderIsNotRelational()
+    {
+        await using var db = NewDb();
+        var manager = new PinotechrdSecurityManager<TestUser, TestRole>(null!, null!, db);
+
+        var act = () => manager.ReplaceUserOverridesAsync(Guid.NewGuid().ToString(), []);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*relational*");
     }
 
     private static OverrideDb NewDb()
