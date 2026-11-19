@@ -8,7 +8,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
-using System.Text;
 using Pinotechrd.Security.Authorization;
 using Pinotechrd.Security.Core;
 using Pinotechrd.Security.Entities;
@@ -163,7 +162,10 @@ public static class SecurityExtensions
                 parameters.ValidIssuer = settings.Issuer;
                 parameters.ValidAudience = settings.Audience;
                 parameters.ValidAlgorithms = [SecurityAlgorithms.HmacSha256];
-                parameters.IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.Secret));
+                // Current secret first, then the previous ones (validation only). A single key the application set
+                // is dropped, so only the configured secrets are accepted.
+                parameters.IssuerSigningKey = null;
+                parameters.IssuerSigningKeys = JwtSigningKeys.ValidationKeys(settings);
             });
 
         services.AddAuthorization();

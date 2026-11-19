@@ -58,9 +58,21 @@ public class PinotechrdSecurityOptions
 public class JwtSettings
 {
     /// <summary>
-    /// Symmetric secret used to sign and validate JWT access tokens.
+    /// Symmetric secret used to sign and validate JWT access tokens. Issued tokens carry its key id in the
+    /// <c>kid</c> header: the first 16 lowercase hex characters of SHA-256 over the secret's UTF-8 bytes.
     /// </summary>
     public string Secret { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Earlier secrets still accepted when validating tokens, never used to sign. Default empty.
+    /// </summary>
+    /// <remarks>
+    /// To rotate, move the current <see cref="Secret"/> here and set a new one; remove the old secret once every
+    /// token it signed has expired (<see cref="ExpiryMinutes"/>, plus the refresh window for
+    /// <c>GetPrincipalFromExpiredToken</c>). Each entry must meet the same minimum length as <see cref="Secret"/>,
+    /// and must not be empty, equal to <see cref="Secret"/>, or repeated.
+    /// </remarks>
+    public IList<string> PreviousSecrets { get; set; } = new List<string>();
 
     /// <summary>
     /// Minimum accepted length of <see cref="Secret"/>, in UTF-8 bytes. Values below 32 are ignored:

@@ -99,6 +99,8 @@ Pinotechrd.Security.Options.JwtSettings.Issuer.set -> void
 Pinotechrd.Security.Options.JwtSettings.JwtSettings() -> void
 Pinotechrd.Security.Options.JwtSettings.MinimumSecretLength.get -> int
 Pinotechrd.Security.Options.JwtSettings.MinimumSecretLength.set -> void
+Pinotechrd.Security.Options.JwtSettings.PreviousSecrets.get -> System.Collections.Generic.IList<string!>!
+Pinotechrd.Security.Options.JwtSettings.PreviousSecrets.set -> void
 Pinotechrd.Security.Options.JwtSettings.RefreshTokenExpiryDays.get -> int
 Pinotechrd.Security.Options.JwtSettings.RefreshTokenExpiryDays.set -> void
 Pinotechrd.Security.Options.JwtSettings.Secret.get -> string!

@@ -51,6 +51,8 @@ internal static class JwtSettingsRules
             }
         }
 
+        ValidatePreviousSecrets(settings, errors);
+
         if (string.IsNullOrWhiteSpace(settings.Issuer))
         {
             errors.Add("PinotechrdSecurityOptions.Jwt.Issuer is required.");
@@ -62,6 +64,41 @@ internal static class JwtSettingsRules
         }
 
         return errors;
+    }
+
+    private static void ValidatePreviousSecrets(JwtSettings settings, List<string> errors)
+    {
+        if (settings.PreviousSecrets is not { } previous)
+        {
+            return;
+        }
+
+        var minimum = EffectiveMinimumBytes(settings);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < previous.Count; i++)
+        {
+            var secret = previous[i];
+            var path = $"PinotechrdSecurityOptions.Jwt.PreviousSecrets[{i}]";
+            if (string.IsNullOrWhiteSpace(secret))
+            {
+                errors.Add($"{path} must not be empty.");
+                continue;
+            }
+
+            if (Encoding.UTF8.GetByteCount(secret) < minimum)
+            {
+                errors.Add($"{path} must be at least {minimum} bytes in UTF-8.");
+            }
+
+            if (string.Equals(secret, settings.Secret, StringComparison.Ordinal))
+            {
+                errors.Add($"{path} must not equal PinotechrdSecurityOptions.Jwt.Secret.");
+            }
+            else if (!seen.Add(secret))
+            {
+                errors.Add($"{path} duplicates an earlier entry of PinotechrdSecurityOptions.Jwt.PreviousSecrets.");
+            }
+        }
     }
 
     public static void ThrowIfInvalid(JwtSettings settings)

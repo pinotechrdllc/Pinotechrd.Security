@@ -234,12 +234,13 @@ With EF Core migrations instead of `GenerateCreateScript`, run `MigrateAsync()` 
 | --- | --- | --- |
 | `Secret` | none | Required. At least 32 bytes in UTF-8. |
 | `MinimumSecretLength` | `32` | Minimum length of `Secret` in UTF-8 bytes. Can be raised, not lowered below 32. |
+| `PreviousSecrets` | empty | Earlier secrets accepted only to validate tokens, never to sign. Each must meet the `Secret` length rule and must not be empty, equal to `Secret`, or repeated. To rotate, move `Secret` here and set a new one; remove it once its tokens have expired. Tokens carry a `kid` header: the first 16 lowercase hex characters of SHA-256 over the secret's UTF-8 bytes. |
 | `Issuer` | not set | Required. Always validated. |
 | `Audience` | not set | Required. Always validated. |
 | `ExpiryMinutes` | `60` | Access token lifetime. |
 | `RefreshTokenExpiryDays` | `7` | Refresh token lifetime. |
 
-The JWT settings are checked when the host starts, not inside `AddPinotechrdSecurity`, so tools that build the host without configuration (such as OpenAPI generation at build time) still work. A missing or weak setting makes the host fail to start with an `OptionsValidationException` that names the setting, for example `PinotechrdSecurityOptions.Jwt.Secret`. Tokens are signed with HMAC-SHA256, and only that algorithm is accepted when they are validated. The bearer handler's validation settings that the library guarantees (issuer, audience, lifetime and signing-key validation, signed tokens with an expiry, the configured issuer, audience and key, the algorithm) are applied after all your `Configure<JwtBearerOptions>` calls, even if you replace `TokenValidationParameters` entirely; your other settings are kept.
+The JWT settings are checked when the host starts, not inside `AddPinotechrdSecurity`, so tools that build the host without configuration (such as OpenAPI generation at build time) still work. A missing or weak setting makes the host fail to start with an `OptionsValidationException` that names the setting, for example `PinotechrdSecurityOptions.Jwt.Secret`. Tokens are signed with HMAC-SHA256, and only that algorithm is accepted when they are validated. The bearer handler's validation settings that the library guarantees (issuer, audience, lifetime and signing-key validation, signed tokens with an expiry, the configured issuer, audience and keys, the algorithm) are applied after all your `Configure<JwtBearerOptions>` calls, even if you replace `TokenValidationParameters` entirely; your other settings are kept.
 
 ### Tenant resolution (`options.Tenancy`)
 
