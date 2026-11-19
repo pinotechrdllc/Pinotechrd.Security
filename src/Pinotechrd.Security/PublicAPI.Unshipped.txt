@@ -65,7 +65,7 @@ Pinotechrd.Security.Core.TenantCacheStore
 Pinotechrd.Security.Core.TenantCacheStore.GetActiveModuleCodesAsync(string! tenantId) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
 Pinotechrd.Security.Core.TenantCacheStore.IsModuleActiveAsync(string! tenantId, string! moduleCode) -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Core.TenantCacheStore.IsSubscriptionActiveAsync(string! tenantId) -> System.Threading.Tasks.Task<bool>!
-Pinotechrd.Security.Core.TenantCacheStore.TenantCacheStore(Pinotechrd.Security.Interfaces.ISecurityStore! inner, Microsoft.Extensions.Caching.Memory.IMemoryCache! cache) -> void
+Pinotechrd.Security.Core.TenantCacheStore.TenantCacheStore(Pinotechrd.Security.Interfaces.ISecurityStore! inner, Microsoft.Extensions.Caching.Distributed.IDistributedCache! cache, Microsoft.Extensions.Options.IOptions<Pinotechrd.Security.Options.PinotechrdSecurityOptions!>! options) -> void
 Pinotechrd.Security.Data.ISchemaAwareContext
 Pinotechrd.Security.Data.ModelSchemaCacheKeyFactory
 Pinotechrd.Security.Data.ModelSchemaCacheKeyFactory.Create(Microsoft.EntityFrameworkCore.DbContext! context) -> object!
@@ -258,3 +258,6 @@ override Pinotechrd.Security.Interfaces.SessionPurgeResult.GetHashCode() -> int
 override Pinotechrd.Security.Interfaces.SessionPurgeResult.ToString() -> string!
 static Pinotechrd.Security.Interfaces.SessionPurgeResult.operator !=(Pinotechrd.Security.Interfaces.SessionPurgeResult? left, Pinotechrd.Security.Interfaces.SessionPurgeResult? right) -> bool
 static Pinotechrd.Security.Interfaces.SessionPurgeResult.operator ==(Pinotechrd.Security.Interfaces.SessionPurgeResult? left, Pinotechrd.Security.Interfaces.SessionPurgeResult? right) -> bool
+Pinotechrd.Security.Core.TenantCacheStore.InvalidateTenantAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.TenantCacheExpiration.get -> System.TimeSpan
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.TenantCacheExpiration.set -> void
