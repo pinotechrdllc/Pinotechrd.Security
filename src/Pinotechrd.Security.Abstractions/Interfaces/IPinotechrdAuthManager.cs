@@ -22,15 +22,30 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     Task<AuthResult> RefreshAsync(string refreshToken);
 
     /// <summary>
-    /// Signs the user out of every session: revokes all of its refresh tokens.
+    /// Signs the authenticated user out of every session: revokes all of its refresh tokens.
     /// Access tokens already issued stay valid until they expire.
     /// </summary>
-    Task SignOutAsync(string userId);
+    /// <remarks>
+    /// Self-service: the user is the authenticated user of the request (<see cref="ISecurityDataProvider.GetCurrentUserId"/>),
+    /// never an identifier supplied by the caller. To sign out another user, use
+    /// <see cref="IPinotechrdSecurityManager{TUser, TRole}.RevokeUserSessionsAsync"/>.
+    /// </remarks>
+    /// <returns><see langword="false"/>, with nothing changed, when there is no authenticated user or the user is not
+    /// found; <see langword="false"/>, with the tokens already revoked, when renewing the security stamp fails;
+    /// otherwise <see langword="true"/>.</returns>
+    Task<bool> SignOutCurrentUserAsync();
 
     /// <summary>
-    /// Changes the user's password.
+    /// Changes the authenticated user's password, validating <paramref name="currentPassword"/>.
     /// </summary>
-    Task<AuthResult> ChangePasswordAsync(string userId, string currentPassword, string newPassword);
+    /// <remarks>
+    /// Self-service: the user is the authenticated user of the request (<see cref="ISecurityDataProvider.GetCurrentUserId"/>),
+    /// never an identifier supplied by the caller. To change another user's password, use
+    /// <see cref="IPinotechrdSecurityManager{TUser, TRole}.ChangeUserPasswordAsync"/>.
+    /// </remarks>
+    /// <returns>A failed <see cref="AuthResult"/>, with nothing changed, when there is no authenticated user, the user is
+    /// not found, or Identity refuses the change.</returns>
+    Task<AuthResult> ChangeOwnPasswordAsync(string currentPassword, string newPassword);
 
     /// <summary>
     /// Initiates a password reset flow.

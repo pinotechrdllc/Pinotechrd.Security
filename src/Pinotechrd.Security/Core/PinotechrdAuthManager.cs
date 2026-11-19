@@ -94,6 +94,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     private readonly TimeProvider _timeProvider;
     private readonly ISecurityDbContext? _securityDbContext;
     private readonly string _tenantClaimType;
+    private readonly ISecurityDataProvider? _dataProvider;
     private const int MaxFailedCountRetries = 10;
 
     /// <summary>
@@ -104,6 +105,8 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// the tenant of the request cannot be checked. Without <paramref name="dataProtectionProvider"/> or
     /// <paramref name="twoFactorAttemptStore"/> two-factor sign-in fails closed: a user with two-factor enabled
     /// cannot log in and every two-factor method fails. <c>AddPinotechrdSecurity</c> registers all three.
+    /// Without <paramref name="dataProvider"/> (the application registers it) the self-service methods
+    /// <see cref="SignOutCurrentUserAsync"/> and <see cref="ChangeOwnPasswordAsync"/> find no authenticated user.
     /// </remarks>
     public PinotechrdAuthManager(
         UserManager<TUser> userManager,
@@ -119,7 +122,8 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         ITwoFactorAttemptStore? twoFactorAttemptStore = null,
         TimeProvider? timeProvider = null,
         ISecurityDbContext? securityDbContext = null,
-        TenantResolutionOptions? tenantOptions = null)
+        TenantResolutionOptions? tenantOptions = null,
+        ISecurityDataProvider? dataProvider = null)
     {
         _userManager = userManager;
         _signInManager = signInManager;
@@ -137,6 +141,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         // One source of truth for the claim name: the TenantResolutionOptions singleton that the middleware, the
         // permission handler, the engine and the consistency check read.
         _tenantClaimType = tenantOptions?.ClaimType ?? _options.Tenancy.ClaimType;
+        _dataProvider = dataProvider;
     }
 
     /// <inheritdoc />
@@ -525,32 +530,52 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
 
     /// <inheritdoc />
     /// <remarks>
-    /// Revokes every refresh token of the user, in every session, and renews the security stamp.
+    /// Revokes every refresh token of the authenticated user, in every session, and renews the security stamp.
     /// Access tokens already issued stay valid until they expire (<see cref="JwtSettings.ExpiryMinutes"/>,
-    /// 60 minutes by default), because JWT validation does not consult the server.
+    /// 60 minutes by default), because JWT validation does not consult the server. Returns <see langword="false"/>
+    /// when no <see cref="ISecurityDataProvider"/> was supplied to the constructor, and, with the tokens already
+    /// revoked, when renewing the security stamp fails. A user store without security stamps only has its tokens revoked.
     /// </remarks>
-    public async Task SignOutAsync(string userId)
+    public async Task<bool> SignOutCurrentUserAsync()
     {
-        await _refreshTokenStore.RevokeAllForUserAsync(userId);
+        var user = await FindCurrentUserAsync();
+        if (user == null) return false;
 
-        var user = await _userManager.FindByIdAsync(userId);
-        if (user != null)
-        {
-            await _userManager.UpdateSecurityStampAsync(user);
-        }
+        // Revoke under the stored id: tokens are saved under GetUserIdAsync.
+        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user));
+        if (!_userManager.SupportsUserSecurityStamp) return true;
+
+        var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+        return stampResult.Succeeded;
     }
 
     /// <inheritdoc />
-    public async Task<AuthResult> ChangePasswordAsync(string userId, string currentPassword, string newPassword)
+    /// <remarks>
+    /// Fails with <c>User not found</c> when there is no authenticated user, the user is not found, or no
+    /// <see cref="ISecurityDataProvider"/> was supplied to the constructor.
+    /// </remarks>
+    public async Task<AuthResult> ChangeOwnPasswordAsync(string currentPassword, string newPassword)
     {
-        var user = await _userManager.FindByIdAsync(userId);
+        var user = await FindCurrentUserAsync();
         if (user == null) return AuthResult.Failure("User not found");
 
         var result = await _userManager.ChangePasswordAsync(user, currentPassword, newPassword);
         if (!result.Succeeded)
             return AuthResult.Failure(string.Join(", ", result.Errors.Select(e => e.Description)));
 
+        var userId = await _userManager.GetUserIdAsync(user);
         return AuthResult.Success(new AuthToken("", "", DateTime.MinValue), userId, "", []);
+    }
+
+    /// <summary>
+    /// The authenticated user of the request, as reported by <see cref="ISecurityDataProvider.GetCurrentUserId"/>,
+    /// or <see langword="null"/> when there is none or it does not exist.
+    /// </summary>
+    private async Task<TUser?> FindCurrentUserAsync()
+    {
+        var userId = _dataProvider?.GetCurrentUserId();
+        if (string.IsNullOrEmpty(userId)) return null;
+        return await _userManager.FindByIdAsync(userId);
     }
 
     /// <inheritdoc />
