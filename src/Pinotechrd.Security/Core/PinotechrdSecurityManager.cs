@@ -97,7 +97,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
 
         if (_securityDb is not DbContext context || !context.Database.IsRelational())
         {
-            return await CreateUserWithRolesAsync(user, password, roleNames, cancellationToken);
+            return await CreateUserWithRolesAsync(user, password, roleNames, canRollBack: false, cancellationToken);
         }
 
         if (context.ChangeTracker.HasChanges())
@@ -117,7 +117,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         if (System.Transactions.Transaction.Current != null)
         {
             // The TransactionScope owns atomicity; an execution strategy cannot retry inside it.
-            return await RunAndDetachOnFailureAsync(context, tracked, () => CreateUserWithRolesAsync(user, password, roleNames, cancellationToken));
+            return await RunAndDetachOnFailureAsync(context, tracked, () => CreateUserWithRolesAsync(user, password, roleNames, canRollBack: true, cancellationToken));
         }
 
         var strategy = context.Database.CreateExecutionStrategy();
@@ -128,13 +128,14 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
                 await using var transaction = await context.Database.BeginTransactionAsync(ct);
                 return await RunAndDetachOnFailureAsync(context, tracked, async () =>
                 {
-                    if (!await CreateUserWithRolesAsync(user, password, roleNames, ct))
+                    if (!await CreateUserWithRolesAsync(user, password, roleNames, canRollBack: true, ct))
                     {
                         await transaction.RollbackAsync(ct);
                         return false;
                     }
 
-                    await transaction.CommitAsync(ct);
+                    // The work is done: a cancelled commit would leave its outcome unknown.
+                    await transaction.CommitAsync(CancellationToken.None);
                     return true;
                 });
             },
@@ -160,11 +161,16 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
             transaction,
             "pinotechrd_create_user",
             "CreateUserAsync",
-            () => RunAndDetachOnFailureAsync(context, tracked, () => CreateUserWithRolesAsync(user, password, roleNames, cancellationToken)),
+            () => RunAndDetachOnFailureAsync(context, tracked, () => CreateUserWithRolesAsync(user, password, roleNames, transaction.SupportsSavepoints, cancellationToken)),
             cancellationToken);
     }
 
-    private async Task<bool> CreateUserWithRolesAsync(TUser user, string password, IReadOnlyCollection<string> roleNames, CancellationToken cancellationToken)
+    private async Task<bool> CreateUserWithRolesAsync(
+        TUser user,
+        string password,
+        IReadOnlyCollection<string> roleNames,
+        bool canRollBack,
+        CancellationToken cancellationToken)
     {
         // Checked in every attempt, inside its transaction, so a role deleted since an earlier attempt returns false.
         foreach (var roleName in roleNames)
@@ -179,7 +185,8 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
 
         if (roleNames.Count == 0) return true;
 
-        cancellationToken.ThrowIfCancellationRequested();
+        // Without a rollback, a cancellation here would leave the user created without its roles.
+        if (canRollBack) cancellationToken.ThrowIfCancellationRequested();
         var rolesResult = await _userManager.AddToRolesAsync(user, roleNames);
         return rolesResult.Succeeded;
     }
@@ -266,9 +273,11 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
 
         // Revoke under the stored id: tokens are saved under GetUserIdAsync, and FindByIdAsync also accepts
         // other spellings of the same id (upper case, braces), which the store would not match.
-        if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), cancellationToken);
-
+        // Last cancellation point: once revocation starts, it and the delete run to the end, so a cancelled request
+        // cannot leave the tokens half revoked.
         cancellationToken.ThrowIfCancellationRequested();
+        if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), CancellationToken.None);
+
         var result = await _userManager.DeleteAsync(user);
         return result.Succeeded;
     }
@@ -319,7 +328,9 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         if (user == null) return false;
 
         // Revoke under the stored id: FindByIdAsync also accepts other spellings of the same id.
-        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), cancellationToken);
+        // Last cancellation point: the revocation and the stamp renewal then run to the end.
+        cancellationToken.ThrowIfCancellationRequested();
+        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), CancellationToken.None);
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
         var stampResult = await _userManager.UpdateSecurityStampAsync(user);
@@ -713,7 +724,8 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
                         return false;
                     }
 
-                    await transaction.CommitAsync(ct);
+                    // The work is done: a cancelled commit would leave its outcome unknown.
+                    await transaction.CommitAsync(CancellationToken.None);
                     return true;
                 }, cancellationToken);
             }

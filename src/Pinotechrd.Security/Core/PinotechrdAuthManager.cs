@@ -552,7 +552,9 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         if (user == null) return false;
 
         // Revoke under the stored id: tokens are saved under GetUserIdAsync.
-        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), cancellationToken);
+        // Last cancellation point: the revocation and the stamp renewal then run to the end.
+        cancellationToken.ThrowIfCancellationRequested();
+        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), CancellationToken.None);
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
         var stampResult = await _userManager.UpdateSecurityStampAsync(user);

@@ -132,6 +132,11 @@ internal sealed class EfRefreshTokenStore<TContext> : IRefreshTokenStore
         var now = UtcNow;
         var families = Families;
 
+        // Last cancellation point. The UPDATE and the classification below ignore the request token: a client that
+        // aborts the request (for example an attacker replaying a stolen token) must not stop a reuse from being
+        // detected and its family revoked.
+        cancellationToken.ThrowIfCancellationRequested();
+
         // The atomic step: every condition in one UPDATE, so only one concurrent caller can match the row.
         var consumed = await Tokens
             .Where(t => t.TokenHash == hash
@@ -140,9 +145,9 @@ internal sealed class EfRefreshTokenStore<TContext> : IRefreshTokenStore
                         && t.RevokedAt == null
                         && t.ExpiresAt > now
                         && !families.Any(f => f.FamilyId == t.FamilyId && f.RevokedAt != null))
-            .ExecuteUpdateAsync(s => s.SetProperty(t => t.ConsumedAt, (DateTime?)now), cancellationToken);
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.ConsumedAt, (DateTime?)now), CancellationToken.None);
 
-        var token = await FindAsync(hash, cancellationToken);
+        var token = await FindAsync(hash, CancellationToken.None);
         if (consumed == 1 && token != null)
         {
             return new RefreshTokenConsumeResult(
@@ -160,7 +165,7 @@ internal sealed class EfRefreshTokenStore<TContext> : IRefreshTokenStore
             return new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.TenantMismatch);
         }
 
-        if (await IsFamilyRevokedAsync(token.FamilyId, cancellationToken))
+        if (await IsFamilyRevokedAsync(token.FamilyId, CancellationToken.None))
         {
             return new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.Revoked);
         }
@@ -168,7 +173,7 @@ internal sealed class EfRefreshTokenStore<TContext> : IRefreshTokenStore
         if (token.ConsumedAt != null)
         {
             // Reuse, even if the token has expired or was revoked on its own since.
-            await RevokeFamilyAsync(token.FamilyId, now, cancellationToken);
+            await RevokeFamilyAsync(token.FamilyId, now, CancellationToken.None);
             return new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.Reused);
         }
 
