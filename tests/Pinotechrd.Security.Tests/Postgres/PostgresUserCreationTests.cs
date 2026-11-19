@@ -350,6 +350,38 @@ public class PostgresUserCreationTests(PostgresFixture postgres) : IAsyncLifetim
 
     [Theory]
     [MemberData(nameof(Modes))]
+    public async Task CreateUserAsync_ShouldKeepCallerRows_WhenAWeakPasswordOrUnknownRoleFailsInsideTheCallerTransaction(TenantSchemaMode mode)
+    {
+        var api = Api(mode);
+        var role = await NewRoleAsync(api);
+        var before = NewEmail();
+        var weak = NewEmail();
+        var unknownRole = NewEmail();
+        var after = NewEmail();
+
+        await api.InTenantAsync(Tenant, async sp =>
+        {
+            var manager = sp.GetRequiredService<IPinotechrdSecurityManager<HostUser, HostRole>>();
+            var db = sp.GetRequiredService<SecDb>();
+            await using var transaction = await db.Database.BeginTransactionAsync();
+
+            (await manager.CreateUserAsync(NewUser(before), TenantDatabaseApi.Password, [role])).Should().BeTrue();
+            (await manager.CreateUserAsync(NewUser(weak), "abc", [role])).Should().BeFalse();
+            (await manager.CreateUserAsync(NewUser(unknownRole), TenantDatabaseApi.Password, ["missing-" + Guid.NewGuid().ToString("N")])).Should().BeFalse();
+            (await manager.CreateUserAsync(NewUser(after), TenantDatabaseApi.Password, [role])).Should().BeTrue();
+
+            await transaction.CommitAsync();
+            return 0;
+        });
+
+        (await ReadAsync(api, before)).Roles.Should().BeEquivalentTo([role]);
+        (await ReadAsync(api, after)).Roles.Should().BeEquivalentTo([role]);
+        (await ReadAsync(api, weak)).User.Should().BeNull();
+        (await ReadAsync(api, unknownRole)).User.Should().BeNull();
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
     public async Task CreateUserAsync_ShouldLeaveTheCallerTransactionUsable_WhenTheStoreThrowsInsideIt(TenantSchemaMode mode)
     {
         var api = Api(mode);

@@ -13,6 +13,7 @@ using Pinotechrd.Security.Tenancy;
 using Pinotechrd.Security.Tests.Core;
 using Pinotechrd.Security.Tests.Data;
 using Pinotechrd.Security.Tests.Hosting;
+using NSubstitute;
 using Xunit;
 
 namespace Pinotechrd.Security.Tests.Postgres;
@@ -312,6 +313,36 @@ public class PostgresRefreshTokenStoreTests(PostgresFixture postgres) : IAsyncLi
         (await store.ConsumeAsync(late, TenantA)).Status.Should().Be(RefreshTokenConsumeStatus.Revoked);
         (await store.ValidateAsync(late)).IsValid.Should().BeFalse();
     }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task SignOutCurrentUserAsync_ShouldRevokeOnlyTheCurrentUsersRowsInTheTenantSchema(TenantSchemaMode mode)
+    {
+        var provider = NSubstitute.Substitute.For<ISecurityDataProvider>();
+        var kit = new AuthManagerTestKit<SignOutUser>(tenant: TenantA, refreshStore: Store(mode), dataProvider: provider);
+        kit.TokenProvider.GenerateRefreshToken().Returns(_ => NewToken());
+        var a = kit.AddUser("a-" + Guid.NewGuid().ToString("N")[..8] + "@a.test");
+        var b = kit.AddUser("b-" + Guid.NewGuid().ToString("N")[..8] + "@a.test");
+        var loginA1 = await kit.Manager.LoginAsync(a.Email!, AuthManagerTestKit<SignOutUser>.Password, TenantA);
+        var loginA2 = await kit.Manager.LoginAsync(a.Email!, AuthManagerTestKit<SignOutUser>.Password, TenantA);
+        var loginB = await kit.Manager.LoginAsync(b.Email!, AuthManagerTestKit<SignOutUser>.Password, TenantA);
+        var otherTenant = NewToken();
+        await Store(mode, TenantB).SaveAsync(a.Id.ToString(), TenantB, otherTenant, In(TimeSpan.FromMinutes(10)));
+        provider.GetCurrentUserId().Returns(a.Id.ToString());
+
+        var signedOut = await kit.Manager.SignOutCurrentUserAsync();
+
+        signedOut.Should().BeTrue();
+        var verify = Store(mode);
+        (await verify.ValidateAsync(loginA1.Token!.RefreshToken)).IsValid.Should().BeFalse();
+        (await verify.ValidateAsync(loginA2.Token!.RefreshToken)).IsValid.Should().BeFalse();
+        (await verify.ValidateAsync(loginB.Token!.RefreshToken)).IsValid.Should().BeTrue("another user of the tenant keeps its sessions");
+        (await Store(mode, TenantB).ValidateAsync(otherTenant)).IsValid.Should().BeTrue("the revocation reaches the current tenant only");
+        (await kit.Manager.RefreshAsync(loginA1.Token.RefreshToken)).Succeeded.Should().BeFalse();
+        (await kit.Manager.RefreshAsync(loginB.Token.RefreshToken)).Succeeded.Should().BeTrue();
+    }
+
+    public sealed class SignOutUser : BaseSecurityUser;
 
     [Theory]
     [MemberData(nameof(Modes))]

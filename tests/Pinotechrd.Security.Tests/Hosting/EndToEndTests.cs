@@ -68,9 +68,9 @@ public class EndToEndTests
                         : Results.Json(new { error = result.ErrorMessage }, statusCode: 401);
                 });
 
-                app.MapPost("/api/auth/logout", [Authorize] async (HttpContext http, IPinotechrdAuthManager<HostUser> auth) =>
+                app.MapPost("/api/auth/logout", [Authorize] async (IPinotechrdAuthManager<HostUser> auth) =>
                 {
-                    await auth.SignOutAsync(http.User.FindFirst("id")!.Value);
+                    await auth.SignOutCurrentUserAsync();
                     return Results.NoContent();
                 });
 

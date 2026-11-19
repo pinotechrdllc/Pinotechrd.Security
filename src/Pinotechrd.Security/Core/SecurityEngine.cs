@@ -201,6 +201,17 @@ public class SecurityEngine : ISecurityEngine
         return permissions.Where(code => IsModuleActive(code, activeModules)).ToList();
     }
 
+    /// <inheritdoc />
+    public Task<IEnumerable<string>> GetCurrentUserPermissionsAsync()
+    {
+        // FAIL-FAST: no user or no tenant, no permissions (unlike GetPermissionsAsync, which then skips the module filter).
+        var userId = _dataProvider.GetCurrentUserId();
+        var tenantId = _dataProvider.GetCurrentTenantId();
+        return string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(tenantId)
+            ? Task.FromResult<IEnumerable<string>>([])
+            : GetPermissionsAsync(userId);
+    }
+
     /// <summary>
     /// Role permissions from the provider, plus Allow overrides, minus Deny.
     /// Deny is applied last and wins.

@@ -228,47 +228,211 @@ public class PinotechrdAuthManagerTests
         results.Should().AllSatisfy(r => r.Should().Be(InvalidToken));
     }
 
-    // ---- Sign-out ----------------------------------------------------------------------------
+    // ---- Self-service: sign-out and password change of the authenticated user ---------------
 
-    [Fact]
-    public async Task SignOutAsync_ShouldRevokeAllRefreshTokensAndRenewTheStamp_WhenTheUserExists()
+    private const string NewPassword = "new-password-1";
+
+    private static ISecurityDataProvider CurrentUser(string? userId)
     {
-        var (kit, user) = NewKit();
-        var stamp = kit.StampOf(user);
+        var provider = Substitute.For<ISecurityDataProvider>();
+        provider.GetCurrentUserId().Returns(userId);
+        return provider;
+    }
 
-        await kit.Manager.SignOutAsync(user.Id.ToString());
-
-        await kit.RefreshStore.Received(1).RevokeAllForUserAsync(user.Id.ToString(), Arg.Any<CancellationToken>());
-        await kit.UserManager.Received(1).UpdateSecurityStampAsync(user);
-        kit.StampOf(user).Should().NotBe(stamp);
+    private static (AuthManagerTestKit<RefreshUser> Kit, RefreshUser A, RefreshUser B) TwoUsers(
+        ISecurityDataProvider? provider = null, IRefreshTokenStore? store = null)
+    {
+        var kit = new AuthManagerTestKit<RefreshUser>(tenant: Tenant, refreshStore: store, dataProvider: provider);
+        var a = kit.AddUser("a@x.test");
+        var b = kit.AddUser("b@x.test");
+        return (kit, a, b);
     }
 
     [Fact]
-    public async Task SignOutAsync_ShouldStillRevokeTokensAndNotThrow_WhenTheUserIsUnknown()
+    public async Task SignOutCurrentUserAsync_ShouldRevokeOnlyTheCurrentUsersTokensAndRenewItsStamp()
     {
-        var (kit, _) = NewKit();
-        var unknown = Guid.NewGuid().ToString();
+        var provider = Substitute.For<ISecurityDataProvider>();
+        var (kit, a, b) = TwoUsers(provider, new InMemoryRefreshTokenStore());
+        kit.TokenProvider.GenerateRefreshToken().Returns(_ => Guid.NewGuid().ToString("N"));
+        var loginA = await kit.Manager.LoginAsync("a@x.test", AuthManagerTestKit<RefreshUser>.Password, Tenant);
+        var loginB = await kit.Manager.LoginAsync("b@x.test", AuthManagerTestKit<RefreshUser>.Password, Tenant);
+        var (stampA, stampB) = (kit.StampOf(a), kit.StampOf(b));
+        provider.GetCurrentUserId().Returns(a.Id.ToString());
 
-        var act = () => kit.Manager.SignOutAsync(unknown);
+        var signedOut = await kit.Manager.SignOutCurrentUserAsync();
 
-        await act.Should().NotThrowAsync();
-        await kit.RefreshStore.Received(1).RevokeAllForUserAsync(unknown, Arg.Any<CancellationToken>());
+        signedOut.Should().BeTrue();
+        (await kit.Manager.RefreshAsync(loginA.Token!.RefreshToken)).Should().Be(InvalidToken);
+        (await kit.Manager.RefreshAsync(loginB.Token!.RefreshToken)).Succeeded.Should().BeTrue();
+        kit.StampOf(a).Should().NotBe(stampA);
+        kit.StampOf(b).Should().Be(stampB);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_ShouldFailAfterSignOutCurrentUser_WithTheRealStore()
+    {
+        var provider = Substitute.For<ISecurityDataProvider>();
+        var kit = new AuthManagerTestKit<RefreshUser>(tenant: Tenant, refreshStore: new InMemoryRefreshTokenStore(), dataProvider: provider);
+        kit.TokenProvider.GenerateRefreshToken().Returns(_ => Guid.NewGuid().ToString("N"));
+        var user = kit.AddUser("alice@x.test");
+        provider.GetCurrentUserId().Returns(user.Id.ToString());
+        var login = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<RefreshUser>.Password, Tenant);
+
+        await kit.Manager.SignOutCurrentUserAsync();
+        var result = await kit.Manager.RefreshAsync(login.Token!.RefreshToken);
+
+        result.Should().Be(InvalidToken);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task SignOutCurrentUserAsync_ShouldReturnFalseAndChangeNothing_WhenThereIsNoAuthenticatedUser(string? currentId)
+    {
+        var (kit, a, _) = TwoUsers(CurrentUser(currentId));
+        var stamp = kit.StampOf(a);
+
+        (await kit.Manager.SignOutCurrentUserAsync()).Should().BeFalse();
+
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().RevokeAllForUserAsync(default!);
+        await kit.UserManager.DidNotReceiveWithAnyArgs().UpdateSecurityStampAsync(default!);
+        kit.StampOf(a).Should().Be(stamp);
+    }
+
+    [Fact]
+    public async Task SignOutCurrentUserAsync_ShouldReturnFalseAndChangeNothing_WhenNoDataProviderWasGiven()
+    {
+        var (kit, a, _) = TwoUsers();
+        var stamp = kit.StampOf(a);
+
+        (await kit.Manager.SignOutCurrentUserAsync()).Should().BeFalse();
+
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().RevokeAllForUserAsync(default!);
+        await kit.UserManager.DidNotReceiveWithAnyArgs().UpdateSecurityStampAsync(default!);
+        kit.StampOf(a).Should().Be(stamp);
+    }
+
+    [Fact]
+    public async Task SignOutCurrentUserAsync_ShouldReturnFalseAndChangeNothing_WhenTheCurrentUserDoesNotExist()
+    {
+        var (kit, _, _) = TwoUsers(CurrentUser(Guid.NewGuid().ToString()));
+
+        (await kit.Manager.SignOutCurrentUserAsync()).Should().BeFalse();
+
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().RevokeAllForUserAsync(default!);
         await kit.UserManager.DidNotReceiveWithAnyArgs().UpdateSecurityStampAsync(default!);
     }
 
     [Fact]
-    public async Task RefreshAsync_ShouldFailAfterSignOut_WithTheRealStore()
+    public async Task ChangeOwnPasswordAsync_ShouldChangeOnlyTheCurrentUsersPassword()
     {
-        var store = new InMemoryRefreshTokenStore();
-        var kit = new AuthManagerTestKit<RefreshUser>(tenant: Tenant, refreshStore: store);
-        kit.TokenProvider.GenerateRefreshToken().Returns(_ => Guid.NewGuid().ToString("N"));
-        var user = kit.AddUser("alice@x.test");
-        var login = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<RefreshUser>.Password, Tenant);
+        var provider = Substitute.For<ISecurityDataProvider>();
+        var (kit, a, b) = TwoUsers(provider);
+        provider.GetCurrentUserId().Returns(a.Id.ToString());
 
-        await kit.Manager.SignOutAsync(user.Id.ToString());
-        var result = await kit.Manager.RefreshAsync(login.Token!.RefreshToken);
+        var result = await kit.Manager.ChangeOwnPasswordAsync(AuthManagerTestKit<RefreshUser>.Password, NewPassword);
 
-        result.Should().Be(InvalidToken);
+        result.Succeeded.Should().BeTrue();
+        kit.PasswordOf(a).Should().Be(NewPassword);
+        kit.PasswordOf(b).Should().Be(AuthManagerTestKit<RefreshUser>.Password);
+    }
+
+    [Fact]
+    public async Task ChangeOwnPasswordAsync_ShouldFailAndKeepEveryPassword_WhenTheCurrentPasswordIsWrong()
+    {
+        var provider = Substitute.For<ISecurityDataProvider>();
+        var (kit, a, b) = TwoUsers(provider);
+        provider.GetCurrentUserId().Returns(a.Id.ToString());
+
+        var result = await kit.Manager.ChangeOwnPasswordAsync("not-the-password", NewPassword);
+
+        result.Succeeded.Should().BeFalse();
+        kit.PasswordOf(a).Should().Be(AuthManagerTestKit<RefreshUser>.Password);
+        kit.PasswordOf(b).Should().Be(AuthManagerTestKit<RefreshUser>.Password);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task ChangeOwnPasswordAsync_ShouldFailWithUserNotFoundAndChangeNothing_WhenThereIsNoAuthenticatedUser(string? currentId)
+    {
+        var (kit, a, b) = TwoUsers(CurrentUser(currentId));
+
+        var result = await kit.Manager.ChangeOwnPasswordAsync(AuthManagerTestKit<RefreshUser>.Password, NewPassword);
+
+        result.Should().Be(AuthResult.Failure("User not found"));
+        await kit.UserManager.DidNotReceiveWithAnyArgs().ChangePasswordAsync(default!, default!, default!);
+        kit.PasswordOf(a).Should().Be(AuthManagerTestKit<RefreshUser>.Password);
+        kit.PasswordOf(b).Should().Be(AuthManagerTestKit<RefreshUser>.Password);
+    }
+
+    [Fact]
+    public async Task ChangeOwnPasswordAsync_ShouldFailWithUserNotFoundAndChangeNothing_WhenNoDataProviderWasGiven()
+    {
+        var (kit, a, _) = TwoUsers();
+
+        var result = await kit.Manager.ChangeOwnPasswordAsync(AuthManagerTestKit<RefreshUser>.Password, NewPassword);
+
+        result.Should().Be(AuthResult.Failure("User not found"));
+        await kit.UserManager.DidNotReceiveWithAnyArgs().ChangePasswordAsync(default!, default!, default!);
+        kit.PasswordOf(a).Should().Be(AuthManagerTestKit<RefreshUser>.Password);
+    }
+
+    [Fact]
+    public async Task ChangeOwnPasswordAsync_ShouldFailWithUserNotFound_WhenTheCurrentUserDoesNotExist()
+    {
+        var (kit, _, _) = TwoUsers(CurrentUser(Guid.NewGuid().ToString()));
+
+        var result = await kit.Manager.ChangeOwnPasswordAsync(AuthManagerTestKit<RefreshUser>.Password, NewPassword);
+
+        result.Should().Be(AuthResult.Failure("User not found"));
+        await kit.UserManager.DidNotReceiveWithAnyArgs().ChangePasswordAsync(default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task SignOutCurrentUserAsync_ShouldReturnFalseButKeepTheTokensRevoked_WhenTheStampCannotBeRenewed()
+    {
+        var provider = Substitute.For<ISecurityDataProvider>();
+        var (kit, a, _) = TwoUsers(provider);
+        provider.GetCurrentUserId().Returns(a.Id.ToString());
+        kit.MakeStampUpdateFail(a);
+
+        var signedOut = await kit.Manager.SignOutCurrentUserAsync();
+
+        signedOut.Should().BeFalse();
+        await kit.RefreshStore.Received(1).RevokeAllForUserAsync(a.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SignOutCurrentUserAsync_ShouldReturnTrueAndRevokeTokensWithoutTouchingTheStamp_WhenTheStoreHasNoSecurityStamps()
+    {
+        var provider = Substitute.For<ISecurityDataProvider>();
+        var (kit, a, _) = TwoUsers(provider);
+        provider.GetCurrentUserId().Returns(a.Id.ToString());
+        kit.UserManager.SupportsUserSecurityStamp.Returns(false);
+
+        var signedOut = await kit.Manager.SignOutCurrentUserAsync();
+
+        signedOut.Should().BeTrue();
+        await kit.RefreshStore.Received(1).RevokeAllForUserAsync(a.Id.ToString(), Arg.Any<CancellationToken>());
+        await kit.UserManager.DidNotReceiveWithAnyArgs().UpdateSecurityStampAsync(default!);
+    }
+
+    [Fact]
+    public async Task SignOutCurrentUserAsync_ShouldRevokeUnderTheStoredId_WhenTheLookupMatchedAnotherSpellingOfTheId()
+    {
+        var provider = Substitute.For<ISecurityDataProvider>();
+        var (kit, a, _) = TwoUsers(provider);
+        var upper = a.Id.ToString().ToUpperInvariant();
+        upper.Should().NotBe(a.Id.ToString());
+        provider.GetCurrentUserId().Returns(upper);
+        kit.UserManager.FindByIdAsync(upper).Returns(Task.FromResult<RefreshUser?>(a));
+
+        var signedOut = await kit.Manager.SignOutCurrentUserAsync();
+
+        signedOut.Should().BeTrue();
+        await kit.RefreshStore.Received(1).RevokeAllForUserAsync(a.Id.ToString(), Arg.Any<CancellationToken>());
+        await kit.RefreshStore.DidNotReceive().RevokeAllForUserAsync(upper, Arg.Any<CancellationToken>());
     }
 
     // ---- Password reset ----------------------------------------------------------------------

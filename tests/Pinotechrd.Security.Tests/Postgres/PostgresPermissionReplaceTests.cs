@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
 using Pinotechrd.Security.Core;
 using Pinotechrd.Security.Data;
@@ -55,6 +56,13 @@ public class PostgresPermissionReplaceTests(PostgresFixture postgres) : IAsyncLi
     }
 
     private SecDb Db(TenantSchemaMode mode) => PgProvisioning.NewContext(_databases[mode], mode, Tenant);
+
+    private SecDb Db(TenantSchemaMode mode, IInterceptor interceptor)
+    {
+        var builder = new DbContextOptionsBuilder<SecDb>().UseNpgsql(_databases[mode]).AddInterceptors(interceptor);
+        builder.UsePinotechrdSecurity(o => o.TenantSchemaMode = mode);
+        return new SecDb(builder.Options, new DbSchemaProvider(SecDbFactory.Tenant(Tenant), null));
+    }
 
     private async Task CreateOwnersAsync(TenantSchemaMode mode, SecDb db)
     {
@@ -202,6 +210,191 @@ public class PostgresPermissionReplaceTests(PostgresFixture postgres) : IAsyncLi
         await using var read = Db(mode);
         (await read.RolePermissions.Where(rp => rp.RoleId == roleId).Select(rp => rp.Permission.Code).ToListAsync())
             .Should().BeEquivalentTo(SetOf(0));
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task AssignPermissionsToRoleAsync_ShouldKeepCallerRowsAndItsOwnRows_WhenItSucceedsInsideACallerTransaction(TenantSchemaMode mode)
+    {
+        var roleId = _owners[mode].Role;
+        var callerRole = new HostRole { Name = "caller-" + Guid.NewGuid().ToString("N")[..8] };
+
+        await using (var db = Db(mode))
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            db.Roles.Add(callerRole);
+            await db.SaveChangesAsync();
+
+            (await Manager(db).AssignPermissionsToRoleAsync(roleId.ToString(), SetOf(1))).Should().BeTrue();
+            await transaction.CommitAsync();
+        }
+
+        await using var read = Db(mode);
+        (await read.Roles.AnyAsync(r => r.Id == callerRole.Id)).Should().BeTrue("the caller's earlier row is kept");
+        (await read.RolePermissions.Where(rp => rp.RoleId == roleId).Select(rp => rp.Permission.Code).ToListAsync())
+            .Should().BeEquivalentTo(SetOf(1));
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task AssignPermissionsToRoleAsync_ShouldRollBackOnlyItself_WhenItReturnsFalseInsideACallerTransaction(TenantSchemaMode mode)
+    {
+        var roleId = _owners[mode].Role;
+        var callerRole = new HostRole { Name = "caller-" + Guid.NewGuid().ToString("N")[..8] };
+
+        await using (var db = Db(mode))
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            db.Roles.Add(callerRole);
+            await db.SaveChangesAsync();
+            var manager = Manager(db);
+            (await manager.AssignPermissionsToRoleAsync(roleId.ToString(), SetOf(2))).Should().BeTrue();
+
+            (await manager.AssignPermissionsToRoleAsync(roleId.ToString(), [Code(7), "CONC.MISSING"])).Should().BeFalse();
+
+            await transaction.CommitAsync();
+        }
+
+        await using var read = Db(mode);
+        (await read.Roles.AnyAsync(r => r.Id == callerRole.Id)).Should().BeTrue();
+        (await read.RolePermissions.Where(rp => rp.RoleId == roleId).Select(rp => rp.Permission.Code).ToListAsync())
+            .Should().BeEquivalentTo(SetOf(2), "the failed replace changed nothing, the earlier one stays");
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task AssignPermissionsToRoleAsync_ShouldPropagateAndKeepCallerRows_WhenItThrowsInsideACallerTransaction(TenantSchemaMode mode)
+    {
+        var roleId = _owners[mode].Role;
+        var callerRole = new HostRole { Name = "caller-" + Guid.NewGuid().ToString("N")[..8] };
+        var later = new HostRole { Name = "later-" + Guid.NewGuid().ToString("N")[..8] };
+        var failure = new ThrowOnReplacedRowInsert();
+
+        await using (var db = Db(mode, failure))
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            db.Roles.Add(callerRole);
+            await db.SaveChangesAsync();
+            var manager = Manager(db);
+            (await manager.AssignPermissionsToRoleAsync(roleId.ToString(), SetOf(3))).Should().BeTrue();
+
+            failure.Armed = true;
+            var act = () => manager.AssignPermissionsToRoleAsync(roleId.ToString(), SetOf(4));
+            await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*simulated store failure*");
+            failure.Armed = false;
+
+            db.Roles.Add(later);
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+        }
+
+        await using var read = Db(mode);
+        (await read.Roles.AnyAsync(r => r.Id == callerRole.Id)).Should().BeTrue();
+        (await read.Roles.AnyAsync(r => r.Id == later.Id)).Should().BeTrue("the transaction stayed usable");
+        (await read.RolePermissions.Where(rp => rp.RoleId == roleId).Select(rp => rp.Permission.Code).ToListAsync())
+            .Should().BeEquivalentTo(SetOf(3), "the throwing replace was rolled back to its savepoint, including its delete");
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task ReplaceUserOverridesAsync_ShouldKeepCallerRowsAndItsOwnRows_WhenItSucceedsInsideACallerTransaction(TenantSchemaMode mode)
+    {
+        var userId = _owners[mode].User;
+        var callerRole = new HostRole { Name = "caller-" + Guid.NewGuid().ToString("N")[..8] };
+
+        await using (var db = Db(mode))
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            db.Roles.Add(callerRole);
+            await db.SaveChangesAsync();
+
+            (await Manager(db).ReplaceUserOverridesAsync(userId.ToString(), [new(Code(1), PermissionAccessType.Deny)])).Should().BeTrue();
+            await transaction.CommitAsync();
+        }
+
+        await using var read = Db(mode);
+        (await read.Roles.AnyAsync(r => r.Id == callerRole.Id)).Should().BeTrue();
+        (await read.UserModulePermissions.Where(r => r.UserId == userId).Select(r => new { r.Permission.Code, r.AccessType }).ToListAsync()).Select(r => r.Code + ":" + r.AccessType).ToList()
+            .Should().BeEquivalentTo([Code(1) + ":" + PermissionAccessType.Deny]);
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task ReplaceUserOverridesAsync_ShouldRollBackOnlyItself_WhenItReturnsFalseInsideACallerTransaction(TenantSchemaMode mode)
+    {
+        var userId = _owners[mode].User;
+        var callerRole = new HostRole { Name = "caller-" + Guid.NewGuid().ToString("N")[..8] };
+
+        await using (var db = Db(mode))
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            db.Roles.Add(callerRole);
+            await db.SaveChangesAsync();
+            var manager = Manager(db);
+            (await manager.ReplaceUserOverridesAsync(userId.ToString(), [new(Code(2), PermissionAccessType.Allow)])).Should().BeTrue();
+
+            (await manager.ReplaceUserOverridesAsync(userId.ToString(),
+                [new(Code(8), PermissionAccessType.Deny), new("CONC.MISSING", PermissionAccessType.Allow)])).Should().BeFalse();
+
+            await transaction.CommitAsync();
+        }
+
+        await using var read = Db(mode);
+        (await read.Roles.AnyAsync(r => r.Id == callerRole.Id)).Should().BeTrue();
+        (await read.UserModulePermissions.Where(r => r.UserId == userId).Select(r => new { r.Permission.Code, r.AccessType }).ToListAsync()).Select(r => r.Code + ":" + r.AccessType).ToList()
+            .Should().BeEquivalentTo([Code(2) + ":" + PermissionAccessType.Allow]);
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task ReplaceUserOverridesAsync_ShouldPropagateAndKeepCallerRows_WhenItThrowsInsideACallerTransaction(TenantSchemaMode mode)
+    {
+        var userId = _owners[mode].User;
+        var callerRole = new HostRole { Name = "caller-" + Guid.NewGuid().ToString("N")[..8] };
+        var later = new HostRole { Name = "later-" + Guid.NewGuid().ToString("N")[..8] };
+        var failure = new ThrowOnReplacedRowInsert();
+
+        await using (var db = Db(mode, failure))
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            db.Roles.Add(callerRole);
+            await db.SaveChangesAsync();
+            var manager = Manager(db);
+            (await manager.ReplaceUserOverridesAsync(userId.ToString(), [new(Code(3), PermissionAccessType.Allow)])).Should().BeTrue();
+
+            failure.Armed = true;
+            var act = () => manager.ReplaceUserOverridesAsync(userId.ToString(), [new(Code(4), PermissionAccessType.Deny)]);
+            await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*simulated store failure*");
+            failure.Armed = false;
+
+            db.Roles.Add(later);
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+        }
+
+        await using var read = Db(mode);
+        (await read.Roles.AnyAsync(r => r.Id == callerRole.Id)).Should().BeTrue();
+        (await read.Roles.AnyAsync(r => r.Id == later.Id)).Should().BeTrue("the transaction stayed usable");
+        (await read.UserModulePermissions.Where(r => r.UserId == userId).Select(r => new { r.Permission.Code, r.AccessType }).ToListAsync()).Select(r => r.Code + ":" + r.AccessType).ToList()
+            .Should().BeEquivalentTo([Code(3) + ":" + PermissionAccessType.Allow]);
+    }
+
+    /// <summary>Throws from SaveChanges while armed and the unit of work adds a role-permission or user-override row.</summary>
+    private sealed class ThrowOnReplacedRowInsert : SaveChangesInterceptor
+    {
+        public bool Armed { get; set; }
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (Armed && eventData.Context!.ChangeTracker.Entries()
+                    .Any(e => e.State == EntityState.Added && (e.Entity is RolePermission || e.Entity is UserModulePermission)))
+            {
+                throw new InvalidOperationException("simulated store failure");
+            }
+
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
     }
 
     [Theory]

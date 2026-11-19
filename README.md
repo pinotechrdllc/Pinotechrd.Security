@@ -461,9 +461,22 @@ Protect the keys at rest as well (`ProtectKeysWith*`). Outside Development, `Add
 - Refresh tokens are opaque values kept through `IRefreshTokenStore`. `RefreshAsync` consumes the presented token atomically: of two concurrent refreshes with one token, exactly one succeeds.
 - Tokens issued by rotating one another form a family. Presenting a token that was already used revokes the whole family (RFC 9700, section 4.14.2), so a client that sends two refreshes at once loses that session.
 - A token of another tenant is refused without being consumed. The user must still exist, be active, not be locked out, be allowed to sign in, have the security stamp it had when the token was issued, and pass your `IIdentityValidator<TUser>` if you have one. Every failure returns `Invalid token`.
-- `SignOutAsync` revokes all refresh tokens of the user, in every session, and renews the security stamp. Deactivating a user with `SetUserActiveStatusAsync(userId, false)` does the same.
+- `SignOutCurrentUserAsync` revokes all refresh tokens of the authenticated user, in every session, and renews the security stamp. `RevokeUserSessionsAsync(userId)` on `IPinotechrdSecurityManager` does the same for any user, and so does deactivating a user with `SetUserActiveStatusAsync(userId, false)`.
 - Access tokens already issued stay valid until they expire (`ExpiryMinutes`, 60 by default): JWT validation does not ask the server. Keep `ExpiryMinutes` short if that window matters.
 - The default `InMemoryRefreshTokenStore` loses tokens on restart and does not share them between instances. It refuses a token value that is already stored. Above 10,000 entries it drops the tokens of families whose tokens have all expired, and expired revoked families. A used token is kept while its family has a live token, so replaying it is still detected; memory therefore grows with the number of refreshes per session lifetime, which is one more reason to rate limit refresh. For production use `AddPinotechrdEfRefreshTokenStore` (below), or register your own `IRefreshTokenStore` before or after `AddPinotechrdSecurity`; the default is only added when none is registered.
+
+### Self-service vs administrative APIs
+
+Self-service methods act on the authenticated user of the request, read from `ISecurityDataProvider.GetCurrentUserId()`, and take no user id, so a client cannot name another user:
+
+- `IPinotechrdAuthManager.SignOutCurrentUserAsync()` and `ChangeOwnPasswordAsync(currentPassword, newPassword)`.
+- `ISecurityEngine.GetCurrentUserPermissionsAsync()`.
+
+Without an authenticated user they change nothing: the sign-out returns `false`, the password change fails, and the permission list is empty (it is also empty when the data provider reports no tenant).
+
+`ChangeOwnPasswordAsync` checks the current password with `UserManager.ChangePasswordAsync`, which does not count failures toward the lockout. Rate-limit the endpoint that calls it, or a stolen access token allows unlimited guesses of the password.
+
+Every method that takes a `userId` is administrative: `IPinotechrdSecurityManager` (for example `RevokeUserSessionsAsync`, `ChangeUserPasswordAsync`, `ResetUserPasswordAsync`) and `ISecurityEngine.GetPermissionsAsync(userId)`. The library does not check who may act on that user; protect the endpoints that call them with an administrative permission, and never pass a user id taken from the request body or route to them on behalf of a regular user.
 
 ### Persistent refresh token store (EF Core)
 

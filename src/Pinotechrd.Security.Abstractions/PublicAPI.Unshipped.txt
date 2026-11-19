@@ -93,14 +93,14 @@ Pinotechrd.Security.Interfaces.IdentityValidationResult.Succeeded.init -> void
 Pinotechrd.Security.Interfaces.IIdentityValidator<TUser>
 Pinotechrd.Security.Interfaces.IIdentityValidator<TUser>.ValidateAsync(TUser! user, string! tenantId) -> System.Threading.Tasks.Task<Pinotechrd.Security.Interfaces.IdentityValidationResult!>!
 Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>
-Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.ChangePasswordAsync(string! userId, string! currentPassword, string! newPassword) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.ChangeOwnPasswordAsync(string! currentPassword, string! newPassword) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
 Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.GeneratePasswordResetTokenAsync(string! email) -> System.Threading.Tasks.Task<string?>!
 Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.GetTwoFactorProvidersAsync(string! twoFactorToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IList<string!>!>!
 Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.LoginAsync(string! email, string! password, string! tenantId) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
 Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.RefreshAsync(string! refreshToken) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
 Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.ResetPasswordAsync(string! email, string! token, string! newPassword) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
 Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.SendTwoFactorCodeAsync(string! twoFactorToken, string! provider) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
-Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.SignOutAsync(string! userId) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.SignOutCurrentUserAsync() -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Interfaces.IPinotechrdAuthManager<TUser>.VerifyTwoFactorCodeAsync(string! twoFactorToken, string! provider, string! code, string! tenantId) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!
 Pinotechrd.Security.Interfaces.IPinotechrdMessageService
 Pinotechrd.Security.Interfaces.IPinotechrdMessageService.SendCodeAsync(string! destination, string! code, Pinotechrd.Security.Enums.SecurityCodeType codeType) -> System.Threading.Tasks.Task!
@@ -435,3 +435,4 @@ static Pinotechrd.Security.Interfaces.RefreshTokenConsumeResult.operator ==(Pino
 Pinotechrd.Security.Interfaces.ITwoFactorAttemptStore.ExhaustAsync(string! challengeId, System.DateTimeOffset expiresAt, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Pinotechrd.Security.Interfaces.ISecurityCacheInvalidator
 Pinotechrd.Security.Interfaces.ISecurityCacheInvalidator.InvalidateTenantAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.RevokeUserSessionsAsync(string! userId) -> System.Threading.Tasks.Task<bool>!
