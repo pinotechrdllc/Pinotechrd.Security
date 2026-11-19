@@ -21,9 +21,9 @@ namespace Pinotechrd.Security.Core;
 /// <para>
 /// The store shares the scoped context but never uses its change tracker. It throws
 /// <see cref="InvalidOperationException"/> when the context has a current transaction or an ambient
-/// <c>TransactionScope</c> exists, because a rollback would erase the counted attempts. Expired rows are not
-/// purged; an application that deletes them must keep a margin past <c>expires_at</c> (for example one hour), since
-/// a deleted row of a still-valid token starts counting again.
+/// <c>TransactionScope</c> exists, because a rollback would erase the counted attempts. Expired rows are deleted by
+/// <see cref="IPinotechrdSessionPurger"/>, which keeps a margin past <c>expires_at</c>, since a deleted row of a
+/// still-valid token starts counting again.
 /// </para>
 /// </remarks>
 /// <typeparam name="TContext">Context whose model maps the two-factor attempt table.</typeparam>

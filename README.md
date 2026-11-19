@@ -402,7 +402,7 @@ With several instances, the in-memory store lets a two-factor token try five cod
 2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddTwoFactorAttempts`.
 3. Register the store (before or after `AddPinotechrdSecurity`): `builder.Services.AddPinotechrdEfTwoFactorAttemptStore<AppSecurityDbContext>();`
 
-Each attempt is one atomic `UPDATE ... SET count = count + 1` (the first one inserts the row), so concurrent attempts on any instance add up to five in total; a database error refuses the attempt rather than allowing one more. The store throws inside a database transaction or `TransactionScope`, because a rollback would erase the counted attempts: call `VerifyTwoFactorCodeAsync` outside any transaction. The store shares the request's context without using its change tracker. Rows are not deleted: purge those whose `expires_at` is more than an hour old (for example `expires_at < now() - interval '1 hour'`), with a scheduled job. Deleting the row of a token that is still valid, for instance because the database clock runs ahead, would let it count from one again. If the flag is off, every call of the store throws `InvalidOperationException`.
+Each attempt is one atomic `UPDATE ... SET count = count + 1` (the first one inserts the row), so concurrent attempts on any instance add up to five in total; a database error refuses the attempt rather than allowing one more. The store throws inside a database transaction or `TransactionScope`, because a rollback would erase the counted attempts: call `VerifyTwoFactorCodeAsync` outside any transaction. The store shares the request's context without using its change tracker. Expired rows are deleted by `IPinotechrdSessionPurger` (see "Purging expired sessions" below). If the flag is off, every call of the store throws `InvalidOperationException`.
 
 ### Data Protection keys
 
@@ -445,6 +445,28 @@ For production, or more than one instance, keep refresh tokens in the database. 
    ```
 
 The store is scoped and shares the request's context, but does not use its change tracker: it never saves your pending changes. Tokens are stored as hashes only. Consuming a token is one conditional `UPDATE`, so of concurrent refreshes with one token, on any instance, exactly one succeeds; replaying a used token revokes its family. Expiry and timestamps come from the registered `TimeProvider` (or the system clock), not the database clock, so keep the clocks of your instances synchronised. Because each tenant has its own tables, a token of another tenant is refused as not found, and `RevokeAllForUserAsync` reaches the current tenant only. If the flag is off, every call of the store throws `InvalidOperationException`.
+
+### Purging expired sessions
+
+The EF Core stores never delete rows, so `refresh_tokens`, `refresh_token_families` and `two_factor_attempts` grow without limit. `AddPinotechrdEfRefreshTokenStore` and `AddPinotechrdEfTwoFactorAttemptStore` also register a scoped `IPinotechrdSessionPurger`. `PurgeExpiredAsync(margin)` purges the current tenant's schema (whatever the scoped context resolves to), and only the tables your model maps; it throws `InvalidOperationException` when neither `MapRefreshTokens` nor `MapTwoFactorAttempts` is on. With `cutoff = now - margin` (clock: the registered `TimeProvider`), it deletes:
+
+- the tokens of every family that has no token with `expires_at > cutoff`; a family with a live token keeps all its tokens, so replaying a used one is still detected as reuse;
+- then the `refresh_token_families` rows with no token left, so a revoked family stays revoked while any of its tokens exists;
+- the `two_factor_attempts` rows with `expires_at < cutoff`.
+
+Each step is one `DELETE`; it needs no transaction and is safe while the application serves requests. Run it per tenant from a scheduled job, for example hourly or daily:
+
+```csharp
+foreach (var tenantId in tenantIds) // from your tenant catalog
+{
+    await using var scope = services.CreateAsyncScope();
+    scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant(tenantId);
+    var result = await scope.ServiceProvider.GetRequiredService<IPinotechrdSessionPurger>()
+        .PurgeExpiredAsync(cancellationToken: stoppingToken);
+}
+```
+
+The margin (default one hour, `IPinotechrdSessionPurger.DefaultMargin`) keeps rows a while past their expiry. It covers clock differences between the instance running the purge and the others, and a refresh that consumed a token just before it expired and saves the new one just after. Deleting the attempt row of a two-factor token that some instance still considers valid would let that token count from one again. Keep the margin above the clock skew of your instances. It cannot be shorter than five minutes (`IPinotechrdSessionPurger.MinimumMargin`): a shorter one could delete a revoked family while a refresh that consumed its last token is still saving the rotated one, which would make that token valid again. Both EF stores must use the same context, so one purger covers both tables; registering them with different contexts throws.
 
 ### Writing an `IRefreshTokenStore`
 

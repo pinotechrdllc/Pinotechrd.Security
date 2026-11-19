@@ -238,3 +238,23 @@ static Pinotechrd.Security.Extensions.PersistentStoreExtensions.AddPinotechrdEfR
 Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapTwoFactorAttempts.get -> bool
 Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapTwoFactorAttempts.set -> void
 static Pinotechrd.Security.Extensions.PersistentStoreExtensions.AddPinotechrdEfTwoFactorAttemptStore<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Pinotechrd.Security.Interfaces.IPinotechrdSessionPurger
+Pinotechrd.Security.Interfaces.IPinotechrdSessionPurger.PurgeExpiredAsync(System.TimeSpan? margin = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Pinotechrd.Security.Interfaces.SessionPurgeResult!>!
+readonly Pinotechrd.Security.Interfaces.IPinotechrdSessionPurger.DefaultMargin -> System.TimeSpan
+readonly Pinotechrd.Security.Interfaces.IPinotechrdSessionPurger.MinimumMargin -> System.TimeSpan
+Pinotechrd.Security.Interfaces.SessionPurgeResult
+Pinotechrd.Security.Interfaces.SessionPurgeResult.RefreshTokens.get -> int
+Pinotechrd.Security.Interfaces.SessionPurgeResult.RefreshTokens.init -> void
+Pinotechrd.Security.Interfaces.SessionPurgeResult.RefreshTokenFamilies.get -> int
+Pinotechrd.Security.Interfaces.SessionPurgeResult.RefreshTokenFamilies.init -> void
+Pinotechrd.Security.Interfaces.SessionPurgeResult.TwoFactorAttempts.get -> int
+Pinotechrd.Security.Interfaces.SessionPurgeResult.TwoFactorAttempts.init -> void
+Pinotechrd.Security.Interfaces.SessionPurgeResult.SessionPurgeResult(int RefreshTokens, int RefreshTokenFamilies, int TwoFactorAttempts) -> void
+Pinotechrd.Security.Interfaces.SessionPurgeResult.Deconstruct(out int RefreshTokens, out int RefreshTokenFamilies, out int TwoFactorAttempts) -> void
+Pinotechrd.Security.Interfaces.SessionPurgeResult.<Clone>$() -> Pinotechrd.Security.Interfaces.SessionPurgeResult!
+Pinotechrd.Security.Interfaces.SessionPurgeResult.Equals(Pinotechrd.Security.Interfaces.SessionPurgeResult? other) -> bool
+override Pinotechrd.Security.Interfaces.SessionPurgeResult.Equals(object? obj) -> bool
+override Pinotechrd.Security.Interfaces.SessionPurgeResult.GetHashCode() -> int
+override Pinotechrd.Security.Interfaces.SessionPurgeResult.ToString() -> string!
+static Pinotechrd.Security.Interfaces.SessionPurgeResult.operator !=(Pinotechrd.Security.Interfaces.SessionPurgeResult? left, Pinotechrd.Security.Interfaces.SessionPurgeResult? right) -> bool
+static Pinotechrd.Security.Interfaces.SessionPurgeResult.operator ==(Pinotechrd.Security.Interfaces.SessionPurgeResult? left, Pinotechrd.Security.Interfaces.SessionPurgeResult? right) -> bool
