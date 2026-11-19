@@ -55,7 +55,10 @@ public class JwtBearerConfigurationTests
         parameters.ValidIssuer.Should().Be("the-issuer");
         parameters.ValidAudience.Should().Be("the-audience");
         parameters.ValidAlgorithms.Should().Equal(SecurityAlgorithms.HmacSha256);
-        parameters.IssuerSigningKey.Should().NotBeNull();
+        parameters.IssuerSigningKey.Should().BeNull();
+        parameters.IssuerSigningKeys.Should().ContainSingle()
+            .Which.Should().BeOfType<SymmetricSecurityKey>()
+            .Which.Key.Should().Equal(Encoding.UTF8.GetBytes(Secret));
     }
 
     [Fact]
@@ -144,7 +147,10 @@ public class JwtBearerConfigurationTests
         parameters.ValidateAudience.Should().BeTrue();
         parameters.ValidIssuer.Should().Be("the-issuer");
         parameters.ValidAudience.Should().Be("the-audience");
-        parameters.IssuerSigningKey.Should().NotBeNull();
+        parameters.IssuerSigningKey.Should().BeNull();
+        parameters.IssuerSigningKeys.Should().ContainSingle()
+            .Which.Should().BeOfType<SymmetricSecurityKey>()
+            .Which.Key.Should().Equal(Encoding.UTF8.GetBytes(Secret));
     }
 
     [Fact]
@@ -161,7 +167,10 @@ public class JwtBearerConfigurationTests
         parameters.ValidateIssuerSigningKey.Should().BeTrue();
         parameters.ValidIssuer.Should().Be("the-issuer");
         parameters.ValidAudience.Should().Be("the-audience");
-        parameters.IssuerSigningKey.Should().NotBeNull();
+        parameters.IssuerSigningKey.Should().BeNull();
+        parameters.IssuerSigningKeys.Should().ContainSingle()
+            .Which.Should().BeOfType<SymmetricSecurityKey>()
+            .Which.Key.Should().Equal(Encoding.UTF8.GetBytes(Secret));
         parameters.ValidAlgorithms.Should().Equal(SecurityAlgorithms.HmacSha256);
     }
 

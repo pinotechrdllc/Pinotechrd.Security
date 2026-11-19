@@ -8,7 +8,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
-using System.Text;
 using Pinotechrd.Security.Authorization;
 using Pinotechrd.Security.Core;
 using Pinotechrd.Security.Entities;
@@ -163,7 +162,20 @@ public static class SecurityExtensions
                 parameters.ValidIssuer = settings.Issuer;
                 parameters.ValidAudience = settings.Audience;
                 parameters.ValidAlgorithms = [SecurityAlgorithms.HmacSha256];
-                parameters.IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.Secret));
+                // Only the configured secrets are accepted: the current one first, then the previous ones
+                // (validation only). Every other way to supply a key or skip the signature check is cleared: a key,
+                // resolver or signature validator the application set, and keys from OpenID Connect metadata
+                // (Authority, MetadataAddress, Configuration, ConfigurationManager), which the handler then never
+                // fetches.
+                parameters.IssuerSigningKey = null;
+                parameters.IssuerSigningKeys = JwtSigningKeys.ValidationKeys(settings);
+                parameters.IssuerSigningKeyResolver = null;
+                parameters.IssuerSigningKeyResolverUsingConfiguration = null;
+                parameters.SignatureValidator = null;
+                parameters.SignatureValidatorUsingConfiguration = null;
+                parameters.ConfigurationManager = null;
+                jwt.Configuration = null;
+                jwt.ConfigurationManager = null;
             });
 
         services.AddAuthorization();

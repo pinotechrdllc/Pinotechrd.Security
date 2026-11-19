@@ -234,12 +234,23 @@ With EF Core migrations instead of `GenerateCreateScript`, run `MigrateAsync()` 
 | --- | --- | --- |
 | `Secret` | none | Required. At least 32 bytes in UTF-8. |
 | `MinimumSecretLength` | `32` | Minimum length of `Secret` in UTF-8 bytes. Can be raised, not lowered below 32. |
+| `PreviousSecrets` | empty | Secrets accepted only to validate tokens, never to sign. Each must meet the `Secret` length rule and must not be empty, equal to `Secret`, or repeated. See "Rotating the JWT secret" below. |
 | `Issuer` | not set | Required. Always validated. |
 | `Audience` | not set | Required. Always validated. |
 | `ExpiryMinutes` | `60` | Access token lifetime. |
 | `RefreshTokenExpiryDays` | `7` | Refresh token lifetime. |
 
-The JWT settings are checked when the host starts, not inside `AddPinotechrdSecurity`, so tools that build the host without configuration (such as OpenAPI generation at build time) still work. A missing or weak setting makes the host fail to start with an `OptionsValidationException` that names the setting, for example `PinotechrdSecurityOptions.Jwt.Secret`. Tokens are signed with HMAC-SHA256, and only that algorithm is accepted when they are validated. The bearer handler's validation settings that the library guarantees (issuer, audience, lifetime and signing-key validation, signed tokens with an expiry, the configured issuer, audience and key, the algorithm) are applied after all your `Configure<JwtBearerOptions>` calls, even if you replace `TokenValidationParameters` entirely; your other settings are kept.
+The JWT settings are checked when the host starts, not inside `AddPinotechrdSecurity`, so tools that build the host without configuration (such as OpenAPI generation at build time) still work. A missing or weak setting makes the host fail to start with an `OptionsValidationException` that names the setting, for example `PinotechrdSecurityOptions.Jwt.Secret`. Tokens are signed with HMAC-SHA256, and only that algorithm is accepted when they are validated. The bearer handler's validation settings that the library guarantees (issuer, audience, lifetime and signing-key validation, signed tokens with an expiry, the configured issuer, audience and keys, the algorithm) are applied after all your `Configure<JwtBearerOptions>` calls, even if you replace `TokenValidationParameters` entirely; your other settings are kept. Only the configured secrets are accepted: a signing key, key resolver or signature validator you set on `TokenValidationParameters`, and keys from OpenID Connect metadata (`Authority`, `MetadataAddress`, `Configuration`, `ConfigurationManager`), are cleared.
+
+#### Rotating the JWT secret
+
+Tokens carry a `kid` header: the first 16 lowercase hex characters of SHA-256 over the signing secret's UTF-8 bytes. With several instances, rotate in three deployments:
+
+1. Add the new secret to `PreviousSecrets` on every instance, so all of them accept it before any signs with it.
+2. Make it `Secret` and move the old secret to `PreviousSecrets`, on every instance.
+3. Once the old secret's tokens are no longer needed (access tokens expired and the refresh window over), remove it from `PreviousSecrets`.
+
+The library enforces no time limit: a secret in `PreviousSecrets` is accepted until you remove it. Never keep a leaked secret there: whoever holds it can forge tokens, and `GetPrincipalFromExpiredToken` accepts them at any age; remove it and rotate at once. Keys are read once, when the host starts, so each step takes effect only after a restart.
 
 ### Tenant resolution (`options.Tenancy`)
 
