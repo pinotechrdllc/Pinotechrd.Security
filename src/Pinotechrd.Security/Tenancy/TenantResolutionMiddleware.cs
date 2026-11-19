@@ -281,7 +281,7 @@ public class TenantResolutionMiddleware
         //    The store is asked before any tenant-scoped context or model exists.
         if (!string.IsNullOrEmpty(tenantId))
         {
-            if (TenantIdentifier.IsValid(tenantId) && await tenantStore.TenantExistsAsync(tenantId))
+            if (TenantIdentifier.IsValid(tenantId) && await tenantStore.TenantExistsAsync(tenantId, context.RequestAborted))
             {
                 tenantContext.SetTenant(tenantId);
                 await _next(context);

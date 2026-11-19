@@ -202,7 +202,7 @@ public class TenantMembershipValidationTests
 
     private sealed class AllowAllValidator<TUser> : IIdentityValidator<TUser> where TUser : class
     {
-        public Task<IdentityValidationResult> ValidateAsync(TUser user, string tenantId) =>
+        public Task<IdentityValidationResult> ValidateAsync(TUser user, string tenantId, CancellationToken cancellationToken = default) =>
             Task.FromResult(new IdentityValidationResult(true));
     }
 

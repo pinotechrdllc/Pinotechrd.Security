@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using Pinotechrd.Security.Core;
 using Pinotechrd.Security.Interfaces;
@@ -103,7 +104,8 @@ public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionReq
         }
 
         // The engine handles: Subscription Check -> Module Check -> User/Role Permission Check
-        if (await _securityEngine.CanAccessAsync(requirement.ModuleCode, requirement.Permission))
+        var cancellationToken = (context.Resource as HttpContext)?.RequestAborted ?? CancellationToken.None;
+        if (await _securityEngine.CanAccessAsync(requirement.ModuleCode, requirement.Permission, cancellationToken))
         {
             context.Succeed(requirement);
         }

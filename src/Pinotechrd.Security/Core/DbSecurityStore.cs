@@ -22,15 +22,15 @@ public class DbSecurityStore : ISecurityStore
     }
 
     /// <inheritdoc />
-    public async Task<bool> IsSubscriptionActiveAsync(string tenantId)
+    public async Task<bool> IsSubscriptionActiveAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         return await _db.SystemSubscriptions
-            .AnyAsync(s => s.TenantName == tenantId && s.IsActive && s.StartDate <= today && (!s.EndDate.HasValue || s.EndDate >= today));
+            .AnyAsync(s => s.TenantName == tenantId && s.IsActive && s.StartDate <= today && (!s.EndDate.HasValue || s.EndDate >= today), cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<bool> IsModuleActiveAsync(string tenantId, string moduleCode)
+    public async Task<bool> IsModuleActiveAsync(string tenantId, string moduleCode, CancellationToken cancellationToken = default)
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         if (!SecurityCodes.TryNormalize(moduleCode, out var code)) return false;
@@ -45,11 +45,11 @@ public class DbSecurityStore : ISecurityStore
                             && mod.Code == code
                             && mod.IsActive
                       select mod.Id)
-                      .AnyAsync();
+                      .AnyAsync(cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<IEnumerable<string>> GetActiveModuleCodesAsync(string tenantId)
+    public async Task<IEnumerable<string>> GetActiveModuleCodesAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
@@ -64,13 +64,13 @@ public class DbSecurityStore : ISecurityStore
                       select mod.Code)
                       .TagWith("SecurityStore.GetActiveModuleCodes")
                       .AsNoTracking()
-                      .ToListAsync();
+                      .ToListAsync(cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<SecurityModule>> GetActiveCatalogAsync(string tenantId)
+    public async Task<IReadOnlyList<SecurityModule>> GetActiveCatalogAsync(string tenantId, CancellationToken cancellationToken = default)
     {
-        var codes = (await GetActiveModuleCodesAsync(tenantId)).ToList();
+        var codes = (await GetActiveModuleCodesAsync(tenantId, cancellationToken)).ToList();
         if (codes.Count == 0)
         {
             return [];
@@ -80,13 +80,13 @@ public class DbSecurityStore : ISecurityStore
             .Where(module => module.IsActive && codes.Contains(module.Code))
             .OrderBy(module => module.DisplayOrder)
             .AsNoTracking()
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         var moduleIds = modules.Select(module => module.Id).ToList();
         var permissions = await _db.Permissions
             .Where(permission => permission.IsActive && moduleIds.Contains(permission.ModuleId))
             .AsNoTracking()
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         foreach (var module in modules)
         {
@@ -97,7 +97,7 @@ public class DbSecurityStore : ISecurityStore
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<UserPermissionOverride>> GetUserOverridesAsync(string userId)
+    public async Task<IReadOnlyList<UserPermissionOverride>> GetUserOverridesAsync(string userId, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParse(userId, out var userGuid))
         {
@@ -107,6 +107,6 @@ public class DbSecurityStore : ISecurityStore
         return await _db.UserModulePermissions
             .Where(row => row.UserId == userGuid)
             .Select(row => new UserPermissionOverride(row.Permission.Code, row.AccessType))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 }

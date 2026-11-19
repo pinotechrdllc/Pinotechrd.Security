@@ -14,12 +14,12 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     /// Authenticates a user by credentials and generates tokens for <paramref name="tenantId"/>,
     /// which must be the tenant resolved for the current request.
     /// </summary>
-    Task<AuthResult> LoginAsync(string email, string password, string tenantId);
+    Task<AuthResult> LoginAsync(string email, string password, string tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Refreshes an expired access token using a refresh token.
     /// </summary>
-    Task<AuthResult> RefreshAsync(string refreshToken);
+    Task<AuthResult> RefreshAsync(string refreshToken, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Signs the authenticated user out of every session: revokes all of its refresh tokens.
@@ -33,7 +33,7 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     /// <returns><see langword="false"/>, with nothing changed, when there is no authenticated user or the user is not
     /// found; <see langword="false"/>, with the tokens already revoked, when renewing the security stamp fails;
     /// otherwise <see langword="true"/>.</returns>
-    Task<bool> SignOutCurrentUserAsync();
+    Task<bool> SignOutCurrentUserAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Changes the authenticated user's password, validating <paramref name="currentPassword"/>.
@@ -45,31 +45,33 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     /// </remarks>
     /// <returns>A failed <see cref="AuthResult"/>, with nothing changed, when there is no authenticated user, the user is
     /// not found, or Identity refuses the change.</returns>
-    Task<AuthResult> ChangeOwnPasswordAsync(string currentPassword, string newPassword);
+    Task<AuthResult> ChangeOwnPasswordAsync(string currentPassword, string newPassword, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Initiates a password reset flow.
     /// </summary>
-    Task<string?> GeneratePasswordResetTokenAsync(string email);
+    Task<string?> GeneratePasswordResetTokenAsync(string email, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Completes the password reset process.
     /// </summary>
-    Task<AuthResult> ResetPasswordAsync(string email, string token, string newPassword);
+    Task<AuthResult> ResetPasswordAsync(string email, string token, string newPassword, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the list of available 2FA providers for the user (Email, Phone, etc).
     /// </summary>
     /// <param name="twoFactorToken">The temporary token obtained during login (<see cref="AuthResult.TwoFactorToken"/>).
     /// It is an opaque, short-lived value bound to the user and the tenant, not the user identifier.</param>
-    Task<IList<string>> GetTwoFactorProvidersAsync(string twoFactorToken);
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<IList<string>> GetTwoFactorProvidersAsync(string twoFactorToken, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sends a 2FA code to the specified provider.
     /// </summary>
     /// <param name="twoFactorToken">The temporary token.</param>
     /// <param name="provider">The selected provider name.</param>
-    Task<AuthResult> SendTwoFactorCodeAsync(string twoFactorToken, string provider);
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<AuthResult> SendTwoFactorCodeAsync(string twoFactorToken, string provider, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Verifies the 2FA code and completes authentication.
@@ -78,5 +80,6 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     /// <param name="provider">The provider used.</param>
     /// <param name="code">The verification code.</param>
     /// <param name="tenantId">The target tenant ID. It must be the tenant the token was issued for.</param>
-    Task<AuthResult> VerifyTwoFactorCodeAsync(string twoFactorToken, string provider, string code, string tenantId);
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<AuthResult> VerifyTwoFactorCodeAsync(string twoFactorToken, string provider, string code, string tenantId, CancellationToken cancellationToken = default);
 }

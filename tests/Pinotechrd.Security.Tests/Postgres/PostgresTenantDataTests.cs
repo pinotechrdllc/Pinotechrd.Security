@@ -104,13 +104,13 @@ public class PostgresTenantDataTests(PostgresFixture postgres) : IAsyncLifetime
 
         public string? GetCurrentTenantId() => tenant;
 
-        public async Task<IEnumerable<string>> GetUserRolesAsync(string id)
+        public async Task<IEnumerable<string>> GetUserRolesAsync(string id, CancellationToken cancellationToken = default)
         {
             var user = Guid.Parse(id);
             return await db.UserRoles.Where(r => r.UserId == user).Join(db.Roles, ur => ur.RoleId, r => r.Id, (_, r) => r.Name!).ToListAsync();
         }
 
-        public async Task<IEnumerable<string>> GetUserPermissionsAsync(string id)
+        public async Task<IEnumerable<string>> GetUserPermissionsAsync(string id, CancellationToken cancellationToken = default)
         {
             var user = Guid.Parse(id);
             return await (from ur in db.UserRoles

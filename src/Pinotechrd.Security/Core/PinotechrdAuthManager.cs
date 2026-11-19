@@ -145,7 +145,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     }
 
     /// <inheritdoc />
-    public async Task<AuthResult> LoginAsync(string emailOrUsername, string password, string tenantId)
+    public async Task<AuthResult> LoginAsync(string emailOrUsername, string password, string tenantId, CancellationToken cancellationToken = default)
     {
         // 0. The token can only be issued for the tenant this request was resolved for.
         if (!IsCurrentTenant(tenantId))
@@ -154,6 +154,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             return AuthResult.Failure(InvalidCredentials);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         // 1. Hybrid lookup: Try Email, then UserName
         var user = await _userManager.FindByEmailAsync(emailOrUsername)
                    ?? await _userManager.FindByNameAsync(emailOrUsername);
@@ -164,6 +165,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             return AuthResult.Failure(InvalidCredentials);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         // 2. Check password (lockout semantics are Identity's: lockoutOnFailure stays on)
         var result = await _signInManager.CheckPasswordSignInAsync(user, password, lockoutOnFailure: true);
 
@@ -176,6 +178,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             return AuthResult.Failure(InvalidCredentials);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         // 3. Second factor. CheckPasswordSignInAsync never reports RequiresTwoFactor, so ask Identity directly.
         if (_userManager.SupportsUserTwoFactor && await _userManager.GetTwoFactorEnabledAsync(user))
         {
@@ -187,11 +190,12 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             return AuthResult.TwoFactorRequired(providers.ToList(), twoFactorToken);
         }
 
-        return await BuildAuthenticatedResultAsync(user, tenantId);
+        return await BuildAuthenticatedResultAsync(user, tenantId, null, cancellationToken);
     }
 
-    private async Task<AuthResult> BuildAuthenticatedResultAsync(TUser user, string tenantId, string? familyId = null)
+    private async Task<AuthResult> BuildAuthenticatedResultAsync(TUser user, string tenantId, string? familyId, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         // Fetch user basic info
         var userId = await _userManager.GetUserIdAsync(user);
         var email = await _userManager.GetEmailAsync(user) ?? string.Empty;
@@ -202,7 +206,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
 
         if (_customValidator != null)
         {
-            var validationResult = await _customValidator.ValidateAsync(user, tenantId);
+            var validationResult = await _customValidator.ValidateAsync(user, tenantId, cancellationToken);
             if (!validationResult.Succeeded)
                 return AuthResult.Failure(validationResult.ErrorMessage ?? "Validation failed");
 
@@ -212,7 +216,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         }
 
         // 2. Fetch Permissions via Engine
-        var permissions = (await _securityEngine.GetPermissionsAsync(userId)).ToList();
+        var permissions = (await _securityEngine.GetPermissionsAsync(userId, cancellationToken)).ToList();
 
         // 3. Build Claims
         var claims = new List<Claim>
@@ -245,7 +249,8 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             refreshToken,
             refreshTokenExpiresAt,
             familyId ?? Guid.NewGuid().ToString("N"),
-            securityStamp);
+            securityStamp,
+            cancellationToken);
 
         return AuthResult.Success(
             new AuthToken(accessToken, refreshToken, expiresAt),
@@ -256,11 +261,12 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     }
 
     /// <inheritdoc />
-    public async Task<IList<string>> GetTwoFactorProvidersAsync(string twoFactorToken)
+    public async Task<IList<string>> GetTwoFactorProvidersAsync(string twoFactorToken, CancellationToken cancellationToken = default)
     {
-        var ticket = await ReadTwoFactorTokenAsync(twoFactorToken);
+        var ticket = await ReadTwoFactorTokenAsync(twoFactorToken, cancellationToken);
         if (ticket == null) return new List<string>();
 
+        cancellationToken.ThrowIfCancellationRequested();
         return await _userManager.GetValidTwoFactorProvidersAsync(ticket.User);
     }
 
@@ -270,9 +276,9 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// and locked-out users are refused. This method sends a message every time it succeeds: callers must
     /// rate limit it (for example per token and per client address).
     /// </remarks>
-    public async Task<AuthResult> SendTwoFactorCodeAsync(string twoFactorToken, string provider)
+    public async Task<AuthResult> SendTwoFactorCodeAsync(string twoFactorToken, string provider, CancellationToken cancellationToken = default)
     {
-        var ticket = await ReadTwoFactorTokenAsync(twoFactorToken);
+        var ticket = await ReadTwoFactorTokenAsync(twoFactorToken, cancellationToken);
         if (ticket == null) return AuthResult.Failure(InvalidSession);
         var user = ticket.User;
 
@@ -285,6 +291,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         if (!await IsValidProviderAsync(user, provider))
             return AuthResult.Failure("Invalid two-factor provider");
 
+        cancellationToken.ThrowIfCancellationRequested();
         var code = await _userManager.GenerateTwoFactorTokenAsync(user, provider);
 
         // Destination lookup
@@ -294,15 +301,15 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         // If it's a custom provider, the implementation of IPinotechrdMessageService should handle it
         // Or we could pass more metadata.
 
-        await _messageService.SendCodeAsync(destination, code, SecurityCodeType.TwoFactor);
+        await _messageService.SendCodeAsync(destination, code, SecurityCodeType.TwoFactor, cancellationToken);
 
         return AuthResult.Success(new AuthToken("", "", DateTime.MinValue), "", "", []);
     }
 
     /// <inheritdoc />
-    public async Task<AuthResult> VerifyTwoFactorCodeAsync(string twoFactorToken, string provider, string code, string tenantId)
+    public async Task<AuthResult> VerifyTwoFactorCodeAsync(string twoFactorToken, string provider, string code, string tenantId, CancellationToken cancellationToken = default)
     {
-        var ticket = await ReadTwoFactorTokenAsync(twoFactorToken);
+        var ticket = await ReadTwoFactorTokenAsync(twoFactorToken, cancellationToken);
         if (ticket == null || !string.Equals(ticket.TenantId, tenantId, StringComparison.Ordinal))
             return AuthResult.Failure(InvalidSession);
 
@@ -314,10 +321,11 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             return AuthResult.Failure(InvalidCode);
 
         // Count the attempt before checking the code, so concurrent guesses cannot all slip under the limit.
-        var attempts = await _twoFactorAttempts!.RegisterAttemptAsync(ticket.ChallengeId, ticket.ExpiresAt);
+        var attempts = await _twoFactorAttempts!.RegisterAttemptAsync(ticket.ChallengeId, ticket.ExpiresAt, cancellationToken);
         if (attempts > MaxTwoFactorAttemptsPerToken)
             return AuthResult.Failure(InvalidCode);
 
+        cancellationToken.ThrowIfCancellationRequested();
         var valid = await _userManager.VerifyTwoFactorTokenAsync(user, provider, code);
         if (!valid)
         {
@@ -325,7 +333,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             // If the failure cannot be recorded (for example a concurrency conflict that survives the retries),
             // the challenge is spent: no further code is accepted for this token.
             if (_userManager.SupportsUserLockout && !await RecordFailedAttemptAsync(user))
-                await _twoFactorAttempts!.ExhaustAsync(ticket.ChallengeId, ticket.ExpiresAt);
+                await _twoFactorAttempts!.ExhaustAsync(ticket.ChallengeId, ticket.ExpiresAt, CancellationToken.None);
             return AuthResult.Failure(InvalidCode);
         }
 
@@ -353,7 +361,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             user = reset;
         }
 
-        return await BuildAuthenticatedResultAsync(user, ticket.TenantId);
+        return await BuildAuthenticatedResultAsync(user, ticket.TenantId, null, cancellationToken);
     }
 
     private sealed record TwoFactorTicket(TUser User, string TenantId, string ChallengeId, DateTimeOffset ExpiresAt, string Stamp);
@@ -374,7 +382,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         return _twoFactorProtector!.Protect(payload);
     }
 
-    private async Task<TwoFactorTicket?> ReadTwoFactorTokenAsync(string twoFactorToken)
+    private async Task<TwoFactorTicket?> ReadTwoFactorTokenAsync(string twoFactorToken, CancellationToken cancellationToken)
     {
         if (_twoFactorProtector == null || _twoFactorAttempts == null || string.IsNullOrEmpty(twoFactorToken)) return null;
 
@@ -401,6 +409,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         var expiresAt = DateTimeOffset.FromUnixTimeMilliseconds(expiresAtMs);
         if (_timeProvider.GetUtcNow() >= expiresAt || !IsCurrentTenant(tenantId)) return null;
 
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByIdAsync(parts[0]!);
         if (user == null || IsInactive(user)) return null;
 
@@ -496,17 +505,18 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     }
 
     /// <inheritdoc />
-    public async Task<AuthResult> RefreshAsync(string refreshToken)
+    public async Task<AuthResult> RefreshAsync(string refreshToken, CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext?.TenantId;
         if (string.IsNullOrEmpty(tenantId) || string.IsNullOrEmpty(refreshToken))
             return AuthResult.Failure(InvalidRefreshToken);
 
         // Atomic: of two concurrent refreshes with one token, only one gets past this line.
-        var consumed = await _refreshTokenStore.ConsumeAsync(refreshToken, tenantId);
+        var consumed = await _refreshTokenStore.ConsumeAsync(refreshToken, tenantId, cancellationToken);
         if (consumed is not { Succeeded: true } || string.IsNullOrEmpty(consumed.UserId))
             return AuthResult.Failure(InvalidRefreshToken);
 
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByIdAsync(consumed.UserId);
         if (user == null || IsInactive(user)) return AuthResult.Failure(InvalidRefreshToken);
 
@@ -523,7 +533,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
                 return AuthResult.Failure(InvalidRefreshToken);
         }
 
-        var refreshed = await BuildAuthenticatedResultAsync(user, tenantId, consumed.FamilyId);
+        var refreshed = await BuildAuthenticatedResultAsync(user, tenantId, consumed.FamilyId, cancellationToken);
         // A failing IIdentityValidator is reported like every other refresh failure.
         return refreshed.Succeeded ? refreshed : AuthResult.Failure(InvalidRefreshToken);
     }
@@ -536,13 +546,13 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// when no <see cref="ISecurityDataProvider"/> was supplied to the constructor, and, with the tokens already
     /// revoked, when renewing the security stamp fails. A user store without security stamps only has its tokens revoked.
     /// </remarks>
-    public async Task<bool> SignOutCurrentUserAsync()
+    public async Task<bool> SignOutCurrentUserAsync(CancellationToken cancellationToken = default)
     {
-        var user = await FindCurrentUserAsync();
+        var user = await FindCurrentUserAsync(cancellationToken);
         if (user == null) return false;
 
         // Revoke under the stored id: tokens are saved under GetUserIdAsync.
-        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user));
+        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), cancellationToken);
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
         var stampResult = await _userManager.UpdateSecurityStampAsync(user);
@@ -554,11 +564,12 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// Fails with <c>User not found</c> when there is no authenticated user, the user is not found, or no
     /// <see cref="ISecurityDataProvider"/> was supplied to the constructor.
     /// </remarks>
-    public async Task<AuthResult> ChangeOwnPasswordAsync(string currentPassword, string newPassword)
+    public async Task<AuthResult> ChangeOwnPasswordAsync(string currentPassword, string newPassword, CancellationToken cancellationToken = default)
     {
-        var user = await FindCurrentUserAsync();
+        var user = await FindCurrentUserAsync(cancellationToken);
         if (user == null) return AuthResult.Failure("User not found");
 
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _userManager.ChangePasswordAsync(user, currentPassword, newPassword);
         if (!result.Succeeded)
             return AuthResult.Failure(string.Join(", ", result.Errors.Select(e => e.Description)));
@@ -571,18 +582,21 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// The authenticated user of the request, as reported by <see cref="ISecurityDataProvider.GetCurrentUserId"/>,
     /// or <see langword="null"/> when there is none or it does not exist.
     /// </summary>
-    private async Task<TUser?> FindCurrentUserAsync()
+    private async Task<TUser?> FindCurrentUserAsync(CancellationToken cancellationToken)
     {
         var userId = _dataProvider?.GetCurrentUserId();
         if (string.IsNullOrEmpty(userId)) return null;
+        cancellationToken.ThrowIfCancellationRequested();
         return await _userManager.FindByIdAsync(userId);
     }
 
     /// <inheritdoc />
-    public async Task<string?> GeneratePasswordResetTokenAsync(string email)
+    public async Task<string?> GeneratePasswordResetTokenAsync(string email, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByEmailAsync(email);
         if (user == null) return null;
+        cancellationToken.ThrowIfCancellationRequested();
         return await _userManager.GeneratePasswordResetTokenAsync(user);
     }
 
@@ -590,11 +604,13 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// <remarks>
     /// An unknown e-mail gets the same failure as an invalid reset token (Identity's <c>InvalidToken</c> description).
     /// </remarks>
-    public async Task<AuthResult> ResetPasswordAsync(string email, string token, string newPassword)
+    public async Task<AuthResult> ResetPasswordAsync(string email, string token, string newPassword, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByEmailAsync(email);
         if (user == null) return AuthResult.Failure(_userManager.ErrorDescriber.InvalidToken().Description);
 
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _userManager.ResetPasswordAsync(user, token, newPassword);
         if (!result.Succeeded)
             return AuthResult.Failure(string.Join(", ", result.Errors.Select(e => e.Description)));

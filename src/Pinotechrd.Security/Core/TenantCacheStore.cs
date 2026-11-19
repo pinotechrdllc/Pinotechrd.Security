@@ -58,31 +58,31 @@ public class TenantCacheStore : ISecurityStore, ISecurityCacheInvalidator
     }
 
     /// <inheritdoc />
-    public async Task<bool> IsSubscriptionActiveAsync(string tenantId)
+    public async Task<bool> IsSubscriptionActiveAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         if (!TenantIdentifier.IsValid(tenantId))
         {
-            return await _inner.IsSubscriptionActiveAsync(tenantId);
+            return await _inner.IsSubscriptionActiveAsync(tenantId, cancellationToken);
         }
 
-        var key = await DataKeyAsync(tenantId, "subscription");
-        var cached = await ReadAsync<bool?>(key);
+        var key = await DataKeyAsync(tenantId, "subscription", cancellationToken);
+        var cached = await ReadAsync<bool?>(key, cancellationToken);
         if (cached.HasValue)
         {
             return cached.Value;
         }
 
-        var isActive = await _inner.IsSubscriptionActiveAsync(tenantId);
-        await WriteAsync<bool?>(key, isActive);
+        var isActive = await _inner.IsSubscriptionActiveAsync(tenantId, cancellationToken);
+        await WriteAsync<bool?>(key, isActive, cancellationToken);
         return isActive;
     }
 
     /// <inheritdoc />
-    public async Task<bool> IsModuleActiveAsync(string tenantId, string moduleCode)
+    public async Task<bool> IsModuleActiveAsync(string tenantId, string moduleCode, CancellationToken cancellationToken = default)
     {
         if (!TenantIdentifier.IsValid(tenantId))
         {
-            return await _inner.IsModuleActiveAsync(tenantId, moduleCode);
+            return await _inner.IsModuleActiveAsync(tenantId, moduleCode, cancellationToken);
         }
 
         if (!SecurityCodes.TryNormalize(moduleCode, out var code))
@@ -92,45 +92,45 @@ public class TenantCacheStore : ISecurityStore, ISecurityCacheInvalidator
 
         // Stored codes are normalized the same way before comparing, matching SecurityEngine, so a row written
         // outside the seeder (lower case, surrounding spaces) is not denied here while the menu still shows it.
-        var codes = await GetActiveModuleCodesAsync(tenantId);
+        var codes = await GetActiveModuleCodesAsync(tenantId, cancellationToken);
         return codes.Any(stored => SecurityCodes.TryNormalize(stored, out var normalized)
             && string.Equals(normalized, code, StringComparison.Ordinal));
     }
 
     /// <inheritdoc />
-    public async Task<IEnumerable<string>> GetActiveModuleCodesAsync(string tenantId)
+    public async Task<IEnumerable<string>> GetActiveModuleCodesAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         if (!TenantIdentifier.IsValid(tenantId))
         {
-            return await _inner.GetActiveModuleCodesAsync(tenantId);
+            return await _inner.GetActiveModuleCodesAsync(tenantId, cancellationToken);
         }
 
-        var key = await DataKeyAsync(tenantId, "modules");
-        var cached = await ReadAsync<string[]>(key);
+        var key = await DataKeyAsync(tenantId, "modules", cancellationToken);
+        var cached = await ReadAsync<string[]>(key, cancellationToken);
         if (cached is not null)
         {
             return cached;
         }
 
-        var codes = (await _inner.GetActiveModuleCodesAsync(tenantId)).ToArray();
-        await WriteAsync(key, codes);
+        var codes = (await _inner.GetActiveModuleCodesAsync(tenantId, cancellationToken)).ToArray();
+        await WriteAsync(key, codes, cancellationToken);
         return codes;
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<SecurityModule>> GetActiveCatalogAsync(string tenantId)
+    public Task<IReadOnlyList<SecurityModule>> GetActiveCatalogAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         // The catalog is what an administrator is editing. Caching it would keep a module on screen after the plan
         // turned it off.
-        return _inner.GetActiveCatalogAsync(tenantId);
+        return _inner.GetActiveCatalogAsync(tenantId, cancellationToken);
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<UserPermissionOverride>> GetUserOverridesAsync(string userId)
+    public Task<IReadOnlyList<UserPermissionOverride>> GetUserOverridesAsync(string userId, CancellationToken cancellationToken = default)
     {
         // A deny has to win on the next request. Caching it would leave the
         // blocked permission usable until the entry expired.
-        return _inner.GetUserOverridesAsync(userId);
+        return _inner.GetUserOverridesAsync(userId, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -150,16 +150,16 @@ public class TenantCacheStore : ISecurityStore, ISecurityCacheInvalidator
 
     private static string NewGeneration() => Guid.NewGuid().ToString("N");
 
-    private async Task<string> DataKeyAsync(string tenantId, string entry)
+    private async Task<string> DataKeyAsync(string tenantId, string entry, CancellationToken cancellationToken)
     {
         // Read from the shared cache every time: a generation kept per instance would hide an invalidation made on
         // another instance.
         var generationKey = GenerationKey(tenantId);
-        var generation = await _cache.GetStringAsync(generationKey);
+        var generation = await _cache.GetStringAsync(generationKey, cancellationToken);
         if (string.IsNullOrEmpty(generation))
         {
             generation = NewGeneration();
-            await WriteGenerationAsync(generationKey, generation, CancellationToken.None);
+            await WriteGenerationAsync(generationKey, generation, cancellationToken);
         }
 
         return KeyPrefix + tenantId + ":" + generation + ":" + entry;
@@ -176,9 +176,9 @@ public class TenantCacheStore : ISecurityStore, ISecurityCacheInvalidator
             cancellationToken);
     }
 
-    private async Task<T?> ReadAsync<T>(string key)
+    private async Task<T?> ReadAsync<T>(string key, CancellationToken cancellationToken)
     {
-        var bytes = await _cache.GetAsync(key);
+        var bytes = await _cache.GetAsync(key, cancellationToken);
         if (bytes is null)
         {
             return default;
@@ -195,11 +195,12 @@ public class TenantCacheStore : ISecurityStore, ISecurityCacheInvalidator
         }
     }
 
-    private Task WriteAsync<T>(string key, T value)
+    private Task WriteAsync<T>(string key, T value, CancellationToken cancellationToken)
     {
         return _cache.SetAsync(
             key,
             JsonSerializer.SerializeToUtf8Bytes(value),
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = _expiration });
+            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = _expiration },
+            cancellationToken);
     }
 }

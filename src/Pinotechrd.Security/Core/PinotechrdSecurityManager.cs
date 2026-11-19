@@ -51,20 +51,22 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     #region User Management
 
     /// <inheritdoc />
-    public async Task<IEnumerable<TUser>> GetUsersAsync()
+    public async Task<IEnumerable<TUser>> GetUsersAsync(CancellationToken cancellationToken = default)
     {
-        return await _userManager.Users.ToListAsync();
+        return await _userManager.Users.ToListAsync(cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<TUser?> GetUserByIdAsync(string userId)
+    public async Task<TUser?> GetUserByIdAsync(string userId, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         return await _userManager.FindByIdAsync(userId);
     }
 
     /// <inheritdoc />
-    public async Task<TUser?> GetUserByEmailAsync(string email)
+    public async Task<TUser?> GetUserByEmailAsync(string email, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         return await _userManager.FindByEmailAsync(email);
     }
 
@@ -83,7 +85,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// entities the attempt added to the change tracker are detached, so a later <c>SaveChanges</c> does not write
     /// them again.
     /// </remarks>
-    public async Task<bool> CreateUserAsync(TUser user, string password, IEnumerable<string>? roles = null)
+    public async Task<bool> CreateUserAsync(TUser user, string password, IEnumerable<string>? roles = null, CancellationToken cancellationToken = default)
     {
         var roleNames = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -95,7 +97,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
 
         if (_securityDb is not DbContext context || !context.Database.IsRelational())
         {
-            return await CreateUserWithRolesAsync(user, password, roleNames);
+            return await CreateUserWithRolesAsync(user, password, roleNames, cancellationToken);
         }
 
         if (context.ChangeTracker.HasChanges())
@@ -109,40 +111,40 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
 
         if (context.Database.CurrentTransaction is { } current)
         {
-            return await CreateUserInCurrentTransactionAsync(context, current, tracked, user, password, roleNames);
+            return await CreateUserInCurrentTransactionAsync(context, current, tracked, user, password, roleNames, cancellationToken);
         }
 
         if (System.Transactions.Transaction.Current != null)
         {
             // The TransactionScope owns atomicity; an execution strategy cannot retry inside it.
-            return await RunAndDetachOnFailureAsync(context, tracked, () => CreateUserWithRolesAsync(user, password, roleNames));
+            return await RunAndDetachOnFailureAsync(context, tracked, () => CreateUserWithRolesAsync(user, password, roleNames, cancellationToken));
         }
 
         var strategy = context.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(
             0,
-            async (_, _, cancellationToken) =>
+            async (_, _, ct) =>
             {
-                await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+                await using var transaction = await context.Database.BeginTransactionAsync(ct);
                 return await RunAndDetachOnFailureAsync(context, tracked, async () =>
                 {
-                    if (!await CreateUserWithRolesAsync(user, password, roleNames))
+                    if (!await CreateUserWithRolesAsync(user, password, roleNames, ct))
                     {
-                        await transaction.RollbackAsync(cancellationToken);
+                        await transaction.RollbackAsync(ct);
                         return false;
                     }
 
-                    await transaction.CommitAsync(cancellationToken);
+                    await transaction.CommitAsync(ct);
                     return true;
                 });
             },
-            async (_, _, _) =>
+            async (_, _, ct) =>
             {
                 // Called after a transient error: the commit may have reached the database before the error.
-                var stored = await UserExistsWithRolesAsync(context, tracked, user, roleNames);
+                var stored = await UserExistsWithRolesAsync(context, tracked, user, roleNames, ct);
                 return new ExecutionResult<bool>(stored, stored);
             },
-            CancellationToken.None);
+            cancellationToken);
     }
 
     private async Task<bool> CreateUserInCurrentTransactionAsync(
@@ -151,28 +153,33 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         HashSet<object> tracked,
         TUser user,
         string password,
-        IReadOnlyCollection<string> roleNames)
+        IReadOnlyCollection<string> roleNames,
+        CancellationToken cancellationToken)
     {
         return await SavepointScope.RunAsync(
             transaction,
             "pinotechrd_create_user",
             "CreateUserAsync",
-            () => RunAndDetachOnFailureAsync(context, tracked, () => CreateUserWithRolesAsync(user, password, roleNames)));
+            () => RunAndDetachOnFailureAsync(context, tracked, () => CreateUserWithRolesAsync(user, password, roleNames, cancellationToken)),
+            cancellationToken);
     }
 
-    private async Task<bool> CreateUserWithRolesAsync(TUser user, string password, IReadOnlyCollection<string> roleNames)
+    private async Task<bool> CreateUserWithRolesAsync(TUser user, string password, IReadOnlyCollection<string> roleNames, CancellationToken cancellationToken)
     {
         // Checked in every attempt, inside its transaction, so a role deleted since an earlier attempt returns false.
         foreach (var roleName in roleNames)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!await _roleManager.RoleExistsAsync(roleName)) return false;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _userManager.CreateAsync(user, password);
         if (!result.Succeeded) return false;
 
         if (roleNames.Count == 0) return true;
 
+        cancellationToken.ThrowIfCancellationRequested();
         var rolesResult = await _userManager.AddToRolesAsync(user, roleNames);
         return rolesResult.Succeeded;
     }
@@ -185,13 +192,16 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         DbContext context,
         HashSet<object> tracked,
         TUser user,
-        IReadOnlyCollection<string> roleNames)
+        IReadOnlyCollection<string> roleNames,
+        CancellationToken cancellationToken)
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var stored = await _userManager.FindByIdAsync(await _userManager.GetUserIdAsync(user));
             if (stored == null) return false;
 
+            cancellationToken.ThrowIfCancellationRequested();
             var assigned = (await _userManager.GetRolesAsync(stored)).Select(NormalizeRole).ToHashSet(StringComparer.Ordinal);
             return roleNames.All(roleName => assigned.Contains(NormalizeRole(roleName)));
         }
@@ -235,8 +245,9 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     }
 
     /// <inheritdoc />
-    public async Task<bool> UpdateUserAsync(TUser user)
+    public async Task<bool> UpdateUserAsync(TUser user, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _userManager.UpdateAsync(user);
         return result.Succeeded;
     }
@@ -247,15 +258,17 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// propagates and the user is not deleted. If the delete then fails, the method returns <c>false</c> and the
     /// tokens stay revoked. Access tokens already issued stay valid until they expire.
     /// </remarks>
-    public async Task<bool> DeleteUserAsync(string userId)
+    public async Task<bool> DeleteUserAsync(string userId, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null) return false;
 
         // Revoke under the stored id: tokens are saved under GetUserIdAsync, and FindByIdAsync also accepts
         // other spellings of the same id (upper case, braces), which the store would not match.
-        if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user));
+        if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), cancellationToken);
 
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _userManager.DeleteAsync(user);
         return result.Succeeded;
     }
@@ -265,21 +278,24 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// Deactivating a user also revokes all its refresh tokens and renews its security stamp, which invalidates
     /// pending two-factor, reset and confirmation tokens. Access tokens already issued stay valid until they expire.
     /// </remarks>
-    public async Task<bool> SetUserActiveStatusAsync(string userId, bool isActive)
+    public async Task<bool> SetUserActiveStatusAsync(string userId, bool isActive, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null) return false;
 
         // Try to access IsActive if it's a BaseSecurityUser
         if (user is BaseSecurityUser securityUser)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             securityUser.IsActive = isActive;
             var result = await _userManager.UpdateAsync(user);
             if (!result.Succeeded) return false;
 
             if (!isActive)
             {
-                if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user));
+                // The user is already stored inactive: finish the revocation even if the request is cancelled.
+                if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), CancellationToken.None);
                 if (_userManager.SupportsUserSecurityStamp)
                 {
                     var stampResult = await _userManager.UpdateSecurityStampAsync(user);
@@ -294,15 +310,16 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     }
 
     /// <inheritdoc />
-    public async Task<bool> RevokeUserSessionsAsync(string userId)
+    public async Task<bool> RevokeUserSessionsAsync(string userId, CancellationToken cancellationToken = default)
     {
         if (_refreshTokenStore == null) return false;
 
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null) return false;
 
         // Revoke under the stored id: FindByIdAsync also accepts other spellings of the same id.
-        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user));
+        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), cancellationToken);
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
         var stampResult = await _userManager.UpdateSecurityStampAsync(user);
@@ -310,22 +327,27 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     }
 
     /// <inheritdoc />
-    public async Task<bool> ResetUserPasswordAsync(string userId, string newPassword)
+    public async Task<bool> ResetUserPasswordAsync(string userId, string newPassword, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null) return false;
 
+        cancellationToken.ThrowIfCancellationRequested();
         var token = await _userManager.GeneratePasswordResetTokenAsync(user);
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _userManager.ResetPasswordAsync(user, token, newPassword);
         return result.Succeeded;
     }
 
     /// <inheritdoc />
-    public async Task<bool> ChangeUserPasswordAsync(string userId, string currentPassword, string newPassword)
+    public async Task<bool> ChangeUserPasswordAsync(string userId, string currentPassword, string newPassword, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null) return false;
 
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _userManager.ChangePasswordAsync(user, currentPassword, newPassword);
         return result.Succeeded;
     }
@@ -335,48 +357,54 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     #region Role Management
 
     /// <inheritdoc />
-    public async Task<IEnumerable<TRole>> GetRolesAsync()
+    public async Task<IEnumerable<TRole>> GetRolesAsync(CancellationToken cancellationToken = default)
     {
-        return await _roleManager.Roles.ToListAsync();
+        return await _roleManager.Roles.ToListAsync(cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<TRole?> GetRoleByIdAsync(string roleId)
+    public async Task<TRole?> GetRoleByIdAsync(string roleId, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         return await _roleManager.FindByIdAsync(roleId);
     }
 
     /// <inheritdoc />
-    public async Task<TRole?> GetRoleByNameAsync(string roleName)
+    public async Task<TRole?> GetRoleByNameAsync(string roleName, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         return await _roleManager.FindByNameAsync(roleName);
     }
 
     /// <inheritdoc />
-    public async Task<bool> CreateRoleAsync(TRole role, string? description = null)
+    public async Task<bool> CreateRoleAsync(TRole role, string? description = null, CancellationToken cancellationToken = default)
     {
         if (role is BaseSecurityRole securityRole && !string.IsNullOrEmpty(description))
         {
             securityRole.Description = description;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _roleManager.CreateAsync(role);
         return result.Succeeded;
     }
 
     /// <inheritdoc />
-    public async Task<bool> UpdateRoleAsync(TRole role)
+    public async Task<bool> UpdateRoleAsync(TRole role, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _roleManager.UpdateAsync(role);
         return result.Succeeded;
     }
 
     /// <inheritdoc />
-    public async Task<bool> DeleteRoleAsync(string roleId)
+    public async Task<bool> DeleteRoleAsync(string roleId, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var role = await _roleManager.FindByIdAsync(roleId);
         if (role == null) return false;
 
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _roleManager.DeleteAsync(role);
         return result.Succeeded;
     }
@@ -386,30 +414,36 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     #region User-Role Relationships
 
     /// <inheritdoc />
-    public async Task<IEnumerable<string>> GetUserRolesAsync(string userId)
+    public async Task<IEnumerable<string>> GetUserRolesAsync(string userId, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null) return Enumerable.Empty<string>();
 
+        cancellationToken.ThrowIfCancellationRequested();
         return await _userManager.GetRolesAsync(user);
     }
 
     /// <inheritdoc />
-    public async Task<bool> AssignRolesToUserAsync(string userId, IEnumerable<string> roleNames)
+    public async Task<bool> AssignRolesToUserAsync(string userId, IEnumerable<string> roleNames, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null) return false;
 
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _userManager.AddToRolesAsync(user, roleNames);
         return result.Succeeded;
     }
 
     /// <inheritdoc />
-    public async Task<bool> RemoveRolesFromUserAsync(string userId, IEnumerable<string> roleNames)
+    public async Task<bool> RemoveRolesFromUserAsync(string userId, IEnumerable<string> roleNames, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null) return false;
 
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await _userManager.RemoveFromRolesAsync(user, roleNames);
         return result.Succeeded;
     }
@@ -419,24 +453,24 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     #region Permission Management
 
     /// <inheritdoc />
-    public async Task<IEnumerable<SecurityPermission>> GetPermissionsAsync()
+    public async Task<IEnumerable<SecurityPermission>> GetPermissionsAsync(CancellationToken cancellationToken = default)
     {
         return await _securityDb.Permissions
             .Include(p => p.Module)
             .OrderBy(p => p.Module.DisplayOrder)
             .ThenBy(p => p.Name)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<IEnumerable<string>> GetRolePermissionsAsync(string roleId)
+    public async Task<IEnumerable<string>> GetRolePermissionsAsync(string roleId, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParse(roleId, out var roleGuid)) return Enumerable.Empty<string>();
 
         return await _securityDb.RolePermissions
             .Where(rp => rp.RoleId == roleGuid)
             .Select(rp => rp.Permission.Code)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     /// <inheritdoc />
@@ -448,7 +482,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// <exception cref="InvalidOperationException">
     /// The context has pending changes, or its provider is not relational.
     /// </exception>
-    public async Task<bool> AssignPermissionsToRoleAsync(string roleId, IEnumerable<string> permissionCodes)
+    public async Task<bool> AssignPermissionsToRoleAsync(string roleId, IEnumerable<string> permissionCodes, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParse(roleId, out var roleGuid) || _securityDb is not DbContext dbContext) return false;
 
@@ -472,16 +506,17 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
                     : await _securityDb.Permissions
                         .Where(p => wanted.Contains(p.Code))
                         .Select(p => p.Id)
-                        .ToListAsync();
+                        .ToListAsync(cancellationToken);
 
                 return permissionIds.Count != wanted.Count
                     ? null
                     : permissionIds.Select(permissionId => RolePermission.Create(roleGuid, permissionId)).ToList();
-            });
+            },
+            cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<SecurityModule>> GetActiveCatalogAsync(string tenantId)
+    public async Task<IReadOnlyList<SecurityModule>> GetActiveCatalogAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var codes = await (from sub in _securityDb.SystemSubscriptions
@@ -492,7 +527,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
                                  && sub.StartDate <= today
                                  && (!sub.EndDate.HasValue || sub.EndDate >= today)
                                  && mod.IsActive
-                           select mod.Code).ToListAsync();
+                           select mod.Code).ToListAsync(cancellationToken);
 
         if (codes.Count == 0)
         {
@@ -502,11 +537,11 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         var modules = await _securityDb.Modules
             .Where(module => module.IsActive && codes.Contains(module.Code))
             .OrderBy(module => module.DisplayOrder)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
         var moduleIds = modules.Select(module => module.Id).ToList();
         var permissions = await _securityDb.Permissions
             .Where(permission => permission.IsActive && moduleIds.Contains(permission.ModuleId))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         foreach (var module in modules)
         {
@@ -517,7 +552,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<UserPermissionOverride>> GetUserOverridesAsync(string userId)
+    public async Task<IReadOnlyList<UserPermissionOverride>> GetUserOverridesAsync(string userId, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParse(userId, out var userGuid))
         {
@@ -527,7 +562,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         return await _securityDb.UserModulePermissions
             .Where(row => row.UserId == userGuid)
             .Select(row => new UserPermissionOverride(row.Permission.Code, row.AccessType))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     /// <inheritdoc />
@@ -537,7 +572,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// <exception cref="InvalidOperationException">
     /// The context has pending changes, or its provider is not relational.
     /// </exception>
-    public async Task<bool> ReplaceUserOverridesAsync(string userId, IEnumerable<UserPermissionOverride> overrides)
+    public async Task<bool> ReplaceUserOverridesAsync(string userId, IEnumerable<UserPermissionOverride> overrides, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParse(userId, out var userGuid) || _securityDb is not DbContext dbContext)
         {
@@ -576,7 +611,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
             {
                 var permissions = wanted.Count == 0
                     ? []
-                    : await _securityDb.Permissions.Where(permission => wanted.Contains(permission.Code)).ToListAsync();
+                    : await _securityDb.Permissions.Where(permission => wanted.Contains(permission.Code)).ToListAsync(cancellationToken);
                 if (permissions.Count != wanted.Count)
                 {
                     return null;
@@ -588,7 +623,8 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
                         ? UserModulePermission.CreateDeny(userGuid, permissionIdByCode[pair.Key])
                         : UserModulePermission.CreateAllow(userGuid, permissionIdByCode[pair.Key]))
                     .ToList();
-            });
+            },
+            cancellationToken);
     }
 
     private const int MaxReplaceAttempts = 5;
@@ -633,7 +669,8 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         string operation,
         Guid parentId,
         Expression<Func<TRow, bool>> ownedByParent,
-        Func<Task<IReadOnlyList<TRow>?>> createRows)
+        Func<Task<IReadOnlyList<TRow>?>> createRows,
+        CancellationToken cancellationToken)
         where TParent : class
         where TRow : class
     {
@@ -653,13 +690,13 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
 
         if (db.Database.CurrentTransaction is { } current)
         {
-            return await ReplaceRowsInCurrentTransactionAsync<TParent, TRow>(db, current, operation, parentId, ownedByParent, createRows);
+            return await ReplaceRowsInCurrentTransactionAsync<TParent, TRow>(db, current, operation, parentId, ownedByParent, createRows, cancellationToken);
         }
 
         if (System.Transactions.Transaction.Current != null)
         {
             // The TransactionScope owns atomicity; an execution strategy cannot retry inside it.
-            return await ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows);
+            return await ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows, cancellationToken);
         }
 
         var strategy = db.Database.CreateExecutionStrategy();
@@ -667,18 +704,18 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         {
             try
             {
-                return await strategy.ExecuteAsync(async () =>
+                return await strategy.ExecuteAsync(async ct =>
                 {
-                    await using var transaction = await db.Database.BeginTransactionAsync();
-                    if (!await ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows))
+                    await using var transaction = await db.Database.BeginTransactionAsync(ct);
+                    if (!await ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows, ct))
                     {
-                        await transaction.RollbackAsync();
+                        await transaction.RollbackAsync(ct);
                         return false;
                     }
 
-                    await transaction.CommitAsync();
+                    await transaction.CommitAsync(ct);
                     return true;
-                });
+                }, cancellationToken);
             }
             catch (DbUpdateException) when (attempt < MaxReplaceAttempts)
             {
@@ -693,7 +730,8 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         string operation,
         Guid parentId,
         Expression<Func<TRow, bool>> ownedByParent,
-        Func<Task<IReadOnlyList<TRow>?>> createRows)
+        Func<Task<IReadOnlyList<TRow>?>> createRows,
+        CancellationToken cancellationToken)
         where TParent : class
         where TRow : class
     {
@@ -701,14 +739,16 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
             transaction,
             "pinotechrd_replace",
             operation,
-            () => ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows));
+            () => ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows, cancellationToken),
+            cancellationToken);
     }
 
     private static async Task<bool> ReplaceRowsOnceAsync<TParent, TRow>(
         DbContext db,
         Guid parentId,
         Expression<Func<TRow, bool>> ownedByParent,
-        Func<Task<IReadOnlyList<TRow>?>> createRows)
+        Func<Task<IReadOnlyList<TRow>?>> createRows,
+        CancellationToken cancellationToken)
         where TParent : class
         where TRow : class
     {
@@ -716,7 +756,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
             .Where(parent => EF.Property<Guid>(parent, "Id") == parentId)
             .ExecuteUpdateAsync(setters => setters.SetProperty(
                 parent => EF.Property<string?>(parent, "ConcurrencyStamp"),
-                parent => EF.Property<string?>(parent, "ConcurrencyStamp")));
+                parent => EF.Property<string?>(parent, "ConcurrencyStamp")), cancellationToken);
         if (locked == 0) return false;
 
         // Checked under the lock, so a permission deleted since the caller's request returns false.
@@ -730,12 +770,12 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
             entry.State = EntityState.Detached;
         }
 
-        await db.Set<TRow>().Where(ownedByParent).ExecuteDeleteAsync();
+        await db.Set<TRow>().Where(ownedByParent).ExecuteDeleteAsync(cancellationToken);
 
         db.Set<TRow>().AddRange(rows);
         try
         {
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(cancellationToken);
         }
         catch
         {
