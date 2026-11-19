@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Pinotechrd.Security.Entities;
 using Pinotechrd.Security.Enums;
 using Pinotechrd.Security.Interfaces;
@@ -271,31 +273,31 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// <inheritdoc />
     /// <remarks>
     /// Codes are normalised (trimmed, upper case). Returns <see langword="false"/> and changes nothing when a code
-    /// is outside the code alphabet or names a permission that does not exist.
+    /// is outside the code alphabet or names a permission that does not exist, or when the role does not exist.
+    /// See <see cref="ReplaceRowsAsync{TParent, TRow}"/> for the transaction, locking and retry rules.
     /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The context has pending changes, or its provider is not relational.
+    /// </exception>
     public async Task<bool> AssignPermissionsToRoleAsync(string roleId, IEnumerable<string> permissionCodes)
     {
-        if (!Guid.TryParse(roleId, out var roleGuid)) return false;
+        if (!Guid.TryParse(roleId, out var roleGuid) || _securityDb is not DbContext dbContext) return false;
 
-        // Verify role existence
-        var role = await _roleManager.FindByIdAsync(roleId);
-        if (role == null) return false;
-
-        try
+        // Every requested code must be valid; whether it exists is checked inside the transaction.
+        var wanted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var code in permissionCodes ?? [])
         {
-            // 1. Get current assignments
-            // Since ISecurityDbContext only has IQueryable, we might need to cast to DbContext to use the DbSet for removal
-            // but the implementation PinotechrdSecurityDbContext IS a DbContext.
-            if (_securityDb is DbContext dbContext)
-            {
-                // 1. Every requested code must be valid and exist; otherwise nothing changes.
-                var wanted = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var code in permissionCodes ?? [])
-                {
-                    if (!SecurityCodes.TryNormalize(code, out var normalized)) return false;
-                    wanted.Add(normalized);
-                }
+            if (!SecurityCodes.TryNormalize(code, out var normalized)) return false;
+            wanted.Add(normalized);
+        }
 
+        return await ReplaceRowsAsync<TRole, RolePermission>(
+            dbContext,
+            nameof(AssignPermissionsToRoleAsync),
+            roleGuid,
+            rp => rp.RoleId == roleGuid,
+            async () =>
+            {
                 var permissionIds = wanted.Count == 0
                     ? []
                     : await _securityDb.Permissions
@@ -303,29 +305,10 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
                         .Select(p => p.Id)
                         .ToListAsync();
 
-                if (permissionIds.Count != wanted.Count) return false;
-
-                // 2. Replace the current assignments
-                var currentAssignments = await dbContext.Set<RolePermission>()
-                    .Where(rp => rp.RoleId == roleGuid)
-                    .ToListAsync();
-                dbContext.Set<RolePermission>().RemoveRange(currentAssignments);
-
-                foreach (var permissionId in permissionIds)
-                {
-                    dbContext.Set<RolePermission>().Add(RolePermission.Create(roleGuid, permissionId));
-                }
-
-                await _securityDb.SaveChangesAsync();
-                return true;
-            }
-
-            return false;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
+                return permissionIds.Count != wanted.Count
+                    ? null
+                    : permissionIds.Select(permissionId => RolePermission.Create(roleGuid, permissionId)).ToList();
+            });
     }
 
     /// <inheritdoc />
@@ -379,6 +362,12 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// See <see cref="ReplaceRowsAsync{TParent, TRow}"/> for the transaction, locking and retry rules.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The context has pending changes, or its provider is not relational.
+    /// </exception>
     public async Task<bool> ReplaceUserOverridesAsync(string userId, IEnumerable<UserPermissionOverride> overrides)
     {
         if (!Guid.TryParse(userId, out var userGuid) || _securityDb is not DbContext dbContext)
@@ -408,29 +397,223 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         }
 
         var wanted = byCode.Keys.ToList();
-        var permissions = wanted.Count == 0
-            ? []
-            : await _securityDb.Permissions.Where(permission => wanted.Contains(permission.Code)).ToListAsync();
-        if (permissions.Count != wanted.Count)
+
+        return await ReplaceRowsAsync<TUser, UserModulePermission>(
+            dbContext,
+            nameof(ReplaceUserOverridesAsync),
+            userGuid,
+            row => row.UserId == userGuid,
+            async () =>
+            {
+                var permissions = wanted.Count == 0
+                    ? []
+                    : await _securityDb.Permissions.Where(permission => wanted.Contains(permission.Code)).ToListAsync();
+                if (permissions.Count != wanted.Count)
+                {
+                    return null;
+                }
+
+                var permissionIdByCode = permissions.ToDictionary(permission => permission.Code, permission => permission.Id, StringComparer.Ordinal);
+                return byCode
+                    .Select(pair => pair.Value == PermissionAccessType.Deny
+                        ? UserModulePermission.CreateDeny(userGuid, permissionIdByCode[pair.Key])
+                        : UserModulePermission.CreateAllow(userGuid, permissionIdByCode[pair.Key]))
+                    .ToList();
+            });
+    }
+
+    private const int MaxReplaceAttempts = 5;
+
+    /// <summary>
+    /// Replaces every <typeparamref name="TRow"/> owned by one <typeparamref name="TParent"/> row with the rows from
+    /// <paramref name="createRows"/>, atomically.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Each attempt first runs a no-op <c>UPDATE</c> on the parent row (<c>SET ConcurrencyStamp = ConcurrencyStamp</c>).
+    /// That holds the row's write lock until the transaction ends, so a second replace for the same parent waits, then
+    /// deletes what the first one committed. Without the lock, two READ COMMITTED transactions could both delete the
+    /// old rows and both insert. Then, still holding the lock, it runs <paramref name="createRows"/> (which checks that
+    /// the requested permissions exist), deletes the current rows with one set-based <c>DELETE</c> and inserts the new
+    /// ones with <c>SaveChanges</c>.
+    /// </para>
+    /// <para>
+    /// Outside any transaction, each attempt runs in its own transaction through the context's execution strategy. A
+    /// <see cref="DbUpdateException"/> from <c>SaveChanges</c> (a duplicate pair or a concurrency conflict) rolls the
+    /// attempt back and the whole replace runs again, up to <see cref="MaxReplaceAttempts"/> attempts; the last one
+    /// propagates. Errors from the lock or the delete (a deadlock, a lock timeout) are not retried here: they propagate
+    /// unless the execution strategy treats them as transient.
+    /// </para>
+    /// <para>
+    /// Inside a transaction the caller opened, the replace runs once, without retry, behind a savepoint: a failure
+    /// rolls back to the savepoint and propagates, so the caller's transaction keeps the previous rows. When the
+    /// provider does not support savepoints, a failure can leave the parent without rows in that transaction, and the
+    /// caller must roll it back. Inside a <see cref="System.Transactions.TransactionScope"/> the replace runs once and
+    /// the scope owns atomicity; the connection must be enlisted in it (opened inside the scope).
+    /// </para>
+    /// </remarks>
+    /// <returns>
+    /// <see langword="false"/>, with nothing changed, when the parent row does not exist or <paramref name="createRows"/>
+    /// returns <see langword="null"/>.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// The context has pending changes, or its provider is not relational.
+    /// </exception>
+    private static async Task<bool> ReplaceRowsAsync<TParent, TRow>(
+        DbContext db,
+        string operation,
+        Guid parentId,
+        Expression<Func<TRow, bool>> ownedByParent,
+        Func<Task<IReadOnlyList<TRow>?>> createRows)
+        where TParent : class
+        where TRow : class
+    {
+        if (!db.Database.IsRelational())
         {
-            return false;
+            throw new InvalidOperationException(
+                $"{operation} needs a relational database provider, because it runs in a transaction and uses " +
+                "ExecuteUpdate and ExecuteDelete.");
         }
 
-        var existing = await dbContext.Set<UserModulePermission>()
-            .Where(row => row.UserId == userGuid)
-            .ToListAsync();
-        dbContext.Set<UserModulePermission>().RemoveRange(existing);
-
-        foreach (var (code, access) in byCode)
+        if (db.ChangeTracker.HasChanges())
         {
-            var permission = permissions.First(item => string.Equals(item.Code, code, StringComparison.Ordinal));
-            var row = access == PermissionAccessType.Deny
-                ? UserModulePermission.CreateDeny(userGuid, permission.Id)
-                : UserModulePermission.CreateAllow(userGuid, permission.Id);
-            dbContext.Set<UserModulePermission>().Add(row);
+            throw new InvalidOperationException(
+                $"{operation} needs a context without pending changes: save or discard them first, because the " +
+                "replace saves the context and may roll it back or retry it.");
         }
 
-        await _securityDb.SaveChangesAsync();
+        if (db.Database.CurrentTransaction is { } current)
+        {
+            return await ReplaceRowsInCurrentTransactionAsync<TParent, TRow>(db, current, operation, parentId, ownedByParent, createRows);
+        }
+
+        if (System.Transactions.Transaction.Current != null)
+        {
+            // The TransactionScope owns atomicity; an execution strategy cannot retry inside it.
+            return await ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows);
+        }
+
+        var strategy = db.Database.CreateExecutionStrategy();
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await strategy.ExecuteAsync(async () =>
+                {
+                    await using var transaction = await db.Database.BeginTransactionAsync();
+                    if (!await ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows))
+                    {
+                        await transaction.RollbackAsync();
+                        return false;
+                    }
+
+                    await transaction.CommitAsync();
+                    return true;
+                });
+            }
+            catch (DbUpdateException) when (attempt < MaxReplaceAttempts)
+            {
+                // The transaction was rolled back when it was disposed; run the whole replace again.
+            }
+        }
+    }
+
+    private static async Task<bool> ReplaceRowsInCurrentTransactionAsync<TParent, TRow>(
+        DbContext db,
+        IDbContextTransaction transaction,
+        string operation,
+        Guid parentId,
+        Expression<Func<TRow, bool>> ownedByParent,
+        Func<Task<IReadOnlyList<TRow>?>> createRows)
+        where TParent : class
+        where TRow : class
+    {
+        if (!transaction.SupportsSavepoints)
+        {
+            // Without savepoints a failure cannot be undone here; the caller must roll back its transaction.
+            return await ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows);
+        }
+
+        const string savepoint = "pinotechrd_replace";
+        await transaction.CreateSavepointAsync(savepoint);
+        bool replaced;
+        try
+        {
+            replaced = await ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows);
+        }
+        catch (Exception original)
+        {
+            try
+            {
+                await transaction.RollbackToSavepointAsync(savepoint);
+            }
+            catch (Exception rollbackFailure)
+            {
+                throw new AggregateException(
+                    $"{operation} failed, and rolling back to its savepoint failed too; roll back the transaction.",
+                    original,
+                    rollbackFailure);
+            }
+
+            throw;
+        }
+
+        if (replaced)
+        {
+            await transaction.ReleaseSavepointAsync(savepoint);
+        }
+        else
+        {
+            await transaction.RollbackToSavepointAsync(savepoint);
+        }
+
+        return replaced;
+    }
+
+    private static async Task<bool> ReplaceRowsOnceAsync<TParent, TRow>(
+        DbContext db,
+        Guid parentId,
+        Expression<Func<TRow, bool>> ownedByParent,
+        Func<Task<IReadOnlyList<TRow>?>> createRows)
+        where TParent : class
+        where TRow : class
+    {
+        var locked = await db.Set<TParent>()
+            .Where(parent => EF.Property<Guid>(parent, "Id") == parentId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                parent => EF.Property<string?>(parent, "ConcurrencyStamp"),
+                parent => EF.Property<string?>(parent, "ConcurrencyStamp")));
+        if (locked == 0) return false;
+
+        // Checked under the lock, so a permission deleted since the caller's request returns false.
+        var rows = await createRows();
+        if (rows == null) return false;
+
+        // The DELETE below bypasses the change tracker: stop tracking the rows it removes.
+        var isOwned = ownedByParent.Compile();
+        foreach (var entry in db.ChangeTracker.Entries<TRow>().Where(entry => isOwned(entry.Entity)).ToList())
+        {
+            entry.State = EntityState.Detached;
+        }
+
+        await db.Set<TRow>().Where(ownedByParent).ExecuteDeleteAsync();
+
+        db.Set<TRow>().AddRange(rows);
+        try
+        {
+            await db.SaveChangesAsync();
+        }
+        catch
+        {
+            // Leave nothing of this attempt pending in the context.
+            foreach (var row in rows)
+            {
+                db.Entry(row).State = EntityState.Detached;
+            }
+
+            throw;
+        }
+
         return true;
     }
 

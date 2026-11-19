@@ -376,6 +376,35 @@ services.AddPinotechrdSecurity<AppDbContext, AppUser, AppRole>(o => o.AllowUnver
 
 `AllowUnverifiedTenantMembership` is one value shared by every `AddPinotechrdSecurity` call in the container, and if you bind `PinotechrdSecurityOptions` from configuration, configuration can turn the check off. The check cannot see the database provider: a provider that ignores schemas (SQLite, InMemory) on one shared database puts every tenant's users in the same tables; that setup is only safe when each tenant has its own database.
 
+### Role permissions and user overrides
+
+`AssignPermissionsToRoleAsync` and `ReplaceUserOverridesAsync` replace all of a role's or user's rows in one transaction that first locks the role or user row, so concurrent calls for the same role or user run one after the other and the last one wins. The requested permissions are checked under that lock. The model has a unique index on `role_permissions` (`RoleId`, `PermissionId`) and on `user_permissions` (`UserId`, `PermissionId`).
+
+- **Requirements.** A relational provider, and a context without pending changes: both methods throw `InvalidOperationException` otherwise, because the replace saves the context and may roll it back or retry it.
+- **Retries.** Outside a transaction, each attempt runs in its own transaction through the context's execution strategy. A `DbUpdateException` from saving the new rows is retried up to five times, then propagates. Errors from the lock or the delete (a deadlock, a lock timeout) are not retried by these methods; they propagate unless your execution strategy treats them as transient.
+- **Your own transaction.** Inside a transaction you opened (`BeginTransaction`), the replace runs once behind a savepoint: a failure rolls back to the savepoint and propagates, and your transaction still holds the previous rows. A provider without savepoints cannot undo a failed replace; roll back your transaction then. Inside a `TransactionScope` the replace runs once and the scope owns atomicity; open the connection inside the scope so it is enlisted.
+- **Side effects of the lock.** The lock is a no-op `UPDATE ... SET "ConcurrencyStamp" = "ConcurrencyStamp"` on the role or user row. It writes a new row version: `UPDATE` triggers fire and `xmin` or `rowversion` changes. If you map one of those as a concurrency token on users or roles, reload a tracked role or user after the call.
+
+**Upgrading from 1.2.0-preview.3 or earlier.** Those indexes are new, so:
+
+1. Remove duplicate rows from every tenant schema, keeping one per pair, or the migration fails:
+
+   ```sql
+   -- PostgreSQL, run in every tenant schema. Columns use the default EF names (quoted PascalCase);
+   -- adapt them only if your context applies a naming convention.
+   DELETE FROM role_permissions a USING role_permissions b
+    WHERE a."RoleId" = b."RoleId" AND a."PermissionId" = b."PermissionId" AND a."Id" > b."Id";
+   DELETE FROM user_permissions a USING user_permissions b
+    WHERE a."UserId" = b."UserId" AND a."PermissionId" = b."PermissionId" AND a."Id" > b."Id";
+   ```
+
+2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add UniquePermissionAssignments`. For tenants provisioned with `GenerateCreateScript` instead of migrations, create the indexes in each tenant schema with the names EF Core gives them:
+
+   ```sql
+   CREATE UNIQUE INDEX "IX_role_permissions_RoleId_PermissionId" ON role_permissions ("RoleId", "PermissionId");
+   CREATE UNIQUE INDEX "IX_user_permissions_UserId_PermissionId" ON user_permissions ("UserId", "PermissionId");
+   ```
+
 ### Login and two-factor
 
 - Tokens are issued only for the tenant the request was resolved for. `LoginAsync`, `VerifyTwoFactorCodeAsync` and `RefreshAsync` fail when no tenant is resolved or when the `tenantId` passed in differs from it. Whether the user belongs to that tenant depends on your database setup: see **Membership** under [Database schemas](#database-schemas-usepinotechrdsecurity).

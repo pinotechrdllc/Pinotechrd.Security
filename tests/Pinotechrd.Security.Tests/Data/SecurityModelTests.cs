@@ -462,4 +462,28 @@ public class SecurityModelTests
         off.Database.GenerateCreateScript().Should().NotContain("two_factor_attempts");
         on.Database.GenerateCreateScript().Should().Contain("two_factor_attempts").And.Contain("challenge_hash");
     }
+
+    [Fact]
+    public void Model_ShouldHaveAUniqueIndexOnRoleAndPermission_ForRolePermissions()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a");
+
+        var index = Entity(db, typeof(RolePermission)).GetIndexes()
+            .Single(i => i.Properties.Select(p => p.Name).SequenceEqual(["RoleId", "PermissionId"]));
+
+        index.IsUnique.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Model_ShouldHaveAUniqueIndexOnUserAndPermission_ForUserPermissions()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        using var db = SecDbFactory.Create(connection, "a");
+
+        var index = Entity(db, typeof(UserModulePermission)).GetIndexes()
+            .Single(i => i.Properties.Select(p => p.Name).SequenceEqual(["UserId", "PermissionId"]));
+
+        index.IsUnique.Should().BeTrue();
+    }
 }

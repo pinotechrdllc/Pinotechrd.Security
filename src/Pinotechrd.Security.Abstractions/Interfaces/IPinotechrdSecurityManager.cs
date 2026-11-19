@@ -119,8 +119,24 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     Task<IEnumerable<string>> GetRolePermissionsAsync(string roleId);
 
     /// <summary>
-    /// Synchronizes the permissions assigned to a role.
+    /// Replaces the permissions assigned to a role with <paramref name="permissionCodes"/>. An empty list clears them.
     /// </summary>
+    /// <remarks>
+    /// The replace is atomic: a failure leaves the previous assignments intact. Concurrent replaces for the same role
+    /// run one after the other, so the final assignments are exactly one of the requested sets. Outside a transaction, a
+    /// <c>DbUpdateException</c> from saving the new rows is retried up to five times; any other error, and the last
+    /// <c>DbUpdateException</c>, propagates. Inside a transaction the caller opened, the replace runs once behind a
+    /// savepoint and is not retried. The role row receives a no-op <c>UPDATE</c> that serializes the replaces, so
+    /// <c>UPDATE</c> triggers on it fire and a row version (<c>xmin</c>, <c>rowversion</c>) changes.
+    /// See the README for the details.
+    /// </remarks>
+    /// <exception cref="System.InvalidOperationException">
+    /// The context has pending changes (save or discard them first), or its provider is not relational.
+    /// </exception>
+    /// <returns>
+    /// <see langword="false"/>, with nothing changed, when the role id is not a guid, the role does not exist, or a
+    /// code is invalid or names a permission that does not exist.
+    /// </returns>
     Task<bool> AssignPermissionsToRoleAsync(string roleId, IEnumerable<string> permissionCodes);
 
     /// <summary>
@@ -136,7 +152,22 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
 
     /// <summary>
     /// Replaces the user's Allow and Deny overrides. An empty list clears them.
-    /// Returns false when the user id is not a guid or a permission code does not exist.
     /// </summary>
+    /// <remarks>
+    /// The replace is atomic: a failure leaves the previous overrides intact. Concurrent replaces for the same user
+    /// run one after the other, so the final overrides are exactly one of the requested sets. Outside a transaction, a
+    /// <c>DbUpdateException</c> from saving the new rows is retried up to five times; any other error, and the last
+    /// <c>DbUpdateException</c>, propagates. Inside a transaction the caller opened, the replace runs once behind a
+    /// savepoint and is not retried. The user row receives a no-op <c>UPDATE</c> that serializes the replaces, so
+    /// <c>UPDATE</c> triggers on it fire and a row version (<c>xmin</c>, <c>rowversion</c>) changes.
+    /// See the README for the details.
+    /// </remarks>
+    /// <exception cref="System.InvalidOperationException">
+    /// The context has pending changes (save or discard them first), or its provider is not relational.
+    /// </exception>
+    /// <returns>
+    /// <see langword="false"/>, with nothing changed, when the user id is not a guid, the user does not exist, or a
+    /// code is invalid or names a permission that does not exist.
+    /// </returns>
     Task<bool> ReplaceUserOverridesAsync(string userId, IEnumerable<Pinotechrd.Security.Models.UserPermissionOverride> overrides);
 }
