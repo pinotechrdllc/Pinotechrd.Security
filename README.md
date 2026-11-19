@@ -374,11 +374,39 @@ With migrations, run `db.Database.MigrateAsync()` in the same way, once per tena
 - `LoginAsync` returns the same failure, `Invalid credentials`, for an unknown user, an inactive user (`IsActive` false), a wrong password, a user without a password, a locked-out account, an account Identity does not allow to sign in, and a tenant mismatch. Lockout works as in ASP.NET Core Identity.
 - On every path where Identity would not hash the password against a stored hash (unknown, inactive, locked out, not allowed, no password, tenant mismatch), the password is checked against a dummy hash made once with the same hasher. This makes it harder to tell from the response time whether an account exists. It does not make the response time constant.
 - When the user has two-factor enabled, `LoginAsync` returns `RequiresTwoFactor` and a `TwoFactorToken`. That answer shows the password was right, as in every two-step login. The token is opaque, protected with ASP.NET Core Data Protection, bound to the user, the tenant and the security stamp, and valid for five minutes. Pass it to `GetTwoFactorProvidersAsync`, `SendTwoFactorCodeAsync` and `VerifyTwoFactorCodeAsync`, with the same tenant as the login.
-- Each token allows five code attempts, counted through `ITwoFactorAttemptStore` before the code is checked, so concurrent guesses count too. Wrong codes also count toward Identity lockout, and locked-out users are refused. When concurrent wrong codes collide on the user's concurrency stamp, the user is reloaded and the count retried (up to 10 times); a count that still cannot be recorded spends the token's remaining attempts. On a correct code the security stamp is renewed first, retried only while the stored stamp is still the token's (so two concurrent verifications of one token cannot both succeed); then the failed count is reset with the same retries, and a reset that cannot be recorded fails the verification. The default `InMemoryTwoFactorAttemptStore` keeps counts per instance: with several instances, register a shared implementation.
+- Each token allows five code attempts, counted through `ITwoFactorAttemptStore` before the code is checked, so concurrent guesses count too. Wrong codes also count toward Identity lockout, and locked-out users are refused. When concurrent wrong codes collide on the user's concurrency stamp, the user is reloaded and the count retried (up to 10 times); a count that still cannot be recorded spends the token's remaining attempts. On a correct code the security stamp is renewed first, retried only while the stored stamp is still the token's (so two concurrent verifications of one token cannot both succeed); then the failed count is reset with the same retries, and a reset that cannot be recorded fails the verification. The default `InMemoryTwoFactorAttemptStore` keeps counts per instance: with several instances, use `AddPinotechrdEfTwoFactorAttemptStore` (below) or register a shared implementation.
 - A successful verification renews the security stamp, which makes the token single use. This depends on a user store that keeps security stamps and detects concurrent updates (the EF Core store does). Renewing the stamp also invalidates pending password reset and e-mail confirmation tokens. E-mail and SMS codes depend on the stamp; authenticator-app codes do not, so with an authenticator the same code stays valid for its time window, though not with the same token.
 - `SendTwoFactorCodeAsync` accepts only providers the user has, and sends a message every time it succeeds. Rate limit it in your API.
-- In a deployment with several instances, Data Protection keys must be shared between them, or a token issued by one instance is rejected by another.
+- In a deployment with several instances, Data Protection keys must be shared between them, or a token issued by one instance is rejected by another (see "Data Protection keys" below).
 - `ResetPasswordAsync` answers an unknown e-mail with the same failure as an invalid reset token.
+
+### Persistent two-factor attempt store (EF Core)
+
+With several instances, the in-memory store lets a two-factor token try five codes on each instance. To count attempts in the database instead (opt-in):
+
+1. Map the table in the context options, everywhere they are built (including design-time factories):
+
+   ```csharp
+   options.UseNpgsql(connectionString).UsePinotechrdSecurity(o => o.MapTwoFactorAttempts = true);
+   ```
+
+   This adds `two_factor_attempts` (`challenge_hash` primary key, the SHA-256 of the token's random challenge id; `count`, `exhausted`, `expires_at`; index on `expires_at`) in the tenant schema, never the catalog schema. With the flag off the model does not change.
+2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddTwoFactorAttempts`.
+3. Register the store (before or after `AddPinotechrdSecurity`): `builder.Services.AddPinotechrdEfTwoFactorAttemptStore<AppSecurityDbContext>();`
+
+Each attempt is one atomic `UPDATE ... SET count = count + 1` (the first one inserts the row), so concurrent attempts on any instance add up to five in total; a database error refuses the attempt rather than allowing one more. The store throws inside a database transaction or `TransactionScope`, because a rollback would erase the counted attempts: call `VerifyTwoFactorCodeAsync` outside any transaction. The store shares the request's context without using its change tracker. Rows are not deleted: purge those whose `expires_at` is more than an hour old (for example `expires_at < now() - interval '1 hour'`), with a scheduled job. Deleting the row of a token that is still valid, for instance because the database clock runs ahead, would let it count from one again. If the flag is off, every call of the store throws `InvalidOperationException`.
+
+### Data Protection keys
+
+Two-factor tokens are protected with ASP.NET Core Data Protection. By default its keys live in a per-machine folder (or in memory), so a token issued by one instance fails on another, and after a restart of a container that does not keep the folder. Persist the keys to storage every instance shares and give the application a fixed name:
+
+```csharp
+builder.Services.AddDataProtection()
+    .PersistKeysToDbContext<AppKeysDbContext>() // or PersistKeysToFileSystem, PersistKeysToStackExchangeRedis, PersistKeysToAzureBlobStorage...
+    .SetApplicationName("my-app");
+```
+
+Protect the keys at rest as well (`ProtectKeysWith*`). Outside Development, `AddPinotechrdSecurity` logs a warning at startup (event id `4101`, `DataProtectionKeysNotPersisted`) when no key repository is configured. Startup continues. The check only sees whether a repository is set: it cannot tell whether that storage is shared (a local container path is not), and it also warns on Azure App Service, whose default key folder is already shared.
 
 ### Refresh tokens and sign-out
 
@@ -451,7 +479,7 @@ A response cache keyed only by path and query serves one tenant's response to an
 
 ## Before a stable release: known limits
 
-- **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. With more than one instance, use `AddPinotechrdEfRefreshTokenStore` (see "Persistent refresh token store") and implement `ITwoFactorAttemptStore` on shared storage.
+- **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. With more than one instance, use `AddPinotechrdEfRefreshTokenStore` (see "Persistent refresh token store") and `AddPinotechrdEfTwoFactorAttemptStore` (see "Persistent two-factor attempt store").
 - **No logging of refresh-token reuse.** The library does not log `Reused`; log it in your store (see "For operators").
 - **`SearchPath` mode is PostgreSQL-only**, and needs session-level pooling (see above).
 - **`SearchPath` binding is not re-checked per command.** A server-side function or procedure that changes `search_path` when called is invisible to the scanner, and the change then holds for every later command on that connection until it closes. Keep such functions out of the database, or give each tenant its own database role or login.

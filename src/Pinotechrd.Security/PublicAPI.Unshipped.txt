@@ -233,3 +233,6 @@ Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapRefreshTokens.get -> 
 Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapRefreshTokens.set -> void
 Pinotechrd.Security.Extensions.PersistentStoreExtensions
 static Pinotechrd.Security.Extensions.PersistentStoreExtensions.AddPinotechrdEfRefreshTokenStore<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapTwoFactorAttempts.get -> bool
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.MapTwoFactorAttempts.set -> void
+static Pinotechrd.Security.Extensions.PersistentStoreExtensions.AddPinotechrdEfTwoFactorAttemptStore<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!

@@ -28,12 +28,44 @@ internal sealed class RefreshTokenFamilyRecord
 }
 
 /// <summary>
-/// Model of the persistent refresh token store, mapped when <see cref="PinotechrdSecurityModelOptions.MapRefreshTokens"/> is on.
+/// The attempt count of one two-factor challenge, keyed by the SHA-256 of the challenge id.
+/// </summary>
+internal sealed class TwoFactorAttemptRecord
+{
+    public byte[] ChallengeHash { get; set; } = [];
+    public int Count { get; set; }
+    public bool Exhausted { get; set; }
+    public DateTime ExpiresAt { get; set; }
+}
+
+/// <summary>
+/// Model of the persistent stores: the refresh token tables, mapped when
+/// <see cref="PinotechrdSecurityModelOptions.MapRefreshTokens"/> is on, and the two-factor attempt table, mapped
+/// when <see cref="PinotechrdSecurityModelOptions.MapTwoFactorAttempts"/> is on.
 /// </summary>
 internal static class AuthStoreModel
 {
     public const string TokensTable = "refresh_tokens";
     public const string FamiliesTable = "refresh_token_families";
+    public const string TwoFactorAttemptsTable = "two_factor_attempts";
+
+    /// <summary>
+    /// Maps <see cref="TwoFactorAttemptRecord"/> in the tenant schema (<see langword="null"/> in search_path mode).
+    /// The index on <c>expires_at</c> lets the application purge expired rows.
+    /// </summary>
+    public static void MapTwoFactorAttempts(ModelBuilder modelBuilder, string? tenantSchema)
+    {
+        modelBuilder.Entity<TwoFactorAttemptRecord>(entity =>
+        {
+            entity.ToTable(TwoFactorAttemptsTable, tenantSchema);
+            entity.HasKey(e => e.ChallengeHash);
+            entity.Property(e => e.ChallengeHash).HasColumnName("challenge_hash").HasMaxLength(RefreshTokenHash.Length).IsRequired();
+            entity.Property(e => e.Count).HasColumnName("count");
+            entity.Property(e => e.Exhausted).HasColumnName("exhausted");
+            entity.Property(e => e.ExpiresAt).HasColumnName("expires_at");
+            entity.HasIndex(e => e.ExpiresAt);
+        });
+    }
 
     /// <summary>
     /// Maps <see cref="RefreshTokenRecord"/> and <see cref="RefreshTokenFamilyRecord"/> in the tenant schema

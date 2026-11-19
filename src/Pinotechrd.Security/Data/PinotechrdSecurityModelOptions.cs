@@ -67,6 +67,14 @@ public sealed class PinotechrdSecurityModelOptions
     /// Default <see langword="false"/>, which leaves the model unchanged.
     /// </summary>
     public bool MapRefreshTokens { get; set; }
+
+    /// <summary>
+    /// When <see langword="true"/>, the model maps the table of the persistent two-factor attempt store
+    /// (<c>two_factor_attempts</c>) in the tenant schema, never the catalog schema.
+    /// Required by <c>AddPinotechrdEfTwoFactorAttemptStore</c>. Turning it on changes the model: add a migration.
+    /// Default <see langword="false"/>, which leaves the model unchanged.
+    /// </summary>
+    public bool MapTwoFactorAttempts { get; set; }
 }
 
 /// <summary>
@@ -96,7 +104,8 @@ public static class PinotechrdSecurityDbContextOptionsExtensions
             options.CatalogSchema,
             options.ExcludeCatalogFromMigrations,
             options.ApplicationTakesResponsibilityForSearchPath,
-            options.MapRefreshTokens));
+            options.MapRefreshTokens,
+            options.MapTwoFactorAttempts));
 
         ((IDbContextOptionsBuilderInfrastructure)builder).AddOrUpdateExtension(extension);
         builder.ReplaceService<IModelCacheKeyFactory, ModelSchemaCacheKeyFactory>();
@@ -122,7 +131,8 @@ internal sealed record PinotechrdSecurityModelSettings(
     string? CatalogSchema,
     bool ExcludeCatalogFromMigrations,
     bool ApplicationTakesResponsibilityForSearchPath,
-    bool MapRefreshTokens = false)
+    bool MapRefreshTokens = false,
+    bool MapTwoFactorAttempts = false)
 {
     public static readonly PinotechrdSecurityModelSettings Default = new(TenantSchemaMode.SchemaPerTenantInModel, "public", false, false);
 }

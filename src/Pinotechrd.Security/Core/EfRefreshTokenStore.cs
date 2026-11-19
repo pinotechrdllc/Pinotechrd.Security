@@ -1,8 +1,6 @@
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
-using Microsoft.EntityFrameworkCore.Storage;
 using Pinotechrd.Security.Data;
 using Pinotechrd.Security.Interfaces;
 
@@ -255,32 +253,8 @@ internal sealed class EfRefreshTokenStore<TContext> : IRefreshTokenStore
     private Task<bool> IsFamilyRevokedAsync(string familyId, CancellationToken cancellationToken) =>
         Families.AnyAsync(f => f.FamilyId == familyId && f.RevokedAt != null, cancellationToken);
 
-    /// <summary>
-    /// Inserts one row with a parameterised <c>INSERT</c> built from the model's table and column names, without
-    /// the change tracker, so the application's pending changes are not saved with it.
-    /// </summary>
-    private Task<int> InsertAsync(Type entityClrType, (string Property, object? Value)[] values, CancellationToken cancellationToken)
-    {
-        var entityType = FindEntityType(entityClrType);
-        var table = StoreObjectIdentifier.Table(entityType.GetTableName()!, entityType.GetSchema());
-        var sql = _context.GetService<ISqlGenerationHelper>();
-
-        var properties = values.Select(v => entityType.FindProperty(v.Property)!).ToArray();
-        var columns = properties.Select(p => sql.DelimitIdentifier(p.GetColumnName(table)!));
-        var placeholders = values.Select((_, i) => "{" + i + "}");
-        var command = $"INSERT INTO {sql.DelimitIdentifier(table.Name, table.Schema)} ({string.Join(", ", columns)}) " +
-                      $"VALUES ({string.Join(", ", placeholders)})";
-
-        // Typed parameters from each column's type mapping: a bare null (DBNull) has no store type, and the
-        // mapping also applies any value converter the model configures.
-        using var factory = _context.Database.GetDbConnection().CreateCommand();
-        var parameters = properties
-            .Select((property, i) => (object)property.GetRelationalTypeMapping()
-                .CreateParameter(factory, "p" + i, values[i].Value, property.IsNullable))
-            .ToArray();
-
-        return _context.Database.ExecuteSqlRawAsync(command, parameters, cancellationToken);
-    }
+    private Task<int> InsertAsync(Type entityClrType, (string Property, object? Value)[] values, CancellationToken cancellationToken) =>
+        EfRawInsert.InsertAsync(_context, FindEntityType(entityClrType), values, cancellationToken);
 
     private IQueryable<T> Set<T>() where T : class
     {

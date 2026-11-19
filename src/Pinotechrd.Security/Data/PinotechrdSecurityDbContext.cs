@@ -263,5 +263,11 @@ public abstract class PinotechrdSecurityDbContext<TUser, TRole> : IdentityDbCont
         {
             AuthStoreModel.MapRefreshTokens(modelBuilder, dynamicSchema);
         }
+
+        // Persistent two-factor attempt store (opt-in): tenant schema only, like the refresh tokens.
+        if (_settings.MapTwoFactorAttempts)
+        {
+            AuthStoreModel.MapTwoFactorAttempts(modelBuilder, dynamicSchema);
+        }
     }
 }
