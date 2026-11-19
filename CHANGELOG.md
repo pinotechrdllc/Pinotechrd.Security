@@ -13,10 +13,6 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 - `ISecurityCacheInvalidator.InvalidateTenantAsync(tenantId)` (in `Pinotechrd.Security.Abstractions`, registered as a scoped service): drops a tenant's cached subscription state and module codes, so the next check reads fresh data on every instance that shares the distributed cache. Other tenants are untouched. Call it after committing a subscription, plan or module change.
 - `PinotechrdSecurityOptions.TenantCacheExpiration` (default 5 minutes, must be positive): how long those entries are cached.
 
-### Changed
-
-- **Data Protection check.** `AddPinotechrdSecurity` registers a hosted service that, outside Development, logs a warning at startup (event id `4101`, `DataProtectionKeysNotPersisted`) when no Data Protection key repository is configured (`PersistKeysTo*`), because two-factor tokens then fail on another instance or after a restart. It needs `IHostEnvironment`, which every ASP.NET Core and generic host registers. Startup is not stopped.
-
 ### Changed (breaking)
 
 - **Tenant cache.** `TenantCacheStore` caches through `IDistributedCache` instead of `IMemoryCache`; its constructor is now `TenantCacheStore(ISecurityStore, IDistributedCache, IOptions<PinotechrdSecurityOptions>)`, and it implements `ISecurityCacheInvalidator`. `AddPinotechrdSecurity` adds the in-memory distributed cache only when no `IDistributedCache` is registered (an application's Redis or SQL Server cache wins, registered before or after), and no longer calls `AddMemoryCache()`: an application that resolves `IMemoryCache` must register it itself. Entries expire after 5 minutes instead of 15, and `IsModuleActiveAsync` is answered from the cached active module codes instead of its own query. Before, a cancelled subscription or disabled module kept granting access for up to 15 minutes on every instance, with no way to clear it. With several instances, register a shared `IDistributedCache`, or an invalidation reaches only the instance that made it.
@@ -25,6 +21,7 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ### Changed
 
+- **Data Protection check.** `AddPinotechrdSecurity` registers a hosted service that, outside Development, logs a warning at startup (event id `4101`, `DataProtectionKeysNotPersisted`) when no Data Protection key repository is configured (`PersistKeysTo*`), because two-factor tokens then fail on another instance or after a restart. It needs `IHostEnvironment`, which every ASP.NET Core and generic host registers. Startup is not stopped.
 - **Users.** `DeleteUserAsync` revokes the user's refresh tokens before deleting it. If revocation fails the user is not deleted; if the delete fails the tokens stay revoked. Access tokens stay valid until they expire.
 
 ### Fixed
