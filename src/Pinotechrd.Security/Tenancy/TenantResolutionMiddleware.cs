@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
@@ -316,8 +317,13 @@ public class TenantResolutionMiddleware
         // The authentication middleware sets IAuthenticationFeature on every request, anonymous or not.
         if (context.Features.Get<IAuthenticationFeature>() != null) return;
 
+        // Either scheme is enough: the JWT bearer scheme that AddPinotechrdSecurity always registers, even when the
+        // host keeps its own defaults (SetDefaultAuthenticationSchemes = false), or any default authenticate scheme
+        // (for example cookies), whose principal also feeds the tenant claim.
         var schemes = context.RequestServices?.GetService<IAuthenticationSchemeProvider>();
-        if (schemes == null || await schemes.GetDefaultAuthenticateSchemeAsync() == null) return;
+        if (schemes == null) return;
+        if (await schemes.GetSchemeAsync(JwtBearerDefaults.AuthenticationScheme) == null
+            && await schemes.GetDefaultAuthenticateSchemeAsync() == null) return;
 
         throw new InvalidOperationException(
             "UseTenantResolution() runs before UseAuthentication(). Call app.UseAuthentication() before " +

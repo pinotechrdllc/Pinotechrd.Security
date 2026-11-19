@@ -50,6 +50,22 @@ public class PinotechrdSecurityOptions
     /// reaching its end date, an edit made directly in the database) keeps the old answer.
     /// </remarks>
     public TimeSpan TenantCacheExpiration { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Makes JWT bearer the default authenticate and challenge scheme. Default <see langword="true"/>.
+    /// </summary>
+    /// <remarks>
+    /// When <see langword="true"/>, <c>AddPinotechrdSecurity</c> sets
+    /// <c>AuthenticationOptions.DefaultAuthenticateScheme</c> and <c>DefaultChallengeScheme</c> to
+    /// <c>JwtBearerDefaults.AuthenticationScheme</c>, which take precedence over a <c>DefaultScheme</c> the host set.
+    /// Set it to <see langword="false"/> when the host keeps its own defaults (for example cookies or OpenID
+    /// Connect): the JWT bearer scheme and the settings the library enforces on it are still registered, but no
+    /// default of <c>AuthenticationOptions</c> is changed, so JWT endpoints must select the scheme themselves
+    /// (for example <c>[Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]</c>).
+    /// The value is read from the configured options, so a later <c>Configure&lt;PinotechrdSecurityOptions&gt;</c>
+    /// or configuration binding is honoured.
+    /// </remarks>
+    public bool SetDefaultAuthenticationSchemes { get; set; } = true;
 }
 
 /// <summary>

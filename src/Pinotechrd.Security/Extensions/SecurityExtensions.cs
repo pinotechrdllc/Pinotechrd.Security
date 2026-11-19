@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -76,6 +77,7 @@ public static class SecurityExtensions
                 o.Jwt = options.Jwt;
                 o.AllowUnverifiedTenantMembership = options.AllowUnverifiedTenantMembership;
                 o.TenantCacheExpiration = options.TenantCacheExpiration;
+                o.SetDefaultAuthenticationSchemes = options.SetDefaultAuthenticationSchemes;
                 // Keep IOptions<PinotechrdSecurityOptions>.Value.Tenancy equal to the registered TenantResolutionOptions.
                 var tenancy = o.Tenancy;
                 tenancy.HeaderName = options.Tenancy.HeaderName;
@@ -132,12 +134,12 @@ public static class SecurityExtensions
         services.AddScoped<ISecurityDbContext>(sp => sp.GetRequiredService<TContext>() as ISecurityDbContext ?? throw new InvalidOperationException("DbContext does not implement ISecurityDbContext"));
         services.AddScoped<IPinotechrdSecurityManager<TUser, TRole>, PinotechrdSecurityManager<TUser, TRole>>();
 
-        services.AddAuthentication(auth =>
-        {
-            auth.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-            auth.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-        })
-        .AddJwtBearer();
+        // The defaults are applied from the configured PinotechrdSecurityOptions, so the flag is honoured however and
+        // whenever the application sets it. Registered here, so a host Configure<AuthenticationOptions> after this call
+        // still wins, as before.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<AuthenticationOptions>, DefaultAuthenticationSchemesSetup>());
+        services.AddAuthentication()
+            .AddJwtBearer();
 
         // Applied from the validated options in a PostConfigure step, which runs after every Configure, so an
         // application that changes or replaces TokenValidationParameters keeps its other settings but cannot
@@ -207,5 +209,54 @@ public static class SecurityExtensions
     public static IApplicationBuilder UseTenantResolution(this IApplicationBuilder app)
     {
         return app.UseMiddleware<TenantResolutionMiddleware>();
+    }
+
+    /// <summary>
+    /// Sets JWT bearer as the default authenticate and challenge scheme unless
+    /// <see cref="PinotechrdSecurityOptions.SetDefaultAuthenticationSchemes"/> is <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// The flag is read by running the configure steps of <see cref="PinotechrdSecurityOptions"/> on a fresh instance,
+    /// without its validators: the authentication options are built on the first request (and by tools that inspect
+    /// the schemes), and must not fail there on JWT or tenant-membership validation, which runs when the host starts.
+    /// </remarks>
+    private sealed class DefaultAuthenticationSchemesSetup : IConfigureOptions<AuthenticationOptions>
+    {
+        private readonly IEnumerable<IConfigureOptions<PinotechrdSecurityOptions>> _setups;
+        private readonly IEnumerable<IPostConfigureOptions<PinotechrdSecurityOptions>> _postSetups;
+
+        public DefaultAuthenticationSchemesSetup(
+            IEnumerable<IConfigureOptions<PinotechrdSecurityOptions>> setups,
+            IEnumerable<IPostConfigureOptions<PinotechrdSecurityOptions>> postSetups)
+        {
+            _setups = setups;
+            _postSetups = postSetups;
+        }
+
+        public void Configure(AuthenticationOptions options)
+        {
+            var security = new PinotechrdSecurityOptions();
+            foreach (var setup in _setups)
+            {
+                if (setup is IConfigureNamedOptions<PinotechrdSecurityOptions> named)
+                {
+                    named.Configure(Microsoft.Extensions.Options.Options.DefaultName, security);
+                }
+                else
+                {
+                    setup.Configure(security);
+                }
+            }
+
+            foreach (var postSetup in _postSetups)
+            {
+                postSetup.PostConfigure(Microsoft.Extensions.Options.Options.DefaultName, security);
+            }
+
+            if (!security.SetDefaultAuthenticationSchemes) return;
+
+            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+            options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+        }
     }
 }

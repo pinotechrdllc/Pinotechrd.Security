@@ -263,6 +263,8 @@ static Pinotechrd.Security.Interfaces.SessionPurgeResult.operator ==(Pinotechrd.
 Pinotechrd.Security.Core.TenantCacheStore.InvalidateTenantAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.TenantCacheExpiration.get -> System.TimeSpan
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.TenantCacheExpiration.set -> void
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.SetDefaultAuthenticationSchemes.get -> bool
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.SetDefaultAuthenticationSchemes.set -> void
 Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.RevokeUserSessionsAsync(string! userId) -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Core.SecurityEngine.GetCurrentUserPermissionsAsync() -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
 Pinotechrd.Security.Interfaces.ISecurityEngine.GetCurrentUserPermissionsAsync() -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!

@@ -252,6 +252,14 @@ Tokens carry a `kid` header: the first 16 lowercase hex characters of SHA-256 ov
 
 The library enforces no time limit: a secret in `PreviousSecrets` is accepted until you remove it. Never keep a leaked secret there: whoever holds it can forge tokens, and `GetPrincipalFromExpiredToken` accepts them at any age; remove it and rotate at once. Keys are read once, when the host starts, so each step takes effect only after a restart.
 
+### Authentication schemes
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `SetDefaultAuthenticationSchemes` | `true` | Sets JWT bearer as `DefaultAuthenticateScheme` and `DefaultChallengeScheme`. `false` leaves every default of `AuthenticationOptions` to the host. |
+
+By default the library makes JWT bearer the default authenticate and challenge scheme, and these two settings take precedence over a `DefaultScheme` the host set. A host that signs users in with cookies or OpenID Connect sets `o.SetDefaultAuthenticationSchemes = false` to keep its own defaults: the JWT bearer scheme and the validation settings the library enforces on it are still registered, and JWT endpoints select it with `[Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]`. The tenant claim is required from whichever scheme authenticates the user. The flag is read from the configured options, so setting it later with `Configure<PinotechrdSecurityOptions>` or configuration binding also works.
+
 ### Tenant resolution (`options.Tenancy`)
 
 Where the tenant id comes from depends on whether the request is authenticated:
