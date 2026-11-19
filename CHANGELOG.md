@@ -9,6 +9,11 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 ### Added
 
 - `AddPinotechrdEfRefreshTokenStore<TContext>()`: an opt-in, scoped `IRefreshTokenStore` kept in each tenant's schema through EF Core, replacing the default `InMemoryRefreshTokenStore`. Tokens are stored as SHA-256 hashes, consumed with one conditional `UPDATE`, and a replayed token revokes its family. Requires `PinotechrdSecurityModelOptions.MapRefreshTokens` (default `false`, so the model of existing applications does not change); applications that enable it add their own migration for the `refresh_tokens` and `refresh_token_families` tables.
+- `AddPinotechrdEfTwoFactorAttemptStore<TContext>()`: an opt-in, scoped `ITwoFactorAttemptStore` kept in each tenant's schema through EF Core, replacing the default `InMemoryTwoFactorAttemptStore`, so a two-factor token allows five attempts in total across instances and restarts. Each attempt is one atomic `UPDATE count = count + 1`; challenge ids are stored as SHA-256 hashes. Requires `PinotechrdSecurityModelOptions.MapTwoFactorAttempts` (default `false`); applications that enable it add their own migration for the `two_factor_attempts` table. The store throws inside a database transaction or `TransactionScope`, because a rollback would erase the counted attempts.
+
+### Changed
+
+- **Data Protection check.** `AddPinotechrdSecurity` registers a hosted service that, outside Development, logs a warning at startup (event id `4101`, `DataProtectionKeysNotPersisted`) when no Data Protection key repository is configured (`PersistKeysTo*`), because two-factor tokens then fail on another instance or after a restart. It needs `IHostEnvironment`, which every ASP.NET Core and generic host registers. Startup is not stopped.
 
 ### Changed (breaking)
 

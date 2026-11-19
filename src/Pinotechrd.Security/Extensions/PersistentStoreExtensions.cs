@@ -39,4 +39,29 @@ public static class PersistentStoreExtensions
         services.AddScoped<IRefreshTokenStore, EfRefreshTokenStore<TContext>>();
         return services;
     }
+
+    /// <summary>
+    /// Replaces the default <see cref="InMemoryTwoFactorAttemptStore"/> with a scoped store that counts two-factor
+    /// attempts in the tenant schema of <typeparamref name="TContext"/>, so a two-factor token allows the same few
+    /// attempts in total across every instance and restart.
+    /// </summary>
+    /// <remarks>
+    /// Call it before or after <c>AddPinotechrdSecurity</c>; either order keeps this store. The context options must
+    /// enable the table with <c>UsePinotechrdSecurity(o =&gt; o.MapTwoFactorAttempts = true)</c>, and the application
+    /// must add and apply a migration to every tenant schema; otherwise every call of the store throws
+    /// <see cref="InvalidOperationException"/>. The store does not use the change tracker of the shared context.
+    /// Two-factor tokens also need Data Protection keys shared by every instance (<c>PersistKeysTo*</c>).
+    /// </remarks>
+    /// <typeparam name="TContext">Security DbContext registered by the application.</typeparam>
+    /// <param name="services">Service collection to configure.</param>
+    /// <returns>The same service collection for chaining.</returns>
+    public static IServiceCollection AddPinotechrdEfTwoFactorAttemptStore<TContext>(this IServiceCollection services)
+        where TContext : DbContext
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.RemoveAll<ITwoFactorAttemptStore>();
+        services.AddScoped<ITwoFactorAttemptStore, EfTwoFactorAttemptStore<TContext>>();
+        return services;
+    }
 }
