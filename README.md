@@ -395,14 +395,35 @@ services.AddPinotechrdSecurity<AppDbContext, AppUser, AppRole>(o => o.AllowUnver
 - A token of another tenant is refused without being consumed. The user must still exist, be active, not be locked out, be allowed to sign in, have the security stamp it had when the token was issued, and pass your `IIdentityValidator<TUser>` if you have one. Every failure returns `Invalid token`.
 - `SignOutAsync` revokes all refresh tokens of the user, in every session, and renews the security stamp. Deactivating a user with `SetUserActiveStatusAsync(userId, false)` does the same.
 - Access tokens already issued stay valid until they expire (`ExpiryMinutes`, 60 by default): JWT validation does not ask the server. Keep `ExpiryMinutes` short if that window matters.
-- The default `InMemoryRefreshTokenStore` loses tokens on restart and does not share them between instances. It refuses a token value that is already stored. Above 10,000 entries it drops the tokens of families whose tokens have all expired, and expired revoked families. A used token is kept while its family has a live token, so replaying it is still detected; memory therefore grows with the number of refreshes per session lifetime, which is one more reason to rate limit refresh. Register your own `IRefreshTokenStore` after `AddPinotechrdSecurity` for production.
+- The default `InMemoryRefreshTokenStore` loses tokens on restart and does not share them between instances. It refuses a token value that is already stored. Above 10,000 entries it drops the tokens of families whose tokens have all expired, and expired revoked families. A used token is kept while its family has a live token, so replaying it is still detected; memory therefore grows with the number of refreshes per session lifetime, which is one more reason to rate limit refresh. For production use `AddPinotechrdEfRefreshTokenStore` (below), or register your own `IRefreshTokenStore` before or after `AddPinotechrdSecurity`; the default is only added when none is registered.
+
+### Persistent refresh token store (EF Core)
+
+For production, or more than one instance, keep refresh tokens in the database. It is opt-in; the in-memory store stays the default.
+
+1. Map the tables in the context options, everywhere they are built (including design-time factories):
+
+   ```csharp
+   options.UseNpgsql(connectionString).UsePinotechrdSecurity(o => o.MapRefreshTokens = true);
+   ```
+
+   This adds `refresh_tokens` (`token_hash` primary key, the SHA-256 of the token; `tenant_id`, `user_id`, `family_id`, `security_stamp`, `expires_at`, `consumed_at`, `revoked_at`; indexes on `user_id` and `family_id`) and `refresh_token_families` (`family_id`, `revoked_at`) in the tenant schema, never the catalog schema. There is no foreign key to `users`. With the flag off the model does not change.
+2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddRefreshTokens`.
+3. Register the store (before or after `AddPinotechrdSecurity`):
+
+   ```csharp
+   builder.Services.AddPinotechrdSecurity<AppSecurityDbContext, AppUser, AppRole>(options => { /* ... */ });
+   builder.Services.AddPinotechrdEfRefreshTokenStore<AppSecurityDbContext>();
+   ```
+
+The store is scoped and shares the request's context, but does not use its change tracker: it never saves your pending changes. Tokens are stored as hashes only. Consuming a token is one conditional `UPDATE`, so of concurrent refreshes with one token, on any instance, exactly one succeeds; replaying a used token revokes its family. Expiry and timestamps come from the registered `TimeProvider` (or the system clock), not the database clock, so keep the clocks of your instances synchronised. Because each tenant has its own tables, a token of another tenant is refused as not found, and `RevokeAllForUserAsync` reaches the current tenant only. If the flag is off, every call of the store throws `InvalidOperationException`.
 
 ### Writing an `IRefreshTokenStore`
 
 - `ConsumeAsync` must be atomic: a read followed by a write lets two concurrent refreshes through.
 - A revoked family stays revoked: a token saved into it later, including by a rotation that raced the revocation, must never be consumed.
 - Order of the checks: unknown token is `NotFound`; another tenant is `TenantMismatch` and changes nothing; family revoked is `Revoked`; already consumed is `Reused` and revokes the family, even if the token has also expired or was revoked on its own; revoked is `Revoked`; expired is `Expired`; otherwise the token is consumed.
-- Expiry is decided by the store's clock against the expiry passed to `SaveAsync`: the injected `TimeProvider` in process, the database clock (`now()`) in a database. Keep the clocks synchronised.
+- Expiry is decided by the store's clock against the expiry passed to `SaveAsync`: the built-in stores use the injected `TimeProvider` and pass it as a parameter to the database. A store that uses the database clock (`now()`) instead must keep the clocks synchronised.
 - Refuse a token value that already exists; never reset its state. Store a hash of the token, not the token.
 
 A PostgreSQL consume in one statement (zero rows means not consumed; a follow-up query then classifies why and, on reuse, revokes the family):
@@ -438,7 +459,7 @@ A response cache keyed only by path and query serves one tenant's response to an
 
 ## Before a stable release: known limits
 
-- **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. No shared store ships; with more than one instance, implement `IRefreshTokenStore` and `ITwoFactorAttemptStore` on shared storage.
+- **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. With more than one instance, use `AddPinotechrdEfRefreshTokenStore` (see "Persistent refresh token store") and implement `ITwoFactorAttemptStore` on shared storage.
 - **No logging of refresh-token reuse.** The library does not log `Reused`; log it in your store (see "For operators").
 - **`SearchPath` mode is PostgreSQL-only**, and needs session-level pooling (see above).
 - **`SearchPath` binding is not re-checked per command.** A server-side function or procedure that changes `search_path` when called is invisible to the scanner, and the change then holds for every later command on that connection until it closes. Keep such functions out of the database, or give each tenant its own database role or login.

@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ## [Unreleased]
 
+### Added
+
+- `AddPinotechrdEfRefreshTokenStore<TContext>()`: an opt-in, scoped `IRefreshTokenStore` kept in each tenant's schema through EF Core, replacing the default `InMemoryRefreshTokenStore`. Tokens are stored as SHA-256 hashes, consumed with one conditional `UPDATE`, and a replayed token revokes its family. Requires `PinotechrdSecurityModelOptions.MapRefreshTokens` (default `false`, so the model of existing applications does not change); applications that enable it add their own migration for the `refresh_tokens` and `refresh_token_families` tables.
+
 ### Changed (breaking)
 
 - Options validation fails when tenant membership cannot be relied on and no `IIdentityValidator<TUser>` is registered. Membership is relied on only when the context passed to `AddPinotechrdSecurity` derives from `PinotechrdSecurityDbContext<TUser, TRole>`, its registered options use `UsePinotechrdSecurity()`, and in `SearchPath` mode `ApplicationTakesResponsibilityForSearchPath` is off; the message names the context and the condition that failed. Before, a user of one tenant could obtain a token for another tenant in the other setups. The check runs when the host starts and on the first read of `IOptions<PinotechrdSecurityOptions>.Value` (for example resolving `IPinotechrdAuthManager<TUser>` or the JWT bearer setup), so a `ServiceCollection` built by hand in tests fails too. Register an `IIdentityValidator<TUser>` that checks membership, or opt out with `PinotechrdSecurityOptions.AllowUnverifiedTenantMembership = true` when the application checks membership elsewhere. The opt-out is one value shared by every `AddPinotechrdSecurity` call, and binding `PinotechrdSecurityOptions` from configuration lets configuration turn the check off.
@@ -17,6 +21,7 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 ### Fixed
 
 - **Users.** `SetUserActiveStatusAsync(userId, false)` revoked nothing when `userId` was spelled differently from the stored id (for example in upper case), because it revoked under the caller's string. It now revokes under the user's stored id, as `DeleteUserAsync` does.
+- **Stores.** `AddPinotechrdSecurity` adds the in-memory `IRefreshTokenStore` and `ITwoFactorAttemptStore` only when none is registered. Before, a store registered before `AddPinotechrdSecurity` was silently replaced by the in-memory default.
 
 ## [1.2.0-preview.3] - 2026-11-18
 

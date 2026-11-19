@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
+using Pinotechrd.Security.Core;
 using Pinotechrd.Security.Entities;
 using Pinotechrd.Security.Extensions;
 using Pinotechrd.Security.Interfaces;
@@ -56,6 +58,72 @@ public class SecurityExtensionsTests
 
         act.Should().Throw<Microsoft.Extensions.Options.OptionsValidationException>()
             .WithMessage("*Jwt.Secret*");
+    }
+
+    private static ServiceCollection NewServices()
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<TestSecurityDbContext>(options => options.UseInMemoryDatabase(Guid.NewGuid().ToString()));
+        return services;
+    }
+
+    private static void AddSecurity(IServiceCollection services) =>
+        services.AddPinotechrdSecurity<TestSecurityDbContext, TestUser, TestRole>(options =>
+        {
+            options.Jwt = new JwtSettings
+            {
+                Secret = new string('k', 48),
+                Issuer = "pinotechrd-tests",
+                Audience = "pinotechrd-tests"
+            };
+        });
+
+    [Fact]
+    public void AddPinotechrdEfRefreshTokenStore_ShouldStillWin_WhenCalledBeforeAddPinotechrdSecurity()
+    {
+        var services = NewServices();
+        services.AddPinotechrdEfRefreshTokenStore<TestSecurityDbContext>();
+        AddSecurity(services);
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        scope.ServiceProvider.GetRequiredService<IRefreshTokenStore>().Should().BeOfType<EfRefreshTokenStore<TestSecurityDbContext>>();
+        services.Count(d => d.ServiceType == typeof(IRefreshTokenStore)).Should().Be(1);
+    }
+
+    [Fact]
+    public void AddPinotechrdSecurity_ShouldKeepACustomRefreshTokenStore_RegisteredBeforeIt()
+    {
+        var custom = Substitute.For<IRefreshTokenStore>();
+        var services = NewServices();
+        services.AddSingleton(custom);
+        AddSecurity(services);
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IRefreshTokenStore>().Should().BeSameAs(custom);
+    }
+
+    [Fact]
+    public void AddPinotechrdSecurity_ShouldKeepACustomTwoFactorAttemptStore_RegisteredBeforeIt()
+    {
+        var custom = Substitute.For<ITwoFactorAttemptStore>();
+        var services = NewServices();
+        services.AddSingleton(custom);
+        AddSecurity(services);
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<ITwoFactorAttemptStore>().Should().BeSameAs(custom);
+    }
+
+    [Fact]
+    public void AddPinotechrdSecurity_ShouldRegisterTheInMemoryStores_WhenNoneWasRegistered()
+    {
+        var services = NewServices();
+        AddSecurity(services);
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IRefreshTokenStore>().Should().BeOfType<InMemoryRefreshTokenStore>();
+        provider.GetRequiredService<ITwoFactorAttemptStore>().Should().BeOfType<InMemoryTwoFactorAttemptStore>();
     }
 
     private sealed class TestUser : BaseSecurityUser

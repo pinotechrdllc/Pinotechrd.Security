@@ -120,8 +120,10 @@ public static class SecurityExtensions
         .AddDefaultTokenProviders();
 
         services.AddScoped<ITokenProvider, JwtTokenProvider>();
-        services.AddSingleton<IRefreshTokenStore, InMemoryRefreshTokenStore>();
-        services.AddSingleton<ITwoFactorAttemptStore, InMemoryTwoFactorAttemptStore>();
+        // TryAdd: a store registered before this call (for example a persistent one) is kept, so the order of the
+        // registrations cannot silently fall back to the in-memory default.
+        services.TryAddSingleton<IRefreshTokenStore, InMemoryRefreshTokenStore>();
+        services.TryAddSingleton<ITwoFactorAttemptStore, InMemoryTwoFactorAttemptStore>();
         services.AddScoped<IPinotechrdAuthManager<TUser>, PinotechrdAuthManager<TUser>>();
         services.AddScoped<ISecurityDbContext>(sp => sp.GetRequiredService<TContext>() as ISecurityDbContext ?? throw new InvalidOperationException("DbContext does not implement ISecurityDbContext"));
         services.AddScoped<IPinotechrdSecurityManager<TUser, TRole>, PinotechrdSecurityManager<TUser, TRole>>();

@@ -23,9 +23,9 @@ namespace Pinotechrd.Security.Interfaces;
 /// or was revoked on its own; token revoked, <see cref="RefreshTokenConsumeStatus.Revoked"/>; token expired,
 /// <see cref="RefreshTokenConsumeStatus.Expired"/>; otherwise it is consumed.</description></item>
 /// <item><description>Expiry is decided by the store's own clock against the <c>expiresAtUtc</c> given to
-/// <see cref="SaveAsync"/>: an injected <see cref="TimeProvider"/> for an in-process store, the database
-/// clock (<c>now()</c>) for a database store. Keep application and database clocks synchronised; the
-/// comparison happens where the atomic consume happens.</description></item>
+/// <see cref="SaveAsync"/>. The built-in stores read an injected <see cref="TimeProvider"/> once per call and,
+/// in a database, send that instant as a parameter of the atomic consume. A store may use the database clock
+/// (<c>now()</c>) instead; then keep application and database clocks synchronised.</description></item>
 /// <item><description>Saving a token value that already exists must not reset its state; refuse it.</description></item>
 /// <item><description>Store a hash of the token (for example SHA-256), never the token itself.</description></item>
 /// </list>
@@ -91,7 +91,8 @@ public interface IRefreshTokenStore
     Task RevokeAsync(string refreshToken, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Revokes every refresh token of a user, in every family and tenant.
+    /// Revokes every refresh token of a user that the store can see, in every family. An in-process store sees
+    /// every tenant; a store kept in each tenant's schema sees the current tenant, where that user lives.
     /// </summary>
     /// <param name="userId">Owner user identifier.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

@@ -257,5 +257,11 @@ public abstract class PinotechrdSecurityDbContext<TUser, TRole> : IdentityDbCont
             entity.ToTable("user_permissions", dynamicSchema);
             entity.HasOne(e => e.Permission).WithMany().HasForeignKey(e => e.PermissionId);
         });
+
+        // Persistent refresh token store (opt-in): tenant schema only, so another tenant's token is not even visible.
+        if (_settings.MapRefreshTokens)
+        {
+            AuthStoreModel.MapRefreshTokens(modelBuilder, dynamicSchema);
+        }
     }
 }

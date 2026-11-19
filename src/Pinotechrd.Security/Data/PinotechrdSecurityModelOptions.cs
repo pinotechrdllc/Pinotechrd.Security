@@ -59,6 +59,14 @@ public sealed class PinotechrdSecurityModelOptions
     /// path. Without the interceptors and without this flag, the context refuses to start. Default <see langword="false"/>.
     /// </summary>
     public bool ApplicationTakesResponsibilityForSearchPath { get; set; }
+
+    /// <summary>
+    /// When <see langword="true"/>, the model maps the tables of the persistent refresh token store
+    /// (<c>refresh_tokens</c> and <c>refresh_token_families</c>) in the tenant schema, never the catalog schema.
+    /// Required by <c>AddPinotechrdEfRefreshTokenStore</c>. Turning it on changes the model: add a migration.
+    /// Default <see langword="false"/>, which leaves the model unchanged.
+    /// </summary>
+    public bool MapRefreshTokens { get; set; }
 }
 
 /// <summary>
@@ -87,7 +95,8 @@ public static class PinotechrdSecurityDbContextOptionsExtensions
             options.TenantSchemaMode,
             options.CatalogSchema,
             options.ExcludeCatalogFromMigrations,
-            options.ApplicationTakesResponsibilityForSearchPath));
+            options.ApplicationTakesResponsibilityForSearchPath,
+            options.MapRefreshTokens));
 
         ((IDbContextOptionsBuilderInfrastructure)builder).AddOrUpdateExtension(extension);
         builder.ReplaceService<IModelCacheKeyFactory, ModelSchemaCacheKeyFactory>();
@@ -112,7 +121,8 @@ internal sealed record PinotechrdSecurityModelSettings(
     TenantSchemaMode TenantSchemaMode,
     string? CatalogSchema,
     bool ExcludeCatalogFromMigrations,
-    bool ApplicationTakesResponsibilityForSearchPath)
+    bool ApplicationTakesResponsibilityForSearchPath,
+    bool MapRefreshTokens = false)
 {
     public static readonly PinotechrdSecurityModelSettings Default = new(TenantSchemaMode.SchemaPerTenantInModel, "public", false, false);
 }
