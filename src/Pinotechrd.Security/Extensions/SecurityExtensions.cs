@@ -231,9 +231,25 @@ public static class SecurityExtensions
             _security = security;
         }
 
+        private bool ReadSetDefaultAuthenticationSchemes()
+        {
+            try
+            {
+                return _security.Value.SetDefaultAuthenticationSchemes;
+            }
+            catch (OptionsValidationException)
+            {
+                // The authentication options are also built by tools that resolve the scheme provider without
+                // configuration (for example OpenAPI generation at build time), which must keep working. Falling back
+                // to the flag's default is safe: an invalid configuration still fails the host at start
+                // (ValidateOnStart), and every other read of these options throws the same exception.
+                return true;
+            }
+        }
+
         public void Configure(AuthenticationOptions options)
         {
-            if (_security.Value.SetDefaultAuthenticationSchemes)
+            if (ReadSetDefaultAuthenticationSchemes())
             {
                 options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
                 options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;

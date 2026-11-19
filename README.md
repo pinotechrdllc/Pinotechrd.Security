@@ -263,7 +263,7 @@ By default the library makes JWT bearer the default authenticate and challenge s
 With the flag off:
 
 - `UseTenantResolution()` reads the principal of your default scheme. A request that carries only a bearer token is anonymous there and must send the tenant header, unless your default is a policy scheme whose `ForwardDefaultSelector` picks `JwtBearerDefaults.AuthenticationScheme` when an `Authorization: Bearer` header is present.
-- Only the library's JWT bearer scheme guarantees a tenant claim from a validated token whose membership was checked at sign-in. For your own schemes, you are responsible for issuing a tenant claim whose membership was verified, and for exempting that claim type from inbound claim mapping so it keeps its name.
+- Only the library's JWT bearer scheme guarantees a tenant claim from a token whose signature was validated. Its tenant membership was proven at sign-in by the tenant-scoped user store or a registered `IIdentityValidator<TUser>`, unless `AllowUnverifiedTenantMembership` is set. For your own schemes, you are responsible for issuing a tenant claim whose membership was verified, and for exempting that claim type from inbound claim mapping so it keeps its name.
 
 ### Tenant resolution (`options.Tenancy`)
 
