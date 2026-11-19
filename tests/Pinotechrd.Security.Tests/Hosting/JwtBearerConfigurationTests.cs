@@ -36,6 +36,7 @@ public class JwtBearerConfigurationTests
             o.Jwt.Secret = Secret;
             o.Jwt.Issuer = "the-issuer";
             o.Jwt.Audience = "the-audience";
+            o.AllowUnverifiedTenantMembership = true;
         });
         after?.Invoke(services);
         using var provider = services.BuildServiceProvider();
@@ -225,6 +226,7 @@ public class JwtBearerConfigurationTests
                     o.Jwt.Secret = Secret;
                     o.Jwt.Issuer = "the-issuer";
                     o.Jwt.Audience = "the-audience";
+                    o.AllowUnverifiedTenantMembership = true;
                 });
                 builder.Services.AddHostStubs();
                 if (replaceWithWeakParameters)

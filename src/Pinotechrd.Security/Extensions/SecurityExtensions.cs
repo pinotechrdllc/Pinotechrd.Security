@@ -38,6 +38,14 @@ public static class SecurityExtensions
     /// start with an <see cref="OptionsValidationException"/> that names each missing or weak setting.
     /// </para>
     /// <para>
+    /// Tenant membership is also checked when the host starts and when the options are first read: unless
+    /// <typeparamref name="TContext"/> derives from <see cref="Data.PinotechrdSecurityDbContext{TUser, TRole}"/>, its
+    /// registered options use <c>UsePinotechrdSecurity()</c> and, in <see cref="Data.TenantSchemaMode.SearchPath"/>,
+    /// <c>ApplicationTakesResponsibilityForSearchPath</c> is off, an <see cref="IIdentityValidator{TUser}"/> must be
+    /// registered or <see cref="PinotechrdSecurityOptions.AllowUnverifiedTenantMembership"/> set to
+    /// <see langword="true"/>.
+    /// </para>
+    /// <para>
     /// Bearer options: in a <c>PostConfigure</c> step, which runs after every <c>Configure</c>, the library sets on
     /// the final <see cref="TokenValidationParameters"/> (creating it if the application set it to null):
     /// issuer, audience, lifetime and signing-key validation on; signed tokens and expiration required; the
@@ -67,6 +75,7 @@ public static class SecurityExtensions
             .Configure(o =>
             {
                 o.Jwt = options.Jwt;
+                o.AllowUnverifiedTenantMembership = options.AllowUnverifiedTenantMembership;
                 // Keep IOptions<PinotechrdSecurityOptions>.Value.Tenancy equal to the registered TenantResolutionOptions.
                 var tenancy = o.Tenancy;
                 tenancy.HeaderName = options.Tenancy.HeaderName;
@@ -79,6 +88,7 @@ public static class SecurityExtensions
             })
             .ValidateOnStart();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<PinotechrdSecurityOptions>, PinotechrdSecurityOptionsValidator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<PinotechrdSecurityOptions>, TenantMembershipValidator<TContext, TUser>>());
 
         services.AddScoped<TenantContext>();
         services.AddSingleton(options.Tenancy);

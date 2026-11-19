@@ -133,6 +133,49 @@ public class PostgresHostTests(PostgresFixture postgres) : IAsyncLifetime
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    private static async Task<Guid> CreateUserAsync(TenantDatabaseApi api, string tenant, string email, string password) =>
+        await api.InTenantAsync(tenant, async sp =>
+        {
+            var users = sp.GetRequiredService<UserManager<HostUser>>();
+            var created = await users.CreateAsync(new HostUser { UserName = email, Email = email, EmailConfirmed = true }, password);
+            created.Succeeded.Should().BeTrue();
+            return (await users.FindByEmailAsync(email))!.Id;
+        });
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task Login_ShouldBeRefused_WhenTheSameEmailExistsInBothTenantsWithDifferentPasswords_AndTheHeaderNamesTheOtherTenant(TenantSchemaMode mode)
+    {
+        var api = Api(mode);
+        var email = "twin-" + Guid.NewGuid().ToString("N")[..8] + "@shared.test";
+        await CreateUserAsync(api, "a", email, "Password-of-A-1");
+        await CreateUserAsync(api, "b", email, "Password-of-B-1");
+
+        var withAPasswordInB = await api.PostAsync("/api/auth/login", new LoginRequest(email, "Password-of-A-1"), "b");
+        var withBPasswordInB = await api.PostAsync("/api/auth/login", new LoginRequest(email, "Password-of-B-1"), "b");
+
+        withAPasswordInB.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        withBPasswordInB.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task Login_ShouldIssueATokenForTheUserOfTheHeaderTenant_WhenTheSameEmailAndPasswordExistInBothTenants(TenantSchemaMode mode)
+    {
+        var api = Api(mode);
+        var email = "twin-" + Guid.NewGuid().ToString("N")[..8] + "@shared.test";
+        var idInA = await CreateUserAsync(api, "a", email, TenantDatabaseApi.Password);
+        var idInB = await CreateUserAsync(api, "b", email, TenantDatabaseApi.Password);
+        idInA.Should().NotBe(idInB);
+
+        var (access, _) = await api.LoginAsync(email, "b");
+
+        var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(access);
+        token.Claims.Single(c => c.Type == "id").Value.Should().Be(idInB.ToString());
+        token.Claims.Should().NotContain(c => c.Value == idInA.ToString());
+        token.Claims.Single(c => c.Type == "tenant_id").Value.Should().Be("b");
+    }
+
     // ---- Refresh -----------------------------------------------------------------------------
 
     [Theory]
@@ -201,6 +244,80 @@ public class PostgresHostTests(PostgresFixture postgres) : IAsyncLifetime
 
         (await RefreshAsync(api, refresh, "a")).Should().Be(HttpStatusCode.Unauthorized);
         (await api.PostAsync("/api/auth/login", new LoginRequest(email, TenantDatabaseApi.Password), "a")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task DeleteUserAsync_ShouldBlockRefresh_WhenTheUserIsDeleted(TenantSchemaMode mode)
+    {
+        var api = Api(mode);
+        var email = "del-" + Guid.NewGuid().ToString("N")[..6] + "@a.test";
+        await api.InTenantAsync("a", async sp =>
+        {
+            var created = await sp.GetRequiredService<UserManager<HostUser>>().CreateAsync(
+                new HostUser { UserName = email, Email = email, EmailConfirmed = true }, TenantDatabaseApi.Password);
+            created.Succeeded.Should().BeTrue();
+            return 0;
+        });
+        var (_, refresh) = await api.LoginAsync(email, "a");
+
+        var deleted = await api.InTenantAsync("a", async sp =>
+        {
+            var user = await sp.GetRequiredService<UserManager<HostUser>>().FindByEmailAsync(email);
+            return await sp.GetRequiredService<IPinotechrdSecurityManager<HostUser, HostRole>>().DeleteUserAsync(user!.Id.ToString());
+        });
+
+        deleted.Should().BeTrue();
+        (await api.InTenantAsync("a", sp => sp.GetRequiredService<IRefreshTokenStore>().ValidateAsync(refresh))).IsValid.Should().BeFalse();
+        (await RefreshAsync(api, refresh, "a")).Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task DeleteUserAsync_ShouldRevokeTokens_WhenTheIdIsGivenInUpperCase(TenantSchemaMode mode)
+    {
+        var api = Api(mode);
+        var (email, refresh) = await NewLoggedInUserAsync(api);
+
+        var deleted = await api.InTenantAsync("a", async sp =>
+        {
+            var user = await sp.GetRequiredService<UserManager<HostUser>>().FindByEmailAsync(email);
+            return await sp.GetRequiredService<IPinotechrdSecurityManager<HostUser, HostRole>>().DeleteUserAsync(user!.Id.ToString().ToUpperInvariant());
+        });
+
+        deleted.Should().BeTrue();
+        (await api.InTenantAsync("a", sp => sp.GetRequiredService<IRefreshTokenStore>().ValidateAsync(refresh))).IsValid.Should().BeFalse();
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task SetUserActiveStatusAsync_ShouldRevokeTokens_WhenDeactivatingWithTheIdInUpperCase(TenantSchemaMode mode)
+    {
+        var api = Api(mode);
+        var (email, refresh) = await NewLoggedInUserAsync(api);
+
+        var ok = await api.InTenantAsync("a", async sp =>
+        {
+            var user = await sp.GetRequiredService<UserManager<HostUser>>().FindByEmailAsync(email);
+            return await sp.GetRequiredService<IPinotechrdSecurityManager<HostUser, HostRole>>().SetUserActiveStatusAsync(user!.Id.ToString().ToUpperInvariant(), false);
+        });
+
+        ok.Should().BeTrue();
+        (await api.InTenantAsync("a", sp => sp.GetRequiredService<IRefreshTokenStore>().ValidateAsync(refresh))).IsValid.Should().BeFalse();
+    }
+
+    private static async Task<(string Email, string Refresh)> NewLoggedInUserAsync(TenantDatabaseApi api)
+    {
+        var email = "case-" + Guid.NewGuid().ToString("N")[..6] + "@a.test";
+        await api.InTenantAsync("a", async sp =>
+        {
+            var created = await sp.GetRequiredService<UserManager<HostUser>>().CreateAsync(
+                new HostUser { UserName = email, Email = email, EmailConfirmed = true }, TenantDatabaseApi.Password);
+            created.Succeeded.Should().BeTrue();
+            return 0;
+        });
+        var (_, refresh) = await api.LoginAsync(email, "a");
+        return (email, refresh);
     }
 
     // ---- Tenant binding of authenticated requests --------------------------------------------

@@ -368,6 +368,14 @@ With migrations, run `db.Database.MigrateAsync()` in the same way, once per tena
 
 **Membership.** The library does not check that a user belongs to a tenant. In the two setups above, the user is looked up in the tenant's own tables, so finding the user is what proves membership. In any other setup (a shared schema, a context of your own, or `ApplicationTakesResponsibilityForSearchPath` with a binding that does not hold), a user of one tenant can log in naming another tenant and get a token for it, unless you check membership in an `IIdentityValidator<TUser>`, which receives the user and the tenant id at login, two-factor completion and refresh.
 
+**Startup membership check.** `AddPinotechrdSecurity` relies on membership only when all three hold: the context derives from `PinotechrdSecurityDbContext<TUser, TRole>`, its registered `DbContextOptions<TContext>` were built with `UsePinotechrdSecurity()`, and in `SearchPath` mode `ApplicationTakesResponsibilityForSearchPath` is off. Otherwise, unless an `IIdentityValidator<TUser>` is registered, options validation fails with an `OptionsValidationException` that names the context and the condition that failed. It fails when the host starts and also on the first read of `IOptions<PinotechrdSecurityOptions>.Value` (resolving `IPinotechrdAuthManager<TUser>`, or the JWT bearer setup), so a `ServiceCollection` built by hand, for example in tests, fails too. Register a validator that checks membership, or, if the application checks it some other way, opt out explicitly:
+
+```csharp
+services.AddPinotechrdSecurity<AppDbContext, AppUser, AppRole>(o => o.AllowUnverifiedTenantMembership = true);
+```
+
+`AllowUnverifiedTenantMembership` is one value shared by every `AddPinotechrdSecurity` call in the container, and if you bind `PinotechrdSecurityOptions` from configuration, configuration can turn the check off. The check cannot see the database provider: a provider that ignores schemas (SQLite, InMemory) on one shared database puts every tenant's users in the same tables; that setup is only safe when each tenant has its own database.
+
 ### Login and two-factor
 
 - Tokens are issued only for the tenant the request was resolved for. `LoginAsync`, `VerifyTwoFactorCodeAsync` and `RefreshAsync` fail when no tenant is resolved or when the `tenantId` passed in differs from it. Whether the user belongs to that tenant depends on your database setup: see **Membership** under [Database schemas](#database-schemas-usepinotechrdsecurity).
