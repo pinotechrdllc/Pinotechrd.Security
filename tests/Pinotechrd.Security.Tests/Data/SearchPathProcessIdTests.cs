@@ -2,6 +2,9 @@ using System.Data;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Pinotechrd.Security.Data;
 using Pinotechrd.Security.Tenancy;
 using Xunit;
@@ -47,7 +50,9 @@ public sealed class SearchPathProcessIdTests : IDisposable
 
         public InvalidOperationException? Failure { get; set; }
 
-        public int ReadProcessId() => Failure is { } failure ? throw failure : 4242;
+        public int ReadProcessId() => Failure is { } failure ? throw failure : Pid;
+
+        public int Pid { get; set; } = 4242;
     }
 
     private sealed class ThrowsOnBindSync(string file) : FakeConnection(file) { public int ProcessID => ReadProcessId(); }
@@ -59,11 +64,30 @@ public sealed class SearchPathProcessIdTests : IDisposable
     private sealed class ThrowsAfterScalar(string file) : FakeConnection(file) { public int ProcessID => ReadProcessId(); }
     private sealed class ThrowsAfterScalarAsync(string file) : FakeConnection(file) { public int ProcessID => ReadProcessId(); }
     private sealed class StableProcessId(string file) : FakeConnection(file) { public int ProcessID => ReadProcessId(); }
+    private sealed class ChangedSession(string file) : FakeConnection(file) { public int ProcessID => ReadProcessId(); }
     private sealed class WithoutProcessId(string file) : FakeConnection(file) { }
 
-    private static SecDb Create(SqliteConnection connection)
+    private sealed class ScalarRecorder : DbCommandInterceptor
+    {
+        public int Calls { get; private set; }
+
+        public override InterceptionResult<object> ScalarExecuting(System.Data.Common.DbCommand command, CommandEventData eventData, InterceptionResult<object> result)
+        {
+            Calls++;
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<object>> ScalarExecutingAsync(System.Data.Common.DbCommand command, CommandEventData eventData, InterceptionResult<object> result, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private static SecDb Create(SqliteConnection connection, IInterceptor? extra = null)
     {
         var builder = new DbContextOptionsBuilder<SecDb>().UseSqlite(connection);
+        if (extra != null) builder.AddInterceptors(extra);
         builder.UsePinotechrdSecurity(o => o.TenantSchemaMode = TenantSchemaMode.SearchPath);
         return new SecDb(builder.Options, new DbSchemaProvider(SecDbFactory.Tenant("a")));
     }
@@ -167,31 +191,81 @@ public sealed class SearchPathProcessIdTests : IDisposable
         connection.ProbeCalls.Should().Be(0);
     }
 
+    private static (IRelationalCommand Command, RelationalCommandParameterObject Parameters) BuildScalar(DbContext db)
+    {
+        var raw = db.GetService<IRawSqlCommandBuilder>().Build(ProbeSql);
+        var parameters = new RelationalCommandParameterObject(
+            db.GetService<IRelationalConnection>(),
+            new Dictionary<string, object?>(),
+            readerColumns: null,
+            context: db,
+            logger: db.GetService<IRelationalCommandDiagnosticsLogger>(),
+            detailedErrorsEnabled: false);
+        return (raw, parameters);
+    }
+
     [Fact]
     public void Scalar_ShouldBeRefusedAndNotSent_WhenProcessIdCannotBeReadAfterBinding()
     {
         using var connection = new ThrowsAfterScalar(_file);
-        using var db = Create(connection);
+        var seen = new ScalarRecorder();
+        using var db = Create(connection, seen);
         db.Database.OpenConnection();
         var original = connection.Failure = Boom();
+        var (raw, parameters) = BuildScalar(db);
 
-        // EF sends scalar commands through its own ExecuteScalar path: a SqlQuery with Count/Single-style composition.
-        AssertRefused(() => db.Database.SqlQueryRaw<int>("SELECT probe() AS Value").Count(), connection, original);
+        AssertRefused(() => raw.ExecuteScalar(parameters), connection, original);
+        seen.Calls.Should().Be(1, "the command went through ScalarExecuting");
     }
 
     [Fact]
     public async Task ScalarAsync_ShouldBeRefusedAndNotSent_WhenProcessIdCannotBeReadAfterBinding()
     {
         await using var connection = new ThrowsAfterScalarAsync(_file);
-        await using var db = Create(connection);
+        var seen = new ScalarRecorder();
+        await using var db = Create(connection, seen);
         await db.Database.OpenConnectionAsync();
         var original = connection.Failure = Boom();
+        var (raw, parameters) = BuildScalar(db);
 
-        var act = () => db.Database.SqlQueryRaw<int>("SELECT probe() AS Value").CountAsync();
+        var act = () => raw.ExecuteScalarAsync(parameters);
 
         (await act.Should().ThrowAsync<InvalidOperationException>().Where(e => e.Message == ExpectedMessage))
             .And.InnerException.Should().BeSameAs(original);
         connection.ProbeCalls.Should().Be(0);
+        seen.Calls.Should().Be(1, "the command went through ScalarExecutingAsync");
+    }
+
+    [Fact]
+    public void Scalar_ShouldRun_WhenProcessIdIsReadableAndUnchanged()
+    {
+        using var connection = new StableProcessId(_file);
+        var seen = new ScalarRecorder();
+        using var db = Create(connection, seen);
+        db.Database.OpenConnection();
+        var (raw, parameters) = BuildScalar(db);
+
+        raw.ExecuteScalar(parameters).Should().NotBeNull();
+
+        seen.Calls.Should().Be(1, "proves the recorder sits on the scalar path");
+        connection.ProbeCalls.Should().Be(1);
+    }
+
+    // ---- The session changed after binding --------------------------------------------------
+
+    [Fact]
+    public void Command_ShouldBeRefusedAndNotSent_WhenProcessIdDiffersFromTheBoundSession()
+    {
+        using var connection = new ChangedSession(_file);
+        using var db = Create(connection);
+        db.Database.OpenConnection();
+        connection.Pid = 9999;
+
+        var act = () => db.Database.ExecuteSqlRaw(ProbeSql);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*database session changed*")
+            .And.InnerException.Should().BeNull();
+        connection.ProbeCalls.Should().Be(0, "the command was refused before it was sent");
     }
 
     // ---- Control: a readable ProcessID does not get in the way -----------------------------
