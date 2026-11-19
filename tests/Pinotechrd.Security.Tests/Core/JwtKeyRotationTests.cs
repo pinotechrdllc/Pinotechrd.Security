@@ -82,6 +82,9 @@ public class JwtKeyRotationTests
         return (await act.Should().ThrowAsync<OptionsValidationException>()).Which.Message;
     }
 
+    private static bool IsSignatureFailure(Exception e) =>
+        e is SecurityTokenSignatureKeyNotFoundException or SecurityTokenInvalidSignatureException;
+
     // ---- kid and signing ---------------------------------------------------------------------
 
     [Fact]
@@ -109,7 +112,7 @@ public class JwtKeyRotationTests
         options.Jwt.Secret = Previous;
         var act = () => new JwtTokenProvider(Microsoft.Extensions.Options.Options.Create(options))
             .GetPrincipalFromExpiredToken(token);
-        act.Should().Throw<Exception>();
+        act.Should().Throw<SecurityTokenException>().Where(e => IsSignatureFailure(e));
     }
 
     // ---- GetPrincipalFromExpiredToken --------------------------------------------------------
@@ -131,7 +134,7 @@ public class JwtKeyRotationTests
 
         var act = () => Provider(Previous).GetPrincipalFromExpiredToken(token);
 
-        act.Should().Throw<Exception>();
+        act.Should().Throw<SecurityTokenException>().Where(e => IsSignatureFailure(e));
     }
 
     [Fact]
@@ -141,7 +144,7 @@ public class JwtKeyRotationTests
 
         var act = () => Provider().GetPrincipalFromExpiredToken(token);
 
-        act.Should().Throw<Exception>();
+        act.Should().Throw<SecurityTokenException>().Where(e => IsSignatureFailure(e));
     }
 
     [Theory]
@@ -157,9 +160,41 @@ public class JwtKeyRotationTests
         principal.FindFirst("id")!.Value.Should().Be("user-1");
     }
 
+    [Fact]
+    public void GetPrincipalFromExpiredToken_ShouldRejectAnUnknownSecret_EvenWhenItsKidClaimsTheCurrentKey()
+    {
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Unknown)) { KeyId = ExpectedKid(Current) };
+        var token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
+            Issuer, Audience, [new Claim("id", "x")], expires: DateTime.UtcNow.AddMinutes(5),
+            signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
+
+        var act = () => Provider(Previous).GetPrincipalFromExpiredToken(token);
+
+        act.Should().Throw<SecurityTokenException>().Where(e => IsSignatureFailure(e));
+    }
+
+    [Theory]
+    [InlineData("other-issuer", Audience)]
+    [InlineData(Issuer, "other-audience")]
+    public void GetPrincipalFromExpiredToken_ShouldRejectAPreviousSecretToken_WithTheWrongIssuerOrAudience(string issuer, string audience)
+    {
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Previous)) { KeyId = ExpectedKid(Previous) };
+        var token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
+            issuer, audience, [new Claim("id", "x")], expires: DateTime.UtcNow.AddMinutes(5),
+            signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
+
+        var act = () => Provider(Previous).GetPrincipalFromExpiredToken(token);
+
+        act.Should().Throw<SecurityTokenException>();
+    }
+
     // ---- The real JwtBearer handler ----------------------------------------------------------
 
     private static Task<InProcessHost> StartHostAsync(bool replaceParameters, params string[] previous) =>
+        StartHostAsync(replaceParameters, null, previous);
+
+    private static Task<InProcessHost> StartHostAsync(
+        bool replaceParameters, Action<JwtBearerOptions>? appConfigure, params string[] previous) =>
         InProcessHost.StartAsync(
             builder =>
             {
@@ -167,6 +202,11 @@ public class JwtKeyRotationTests
                 builder.Services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(databaseName));
                 builder.Services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>(o => Configure(o, previous));
                 builder.Services.AddHostStubs();
+                if (appConfigure is not null)
+                {
+                    builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, appConfigure);
+                }
+
                 if (replaceParameters)
                 {
                     builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, o =>
@@ -237,6 +277,71 @@ public class JwtKeyRotationTests
         (await CallAsync(host, Sign(Previous, true))).Should().Be(HttpStatusCode.OK);
         // The key the application put in its own parameters must not survive.
         (await CallAsync(host, Sign(Unknown, true))).Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task BearerHandler_ShouldRejectAForeignKey_WhenTheApplicationSetsAnIssuerSigningKeyResolver()
+    {
+        var attacker = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Unknown));
+        await using var host = await StartHostAsync(false, o =>
+            o.TokenValidationParameters.IssuerSigningKeyResolver = (_, _, _, _) => [attacker], Previous);
+
+        (await CallAsync(host, Sign(Unknown, true))).Should().Be(HttpStatusCode.Unauthorized);
+        (await CallAsync(host, Sign(Unknown, false))).Should().Be(HttpStatusCode.Unauthorized);
+        (await CallAsync(host, Sign(Current, true))).Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task BearerHandler_ShouldRejectAForeignKey_WhenTheApplicationSetsASignatureValidatorThatAcceptsAnything()
+    {
+        await using var host = await StartHostAsync(false, o =>
+            o.TokenValidationParameters.SignatureValidator = (token, _) => new JwtSecurityToken(token), Previous);
+
+        (await CallAsync(host, Sign(Unknown, true))).Should().Be(HttpStatusCode.Unauthorized);
+        (await CallAsync(host, Sign(Current, true))).Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task BearerHandler_ShouldRejectAForeignKey_WhenTheApplicationSetsAnOpenIdConnectConfigurationWithAnExtraKey()
+    {
+        var attacker = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Unknown));
+        await using var host = await StartHostAsync(false, o =>
+        {
+            var configuration = new Microsoft.IdentityModel.Protocols.OpenIdConnect.OpenIdConnectConfiguration();
+            configuration.SigningKeys.Add(attacker);
+            o.Configuration = configuration;
+        }, Previous);
+
+        (await CallAsync(host, Sign(Unknown, true))).Should().Be(HttpStatusCode.Unauthorized);
+        (await CallAsync(host, Sign(Current, true))).Should().Be(HttpStatusCode.OK);
+        (await CallAsync(host, Sign(Previous, true))).Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task BearerHandler_ShouldStartAndFetchNothing_WhenTheApplicationSetsAuthorityAndMetadataAddress()
+    {
+        await using var host = await StartHostAsync(false, o =>
+        {
+            o.Authority = "https://authority.invalid/";
+            o.MetadataAddress = "https://authority.invalid/.well-known/openid-configuration";
+            o.RequireHttpsMetadata = true;
+        }, Previous);
+
+        (await CallAsync(host, Sign(Current, true))).Should().Be(HttpStatusCode.OK);
+        (await CallAsync(host, Sign(Previous, true))).Should().Be(HttpStatusCode.OK);
+        (await CallAsync(host, Sign(Unknown, true))).Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task BearerHandler_ShouldRejectAnUnknownSecret_EvenWhenItsKidClaimsTheCurrentKey()
+    {
+        await using var host = await StartHostAsync(false, Previous);
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Unknown)) { KeyId = ExpectedKid(Current) };
+        var token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
+            Issuer, Audience, [new Claim("id", "x")], expires: DateTime.UtcNow.AddMinutes(5),
+            signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
+
+        (await CallAsync(host, token)).Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]
