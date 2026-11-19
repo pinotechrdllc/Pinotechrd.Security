@@ -153,46 +153,11 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         string password,
         IReadOnlyCollection<string> roleNames)
     {
-        if (!transaction.SupportsSavepoints)
-        {
-            // Without savepoints a failure cannot be undone here; the caller must roll back its transaction.
-            return await RunAndDetachOnFailureAsync(context, tracked, () => CreateUserWithRolesAsync(user, password, roleNames));
-        }
-
-        const string savepoint = "pinotechrd_create_user";
-        await transaction.CreateSavepointAsync(savepoint);
-        bool created;
-        try
-        {
-            created = await RunAndDetachOnFailureAsync(context, tracked, () => CreateUserWithRolesAsync(user, password, roleNames));
-        }
-        catch (Exception original)
-        {
-            try
-            {
-                await transaction.RollbackToSavepointAsync(savepoint);
-            }
-            catch (Exception rollbackFailure)
-            {
-                throw new AggregateException(
-                    "CreateUserAsync failed, and rolling back to its savepoint failed too; roll back the transaction.",
-                    original,
-                    rollbackFailure);
-            }
-
-            throw;
-        }
-
-        if (created)
-        {
-            await transaction.ReleaseSavepointAsync(savepoint);
-        }
-        else
-        {
-            await transaction.RollbackToSavepointAsync(savepoint);
-        }
-
-        return created;
+        return await SavepointScope.RunAsync(
+            transaction,
+            "pinotechrd_create_user",
+            "CreateUserAsync",
+            () => RunAndDetachOnFailureAsync(context, tracked, () => CreateUserWithRolesAsync(user, password, roleNames)));
     }
 
     private async Task<bool> CreateUserWithRolesAsync(TUser user, string password, IReadOnlyCollection<string> roleNames)
@@ -716,46 +681,11 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         where TParent : class
         where TRow : class
     {
-        if (!transaction.SupportsSavepoints)
-        {
-            // Without savepoints a failure cannot be undone here; the caller must roll back its transaction.
-            return await ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows);
-        }
-
-        const string savepoint = "pinotechrd_replace";
-        await transaction.CreateSavepointAsync(savepoint);
-        bool replaced;
-        try
-        {
-            replaced = await ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows);
-        }
-        catch (Exception original)
-        {
-            try
-            {
-                await transaction.RollbackToSavepointAsync(savepoint);
-            }
-            catch (Exception rollbackFailure)
-            {
-                throw new AggregateException(
-                    $"{operation} failed, and rolling back to its savepoint failed too; roll back the transaction.",
-                    original,
-                    rollbackFailure);
-            }
-
-            throw;
-        }
-
-        if (replaced)
-        {
-            await transaction.ReleaseSavepointAsync(savepoint);
-        }
-        else
-        {
-            await transaction.RollbackToSavepointAsync(savepoint);
-        }
-
-        return replaced;
+        return await SavepointScope.RunAsync(
+            transaction,
+            "pinotechrd_replace",
+            operation,
+            () => ReplaceRowsOnceAsync<TParent, TRow>(db, parentId, ownedByParent, createRows));
     }
 
     private static async Task<bool> ReplaceRowsOnceAsync<TParent, TRow>(
