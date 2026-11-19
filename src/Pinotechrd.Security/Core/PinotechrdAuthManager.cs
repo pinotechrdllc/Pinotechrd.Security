@@ -32,12 +32,14 @@ namespace Pinotechrd.Security.Core;
 /// </para>
 /// <para>
 /// Membership: this class does not check that the user belongs to the tenant. Finding the user proves
-/// membership only when the user store reads the tenant's own tables, which holds in exactly two setups of
-/// <see cref="Data.PinotechrdSecurityDbContext{TUser, TRole}"/>: <see cref="Data.TenantSchemaMode.SchemaPerTenantInModel"/>
-/// with <c>UsePinotechrdSecurity()</c> on the context options, or <see cref="Data.TenantSchemaMode.SearchPath"/>
-/// with <c>search_path</c> set to the resolved tenant's schema on every connection. In any other setup,
-/// including a shared schema or a context of your own, a user of one tenant can obtain a token for another
-/// tenant unless <see cref="IIdentityValidator{TUser}"/> rejects it; implement that hook to check membership.
+/// membership only when the user store reads the tenant's own tables. <c>AddPinotechrdSecurity</c> relies on that only
+/// when all three hold: the context derives from <see cref="Data.PinotechrdSecurityDbContext{TUser, TRole}"/>, its
+/// registered options were built with <c>UsePinotechrdSecurity()</c>, and in <see cref="Data.TenantSchemaMode.SearchPath"/>
+/// <c>ApplicationTakesResponsibilityForSearchPath</c> is off. Otherwise an <see cref="IIdentityValidator{TUser}"/> must
+/// be registered to check membership, or <see cref="PinotechrdSecurityOptions.AllowUnverifiedTenantMembership"/> set;
+/// the check fails the host start, and also the first read of the options, which this class does in its constructor.
+/// The check cannot see the database provider: one that ignores schemas (for example SQLite or InMemory on a single
+/// shared database) puts every tenant's users in the same tables unless each tenant has its own database.
 /// </para>
 /// <para>
 /// Login failures for an unknown user, an inactive user (<see cref="BaseSecurityUser.IsActive"/>), a wrong

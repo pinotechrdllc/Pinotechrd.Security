@@ -42,6 +42,7 @@ public class EndToEndTests
                     o.Jwt.Secret = "end-to-end-secret-key-with-more-than-32-bytes";
                     o.Jwt.Issuer = "e2e";
                     o.Jwt.Audience = "e2e-clients";
+                    o.AllowUnverifiedTenantMembership = true;
                 });
                 builder.Services.AddHostStubs();
             },
