@@ -32,6 +32,26 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// <summary>
     /// Creates a user and optionally assigns roles.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every role in <paramref name="roles"/> must exist, and no name may be empty; otherwise no user is created and
+    /// the method returns <c>false</c>. Repeated names are assigned once. If creating the user or assigning a role
+    /// fails, the method returns <c>false</c>; exceptions from the store propagate.
+    /// </para>
+    /// <para>
+    /// The user and its roles are written atomically on a relational EF Core provider: in a transaction of their own
+    /// (run through the context's execution strategy), or, when the context already has a transaction, behind a
+    /// savepoint inside it, where the caller keeps the commit. They are not atomic on a non-relational provider, or in
+    /// a caller transaction on a provider without savepoints. Inside a <c>TransactionScope</c> they are rolled back
+    /// only if the caller abandons the scope.
+    /// </para>
+    /// <para>
+    /// On a relational provider the context must have no pending changes, or the method throws
+    /// <see cref="System.InvalidOperationException"/>: the Identity store saves every pending change of the context,
+    /// and a rollback would lose them.
+    /// </para>
+    /// </remarks>
+    /// <returns><c>true</c> when the user was created with the requested roles; otherwise <c>false</c>.</returns>
     Task<bool> CreateUserAsync(TUser user, string password, IEnumerable<string>? roles = null);
 
     /// <summary>

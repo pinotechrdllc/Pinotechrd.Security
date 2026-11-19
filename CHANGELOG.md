@@ -18,6 +18,7 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 ### Changed (breaking)
 
 - Options validation fails when tenant membership cannot be relied on and no `IIdentityValidator<TUser>` is registered. Membership is relied on only when the context passed to `AddPinotechrdSecurity` derives from `PinotechrdSecurityDbContext<TUser, TRole>`, its registered options use `UsePinotechrdSecurity()`, and in `SearchPath` mode `ApplicationTakesResponsibilityForSearchPath` is off; the message names the context and the condition that failed. Before, a user of one tenant could obtain a token for another tenant in the other setups. The check runs when the host starts and on the first read of `IOptions<PinotechrdSecurityOptions>.Value` (for example resolving `IPinotechrdAuthManager<TUser>` or the JWT bearer setup), so a `ServiceCollection` built by hand in tests fails too. Register an `IIdentityValidator<TUser>` that checks membership, or opt out with `PinotechrdSecurityOptions.AllowUnverifiedTenantMembership = true` when the application checks membership elsewhere. The opt-out is one value shared by every `AddPinotechrdSecurity` call, and binding `PinotechrdSecurityOptions` from configuration lets configuration turn the check off.
+- **Users.** On a relational provider, `CreateUserAsync` throws `InvalidOperationException` when the context has pending changes. The Identity store saves every pending change of the shared context while creating the user, so a rollback of the user would silently lose them. Save or discard pending changes before calling it.
 
 ### Changed
 
@@ -27,6 +28,7 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 - **Users.** `SetUserActiveStatusAsync(userId, false)` revoked nothing when `userId` was spelled differently from the stored id (for example in upper case), because it revoked under the caller's string. It now revokes under the user's stored id, as `DeleteUserAsync` does.
 - **Stores.** `AddPinotechrdSecurity` adds the in-memory `IRefreshTokenStore` and `ITwoFactorAttemptStore` only when none is registered. Before, a store registered before `AddPinotechrdSecurity` was silently replaced by the in-memory default.
+- **Users.** `CreateUserAsync` ignored the result of `AddToRolesAsync` and returned `true`, leaving a user without its roles. It now checks that every requested role exists before creating the user (an unknown or empty role name returns `false`), and on a relational provider creates the user and assigns its roles atomically: in a transaction of their own run through the context's execution strategy, or behind a savepoint inside a transaction the caller already opened, where the caller keeps the commit. Any failure rolls back and returns `false`. When a commit reports a transient error, a retrying strategy checks whether the user and its roles were stored and returns `true` if they were. The unit is not atomic on a non-relational provider or in a caller transaction on a provider without savepoints; inside a `TransactionScope` it is rolled back only if the caller abandons the scope.
 
 ## [1.2.0-preview.3] - 2026-11-18
 
