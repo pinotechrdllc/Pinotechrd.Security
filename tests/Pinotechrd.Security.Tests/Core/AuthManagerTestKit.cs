@@ -64,6 +64,7 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
     /// <param name="timeProvider">Clock; defaults to a fake clock the test can advance.</param>
     /// <param name="refreshStore">Refresh token store; defaults to a substitute.</param>
     /// <param name="identityValidator">Optional host validator run when tokens are issued.</param>
+    /// <param name="dataProvider">Optional provider of the authenticated user; without it the self-service methods find no user.</param>
     public AuthManagerTestKit(
         bool withDataProtection = true,
         IPinotechrdMessageService? messageService = null,
@@ -72,7 +73,8 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
         bool withAttemptStore = true,
         FakeTimeProvider? timeProvider = null,
         IRefreshTokenStore? refreshStore = null,
-        IIdentityValidator<TUser>? identityValidator = null)
+        IIdentityValidator<TUser>? identityValidator = null,
+        ISecurityDataProvider? dataProvider = null)
     {
         Time = timeProvider ?? new FakeTimeProvider();
         if (withTenantContext)
@@ -126,6 +128,15 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
 
         SignInManager.CanSignInAsync(Arg.Any<TUser>()).Returns(Task.FromResult(true));
 
+        UserManager.ChangePasswordAsync(Arg.Any<TUser>(), Arg.Any<string>(), Arg.Any<string>()).Returns(ci =>
+        {
+            var state = StateOf(ci.Arg<TUser>());
+            if (ci.ArgAt<string>(1) != state.CurrentPassword)
+                return Task.FromResult(IdentityResult.Failed(new IdentityError { Code = "PasswordMismatch", Description = "Incorrect password." }));
+            state.CurrentPassword = ci.ArgAt<string>(2);
+            return Task.FromResult(IdentityResult.Success);
+        });
+
         Engine.GetPermissionsAsync(Arg.Any<string>()).Returns(new[] { "permissions.read" });
         TokenProvider.GenerateAccessToken(Arg.Any<IEnumerable<Claim>>()).Returns("access-token");
         TokenProvider.GenerateRefreshToken().Returns("refresh-token");
@@ -153,7 +164,8 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
             dataProtectionProvider: DataProtection,
             tenantContext: TenantContext,
             twoFactorAttemptStore: Attempts,
-            timeProvider: Time);
+            timeProvider: Time,
+            dataProvider: dataProvider);
     }
 
     public PinotechrdAuthManager<TUser> Manager { get; }
@@ -192,6 +204,9 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
         return user;
     }
 
+    /// <summary>The password the user currently has, as changed through <c>ChangePasswordAsync</c>.</summary>
+    public string PasswordOf(TUser user) => StateOf(user).CurrentPassword;
+
     public string StampOf(TUser user) => StateOf(user).Stamp;
 
     public void ChangeStamp(TUser user) => StateOf(user).Stamp = "stamp-changed-" + Guid.NewGuid().ToString("N");
@@ -218,6 +233,8 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
         public bool LockedOut { get; set; }
 
         public bool HasPassword { get; set; } = true;
+
+        public string CurrentPassword { get; set; } = Password;
 
         public bool StampUpdateFails { get; set; }
     }
