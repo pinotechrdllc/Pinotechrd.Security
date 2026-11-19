@@ -6,6 +6,14 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **The `CORE` module is no longer special.** `ISecurityEngine.GetAuthorizedMenuAsync` and `GetPermissionsAsync` used to treat a module coded `CORE` as always active, while `CanAccessAsync` required it in the tenant's plan. Now every path requires it in the plan: menu items of module `CORE` and `CORE.*` permissions (including the `permission` claims of issued tokens, which come from `GetPermissionsAsync`) appear only when the plan includes `CORE`, as `CanAccessAsync` already decided. Add `CORE` to every plan that should have it. The menu and `GetPermissionsAsync` also compare module codes normalised (trimmed, upper case), as `CanAccessAsync` does; a code outside the code alphabet is never active.
+
+### Deprecated
+
+- `SecurityModule.Create` is obsolete (diagnostic `PTRDSEC001`): it gives the module a random id, which differs per tenant schema, while plans in the shared catalog refer to modules by `SecurityModuleId.FromCode(code)`. Use `SecuritySeeder.SeedModuleAsync`, or set `Id = SecurityModuleId.FromCode(code)`. Projects that treat warnings as errors fail to build where they still call it; suppress `PTRDSEC001` where the random id is intended.
+
 ## [1.2.0-preview.4] - 2026-11-19
 
 ### Added
