@@ -42,6 +42,10 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// <summary>
     /// Deletes a user by identifier.
     /// </summary>
+    /// <remarks>
+    /// The user's refresh tokens are revoked first. An exception from the refresh token store propagates and the
+    /// user is not deleted; a failed delete returns <c>false</c> with the tokens already revoked.
+    /// </remarks>
     Task<bool> DeleteUserAsync(string userId);
 
     /// <summary>

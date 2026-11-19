@@ -87,10 +87,19 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The user's refresh tokens are revoked before the user is deleted. If revocation throws, the exception
+    /// propagates and the user is not deleted. If the delete then fails, the method returns <c>false</c> and the
+    /// tokens stay revoked. Access tokens already issued stay valid until they expire.
+    /// </remarks>
     public async Task<bool> DeleteUserAsync(string userId)
     {
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null) return false;
+
+        // Revoke under the stored id: tokens are saved under GetUserIdAsync, and FindByIdAsync also accepts
+        // other spellings of the same id (upper case, braces), which the store would not match.
+        if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user));
 
         var result = await _userManager.DeleteAsync(user);
         return result.Succeeded;
@@ -115,7 +124,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
 
             if (!isActive)
             {
-                if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(userId);
+                if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user));
                 if (_userManager.SupportsUserSecurityStamp)
                 {
                     var stampResult = await _userManager.UpdateSecurityStampAsync(user);

@@ -10,6 +10,14 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 - Options validation fails when tenant membership cannot be relied on and no `IIdentityValidator<TUser>` is registered. Membership is relied on only when the context passed to `AddPinotechrdSecurity` derives from `PinotechrdSecurityDbContext<TUser, TRole>`, its registered options use `UsePinotechrdSecurity()`, and in `SearchPath` mode `ApplicationTakesResponsibilityForSearchPath` is off; the message names the context and the condition that failed. Before, a user of one tenant could obtain a token for another tenant in the other setups. The check runs when the host starts and on the first read of `IOptions<PinotechrdSecurityOptions>.Value` (for example resolving `IPinotechrdAuthManager<TUser>` or the JWT bearer setup), so a `ServiceCollection` built by hand in tests fails too. Register an `IIdentityValidator<TUser>` that checks membership, or opt out with `PinotechrdSecurityOptions.AllowUnverifiedTenantMembership = true` when the application checks membership elsewhere. The opt-out is one value shared by every `AddPinotechrdSecurity` call, and binding `PinotechrdSecurityOptions` from configuration lets configuration turn the check off.
 
+### Changed
+
+- **Users.** `DeleteUserAsync` revokes the user's refresh tokens before deleting it. If revocation fails the user is not deleted; if the delete fails the tokens stay revoked. Access tokens stay valid until they expire.
+
+### Fixed
+
+- **Users.** `SetUserActiveStatusAsync(userId, false)` revoked nothing when `userId` was spelled differently from the stored id (for example in upper case), because it revoked under the caller's string. It now revokes under the user's stored id, as `DeleteUserAsync` does.
+
 ## [1.2.0-preview.3] - 2026-11-18
 
 ### Removed (breaking)
