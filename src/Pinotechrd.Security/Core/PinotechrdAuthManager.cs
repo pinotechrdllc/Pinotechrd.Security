@@ -533,7 +533,8 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// Revokes every refresh token of the authenticated user, in every session, and renews the security stamp.
     /// Access tokens already issued stay valid until they expire (<see cref="JwtSettings.ExpiryMinutes"/>,
     /// 60 minutes by default), because JWT validation does not consult the server. Returns <see langword="false"/>
-    /// when no <see cref="ISecurityDataProvider"/> was supplied to the constructor.
+    /// when no <see cref="ISecurityDataProvider"/> was supplied to the constructor, and, with the tokens already
+    /// revoked, when renewing the security stamp fails. A user store without security stamps only has its tokens revoked.
     /// </remarks>
     public async Task<bool> SignOutCurrentUserAsync()
     {
@@ -542,8 +543,10 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
 
         // Revoke under the stored id: tokens are saved under GetUserIdAsync.
         await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user));
-        await _userManager.UpdateSecurityStampAsync(user);
-        return true;
+        if (!_userManager.SupportsUserSecurityStamp) return true;
+
+        var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+        return stampResult.Succeeded;
     }
 
     /// <inheritdoc />

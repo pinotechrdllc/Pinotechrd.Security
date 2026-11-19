@@ -31,7 +31,8 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     /// <see cref="IPinotechrdSecurityManager{TUser, TRole}.RevokeUserSessionsAsync"/>.
     /// </remarks>
     /// <returns><see langword="false"/>, with nothing changed, when there is no authenticated user or the user is not
-    /// found; otherwise <see langword="true"/>.</returns>
+    /// found; <see langword="false"/>, with the tokens already revoked, when renewing the security stamp fails;
+    /// otherwise <see langword="true"/>.</returns>
     Task<bool> SignOutCurrentUserAsync();
 
     /// <summary>

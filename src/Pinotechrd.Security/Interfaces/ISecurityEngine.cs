@@ -35,6 +35,8 @@ public interface ISecurityEngine
     /// Returns the complete set of permissions authorized for the authenticated user of the request
     /// (<see cref="ISecurityDataProvider.GetCurrentUserId"/>), filtered like <see cref="GetPermissionsAsync"/>.
     /// </summary>
-    /// <returns>A list of authorized permission codes; empty when there is no authenticated user.</returns>
+    /// <returns>A list of authorized permission codes; empty when there is no authenticated user, when
+    /// <see cref="ISecurityDataProvider.GetCurrentTenantId"/> reports no tenant, or when that tenant is not the
+    /// tenant of the request.</returns>
     Task<IEnumerable<string>> GetCurrentUserPermissionsAsync();
 }

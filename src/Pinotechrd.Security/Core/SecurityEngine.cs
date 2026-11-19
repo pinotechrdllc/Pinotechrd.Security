@@ -204,8 +204,10 @@ public class SecurityEngine : ISecurityEngine
     /// <inheritdoc />
     public Task<IEnumerable<string>> GetCurrentUserPermissionsAsync()
     {
+        // FAIL-FAST: no user or no tenant, no permissions (unlike GetPermissionsAsync, which then skips the module filter).
         var userId = _dataProvider.GetCurrentUserId();
-        return string.IsNullOrEmpty(userId)
+        var tenantId = _dataProvider.GetCurrentTenantId();
+        return string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(tenantId)
             ? Task.FromResult<IEnumerable<string>>([])
             : GetPermissionsAsync(userId);
     }

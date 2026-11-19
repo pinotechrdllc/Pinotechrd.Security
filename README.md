@@ -461,7 +461,9 @@ Self-service methods act on the authenticated user of the request, read from `IS
 - `IPinotechrdAuthManager.SignOutCurrentUserAsync()` and `ChangeOwnPasswordAsync(currentPassword, newPassword)`.
 - `ISecurityEngine.GetCurrentUserPermissionsAsync()`.
 
-Without an authenticated user they change nothing: the sign-out returns `false`, the password change fails, and the permission list is empty.
+Without an authenticated user they change nothing: the sign-out returns `false`, the password change fails, and the permission list is empty (it is also empty when the data provider reports no tenant).
+
+`ChangeOwnPasswordAsync` checks the current password with `UserManager.ChangePasswordAsync`, which does not count failures toward the lockout. Rate-limit the endpoint that calls it, or a stolen access token allows unlimited guesses of the password.
 
 Every method that takes a `userId` is administrative: `IPinotechrdSecurityManager` (for example `RevokeUserSessionsAsync`, `ChangeUserPasswordAsync`, `ResetUserPasswordAsync`) and `ISecurityEngine.GetPermissionsAsync(userId)`. The library does not check who may act on that user; protect the endpoints that call them with an administrative permission, and never pass a user id taken from the request body or route to them on behalf of a regular user.
 

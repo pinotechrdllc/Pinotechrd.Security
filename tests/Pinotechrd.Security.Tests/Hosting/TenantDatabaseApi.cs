@@ -111,9 +111,9 @@ internal sealed class TenantDatabaseApi : IAsyncDisposable
                     claim = http.User.FindFirst("tenant_id")?.Value
                 }));
 
-                app.MapPost("/api/auth/logout", [Authorize] async (HttpContext http, IPinotechrdSecurityManager<HostUser, HostRole> security) =>
+                app.MapPost("/api/auth/logout", [Authorize] async (IPinotechrdAuthManager<HostUser> auth) =>
                 {
-                    await security.RevokeUserSessionsAsync(http.User.FindFirst("id")!.Value);
+                    await auth.SignOutCurrentUserAsync();
                     return Results.NoContent();
                 });
 
