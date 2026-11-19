@@ -431,7 +431,7 @@ With several instances, the in-memory store lets a two-factor token try five cod
 2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddTwoFactorAttempts`.
 3. Register the store (before or after `AddPinotechrdSecurity`): `builder.Services.AddPinotechrdEfTwoFactorAttemptStore<AppSecurityDbContext>();`
 
-Each attempt is one atomic `UPDATE ... SET count = count + 1` (the first one inserts the row), so concurrent attempts on any instance add up to five in total; a database error refuses the attempt rather than allowing one more. The store throws inside a database transaction or `TransactionScope`, because a rollback would erase the counted attempts: call `VerifyTwoFactorCodeAsync` outside any transaction. The store shares the request's context without using its change tracker. Rows are not deleted: purge those whose `expires_at` is more than an hour old (for example `expires_at < now() - interval '1 hour'`), with a scheduled job. Deleting the row of a token that is still valid, for instance because the database clock runs ahead, would let it count from one again. If the flag is off, every call of the store throws `InvalidOperationException`.
+Each attempt is one atomic `UPDATE ... SET count = count + 1` (the first one inserts the row), so concurrent attempts on any instance add up to five in total; a database error refuses the attempt rather than allowing one more. The store throws inside a database transaction or `TransactionScope`, because a rollback would erase the counted attempts: call `VerifyTwoFactorCodeAsync` outside any transaction. The store shares the request's context without using its change tracker. Expired rows are deleted by `IPinotechrdSessionPurger` (see "Purging expired sessions" below). If the flag is off, every call of the store throws `InvalidOperationException`.
 
 ### Data Protection keys
 
@@ -475,6 +475,28 @@ For production, or more than one instance, keep refresh tokens in the database. 
 
 The store is scoped and shares the request's context, but does not use its change tracker: it never saves your pending changes. Tokens are stored as hashes only. Consuming a token is one conditional `UPDATE`, so of concurrent refreshes with one token, on any instance, exactly one succeeds; replaying a used token revokes its family. Expiry and timestamps come from the registered `TimeProvider` (or the system clock), not the database clock, so keep the clocks of your instances synchronised. Because each tenant has its own tables, a token of another tenant is refused as not found, and `RevokeAllForUserAsync` reaches the current tenant only. If the flag is off, every call of the store throws `InvalidOperationException`.
 
+### Purging expired sessions
+
+The EF Core stores never delete rows, so `refresh_tokens`, `refresh_token_families` and `two_factor_attempts` grow without limit. `AddPinotechrdEfRefreshTokenStore` and `AddPinotechrdEfTwoFactorAttemptStore` also register a scoped `IPinotechrdSessionPurger`. `PurgeExpiredAsync(margin)` purges the current tenant's schema (whatever the scoped context resolves to), and only the tables your model maps; it throws `InvalidOperationException` when neither `MapRefreshTokens` nor `MapTwoFactorAttempts` is on. With `cutoff = now - margin` (clock: the registered `TimeProvider`), it deletes:
+
+- the tokens of every family that has no token with `expires_at > cutoff`; a family with a live token keeps all its tokens, so replaying a used one is still detected as reuse;
+- then the `refresh_token_families` rows with no token left, so a revoked family stays revoked while any of its tokens exists;
+- the `two_factor_attempts` rows with `expires_at < cutoff`.
+
+Each step is one `DELETE`; it needs no transaction and is safe while the application serves requests. Run it per tenant from a scheduled job, for example hourly or daily:
+
+```csharp
+foreach (var tenantId in tenantIds) // from your tenant catalog
+{
+    await using var scope = services.CreateAsyncScope();
+    scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant(tenantId);
+    var result = await scope.ServiceProvider.GetRequiredService<IPinotechrdSessionPurger>()
+        .PurgeExpiredAsync(cancellationToken: stoppingToken);
+}
+```
+
+The margin (default one hour, `IPinotechrdSessionPurger.DefaultMargin`) keeps rows a while past their expiry. It covers clock differences between the instance running the purge and the others, and a refresh that consumed a token just before it expired and saves the new one just after. Deleting the attempt row of a two-factor token that some instance still considers valid would let that token count from one again. Keep the margin above the clock skew of your instances. It cannot be shorter than five minutes (`IPinotechrdSessionPurger.MinimumMargin`): a shorter one could delete a revoked family while a refresh that consumed its last token is still saving the rotated one, which would make that token valid again. Both EF stores must use the same context, so one purger covers both tables; registering them with different contexts throws.
+
 ### Writing an `IRefreshTokenStore`
 
 - `ConsumeAsync` must be atomic: a read followed by a write lets two concurrent refreshes through.
@@ -514,9 +536,24 @@ A response cache keyed only by path and query serves one tenant's response to an
   It keeps ASP.NET Core's default policy (GET and HEAD only, no authenticated requests) and adds `TenantOutputCachePolicy`. That policy varies the cache key by the resolved tenant (`TenantContext`, never the raw header). It turns caching off for the request when tenant resolution has not run (cache placed before it, or a skip path), or when a path that requires a tenant has none. For a named or base policy, add `TenantOutputCachePolicy` with `AddPolicy<TenantOutputCachePolicy>()`.
 - **Response caching** (`UseResponseCaching`) and any cache in front of the application (CDN, reverse proxy, browser) are the operator's responsibility. Make tenant-specific responses uncacheable (`Cache-Control: private, no-store`), or vary them on the tenant header (`Vary: TenantId`) only if every cache in front honours `Vary`.
 
+### Subscription and module cache
+
+`AddPinotechrdSecurity` caches each tenant's subscription state and active module codes in an `IDistributedCache` for `options.TenantCacheExpiration` (default 5 minutes). The plan catalog and the user overrides are never cached.
+
+- **Invalidate after a change.** After committing a change to a tenant's subscription, plan or modules, call `ISecurityCacheInvalidator.InvalidateTenantAsync(tenantId)` (registered as a scoped service). The next check reads fresh data; other tenants keep their entries. A change that is not followed by an invalidation, such as a subscription reaching its end date or an edit made directly in the database, is seen when the entries expire. Call it after the commit; if the call fails (cache unavailable, cancelled), stale answers last until the entries expire, so retry it.
+
+  ```csharp
+  await subscriptions.CancelAsync(tenantId);          // your code, committed first
+  await cacheInvalidator.InvalidateTenantAsync(tenantId);
+  ```
+
+- **Several instances need a shared cache.** If no `IDistributedCache` is registered, the library adds the in-memory one, which is per instance: an invalidation on one instance does not reach the others, which keep the old answer until it expires. Register a shared cache such as Redis (`AddStackExchangeRedisCache`) or SQL Server (`AddDistributedSqlServerCache`), before or after `AddPinotechrdSecurity`; it replaces the default. Permission checks read the cache on every call: if a shared cache is unavailable they fail (closed) with its exception, even while the database is healthy.
+- **Keys.** Entries are stored under `pinotechrd:security:tenant:{tenantId}:...`. Invalidation writes a new per-tenant generation token instead of enumerating keys, so the old entries become unreachable and expire. If the cache is shared with other applications, keep that prefix free.
+
 ## Before a stable release: known limits
 
 - **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. With more than one instance, use `AddPinotechrdEfRefreshTokenStore` (see "Persistent refresh token store") and `AddPinotechrdEfTwoFactorAttemptStore` (see "Persistent two-factor attempt store").
+- **In-memory distributed cache.** The default `IDistributedCache` is per instance, so a cache invalidation does not reach other instances. With more than one instance, register a shared cache (see "Subscription and module cache").
 - **No logging of refresh-token reuse.** The library does not log `Reused`; log it in your store (see "For operators").
 - **`SearchPath` mode is PostgreSQL-only**, and needs session-level pooling (see above).
 - **`SearchPath` binding is not re-checked per command.** A server-side function or procedure that changes `search_path` when called is invisible to the scanner, and the change then holds for every later command on that connection until it closes. Keep such functions out of the database, or give each tenant its own database role or login.

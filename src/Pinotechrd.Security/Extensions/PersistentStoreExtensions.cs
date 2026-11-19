@@ -26,6 +26,10 @@ public static class PersistentStoreExtensions
     /// not save the application's pending changes. Expiry is decided by the registered <see cref="TimeProvider"/>,
     /// or the system clock. A token of another tenant is not visible in this tenant's schema and is refused as not found.
     /// </para>
+    /// <para>
+    /// Also registers <see cref="IPinotechrdSessionPurger"/> (if none is registered), which deletes the expired rows of
+    /// the current tenant; schedule it per tenant.
+    /// </para>
     /// </remarks>
     /// <typeparam name="TContext">Security DbContext registered by the application.</typeparam>
     /// <param name="services">Service collection to configure.</param>
@@ -37,6 +41,7 @@ public static class PersistentStoreExtensions
 
         services.RemoveAll<IRefreshTokenStore>();
         services.AddScoped<IRefreshTokenStore, EfRefreshTokenStore<TContext>>();
+        RegisterPurger<TContext>(services, typeof(EfTwoFactorAttemptStore<>), typeof(ITwoFactorAttemptStore));
         return services;
     }
 
@@ -51,6 +56,8 @@ public static class PersistentStoreExtensions
     /// must add and apply a migration to every tenant schema; otherwise every call of the store throws
     /// <see cref="InvalidOperationException"/>. The store does not use the change tracker of the shared context.
     /// Two-factor tokens also need Data Protection keys shared by every instance (<c>PersistKeysTo*</c>).
+    /// Also registers <see cref="IPinotechrdSessionPurger"/> (if none is registered), which deletes the expired rows of
+    /// the current tenant; schedule it per tenant.
     /// </remarks>
     /// <typeparam name="TContext">Security DbContext registered by the application.</typeparam>
     /// <param name="services">Service collection to configure.</param>
@@ -62,6 +69,34 @@ public static class PersistentStoreExtensions
 
         services.RemoveAll<ITwoFactorAttemptStore>();
         services.AddScoped<ITwoFactorAttemptStore, EfTwoFactorAttemptStore<TContext>>();
+        RegisterPurger<TContext>(services, typeof(EfRefreshTokenStore<>), typeof(IRefreshTokenStore));
         return services;
+    }
+
+    /// <summary>
+    /// Registers the purger for <typeparamref name="TContext"/>, replacing a library purger registered for another
+    /// context by an earlier call. Both EF stores must share one context, so one purger covers both tables; a
+    /// mismatch throws. A purger registered by the application is kept.
+    /// </summary>
+    private static void RegisterPurger<TContext>(IServiceCollection services, Type otherStore, Type otherService)
+        where TContext : DbContext
+    {
+        var other = services.LastOrDefault(d => d.ServiceType == otherService)?.ImplementationType;
+        if (other is { IsGenericType: true }
+            && other.GetGenericTypeDefinition() == otherStore
+            && other.GetGenericArguments()[0] != typeof(TContext))
+        {
+            throw new InvalidOperationException(
+                "The EF refresh token store and two-factor attempt store must use the same context, so one " +
+                $"IPinotechrdSessionPurger purges both; got {other.GetGenericArguments()[0].Name} and {typeof(TContext).Name}.");
+        }
+
+        var existing = services.LastOrDefault(d => d.ServiceType == typeof(IPinotechrdSessionPurger))?.ImplementationType;
+        if (existing is { IsGenericType: true } && existing.GetGenericTypeDefinition() == typeof(EfSessionPurger<>))
+        {
+            services.RemoveAll<IPinotechrdSessionPurger>();
+        }
+
+        services.TryAddScoped<IPinotechrdSessionPurger, EfSessionPurger<TContext>>();
     }
 }
