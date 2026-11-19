@@ -1,0 +1,39 @@
+name: Issue Link
+
+# Every pull request must come from a branch named <type>/<issue>-<slug> whose issue is open.
+# Exempt: Dependabot branches and the develop -> main release merge.
+on:
+  pull_request:
+    branches: [ "develop", "main" ]
+    types: [ opened, reopened, synchronize, edited ]
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  issue-link:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check that the branch references an open issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [[ "$HEAD_REF" == dependabot/* || "$HEAD_REF" == "develop" ]]; then
+            echo "Exempt branch: $HEAD_REF"
+            exit 0
+          fi
+          if [[ ! "$HEAD_REF" =~ ^(feat|fix|chore|docs|refactor|test|perf|ci|build)/([0-9]+)-[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "::error::Branch '$HEAD_REF' must be named <type>/<issue>-<slug>, e.g. fix/14-revoke-on-delete."
+            exit 1
+          fi
+          issue="${BASH_REMATCH[2]}"
+          state=$(gh issue view "$issue" --repo "$REPO" --json state -q .state 2>/dev/null || true)
+          if [[ "$state" != "OPEN" ]]; then
+            echo "::error::Issue #$issue referenced by '$HEAD_REF' is not an open issue of $REPO (state: '${state:-not found}')."
+            exit 1
+          fi
+          echo "Branch '$HEAD_REF' references open issue #$issue."
