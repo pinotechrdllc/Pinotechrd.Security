@@ -353,6 +353,7 @@ public class TenantConsistencyCheckTests
                     o.Jwt.Secret = "consistency-check-signing-key-32-bytes!!";
                     o.Jwt.Issuer = "iss";
                     o.Jwt.Audience = "aud";
+                    o.AllowUnverifiedTenantMembership = true;
                 });
                 builder.Services.AddHostStubs(new FixedTenantStore("a", "b"));
             },

@@ -133,6 +133,49 @@ public class PostgresHostTests(PostgresFixture postgres) : IAsyncLifetime
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    private static async Task<Guid> CreateUserAsync(TenantDatabaseApi api, string tenant, string email, string password) =>
+        await api.InTenantAsync(tenant, async sp =>
+        {
+            var users = sp.GetRequiredService<UserManager<HostUser>>();
+            var created = await users.CreateAsync(new HostUser { UserName = email, Email = email, EmailConfirmed = true }, password);
+            created.Succeeded.Should().BeTrue();
+            return (await users.FindByEmailAsync(email))!.Id;
+        });
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task Login_ShouldBeRefused_WhenTheSameEmailExistsInBothTenantsWithDifferentPasswords_AndTheHeaderNamesTheOtherTenant(TenantSchemaMode mode)
+    {
+        var api = Api(mode);
+        var email = "twin-" + Guid.NewGuid().ToString("N")[..8] + "@shared.test";
+        await CreateUserAsync(api, "a", email, "Password-of-A-1");
+        await CreateUserAsync(api, "b", email, "Password-of-B-1");
+
+        var withAPasswordInB = await api.PostAsync("/api/auth/login", new LoginRequest(email, "Password-of-A-1"), "b");
+        var withBPasswordInB = await api.PostAsync("/api/auth/login", new LoginRequest(email, "Password-of-B-1"), "b");
+
+        withAPasswordInB.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        withBPasswordInB.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task Login_ShouldIssueATokenForTheUserOfTheHeaderTenant_WhenTheSameEmailAndPasswordExistInBothTenants(TenantSchemaMode mode)
+    {
+        var api = Api(mode);
+        var email = "twin-" + Guid.NewGuid().ToString("N")[..8] + "@shared.test";
+        var idInA = await CreateUserAsync(api, "a", email, TenantDatabaseApi.Password);
+        var idInB = await CreateUserAsync(api, "b", email, TenantDatabaseApi.Password);
+        idInA.Should().NotBe(idInB);
+
+        var (access, _) = await api.LoginAsync(email, "b");
+
+        var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(access);
+        token.Claims.Single(c => c.Type == "id").Value.Should().Be(idInB.ToString());
+        token.Claims.Should().NotContain(c => c.Value == idInA.ToString());
+        token.Claims.Single(c => c.Type == "tenant_id").Value.Should().Be("b");
+    }
+
     // ---- Refresh -----------------------------------------------------------------------------
 
     [Theory]

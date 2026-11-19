@@ -34,6 +34,7 @@ public class JwtSettingsTests
         o.Jwt.Secret = Secret;
         o.Jwt.Issuer = Issuer;
         o.Jwt.Audience = Audience;
+        o.AllowUnverifiedTenantMembership = true;
     }
 
     private static async Task StartGenericHostAsync(Action<PinotechrdSecurityOptions>? configure)
@@ -42,7 +43,11 @@ public class JwtSettingsTests
         builder.Logging.ClearProviders();
         var databaseName = Guid.NewGuid().ToString();
                 builder.Services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(databaseName));
-        builder.Services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>(configure);
+        builder.Services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>(o =>
+        {
+            configure?.Invoke(o);
+            o.AllowUnverifiedTenantMembership = true;
+        });
         using var host = builder.Build();
         await host.StartAsync();
         await host.StopAsync();

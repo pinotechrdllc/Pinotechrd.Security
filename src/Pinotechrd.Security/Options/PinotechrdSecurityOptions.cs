@@ -16,6 +16,29 @@ public class PinotechrdSecurityOptions
     /// JWT Authentication settings.
     /// </summary>
     public JwtSettings Jwt { get; set; } = new();
+
+    /// <summary>
+    /// Lets the host start when nothing proves that a user belongs to the tenant it signs in to. Default
+    /// <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The library relies on membership only when all three hold for the context passed to
+    /// <c>AddPinotechrdSecurity</c>: it derives from <see cref="Data.PinotechrdSecurityDbContext{TUser, TRole}"/>, its
+    /// registered options were built with <c>UsePinotechrdSecurity()</c>, and in
+    /// <see cref="Data.TenantSchemaMode.SearchPath"/> <c>ApplicationTakesResponsibilityForSearchPath</c> is off.
+    /// Otherwise, with no <see cref="Interfaces.IIdentityValidator{TUser}"/> registered, options validation fails when
+    /// the host starts or when the options are first read.
+    /// </para>
+    /// <para>
+    /// The check cannot see the database provider: one that ignores schemas (for example SQLite or InMemory on a
+    /// single shared database) puts every tenant's users in the same tables unless each tenant has its own database.
+    /// Set this to <see langword="true"/> only when the application checks membership in another way; otherwise a
+    /// user of one tenant can obtain a token for another tenant. The value is shared by every
+    /// <c>AddPinotechrdSecurity</c> call, and binding these options from configuration lets configuration set it.
+    /// </para>
+    /// </remarks>
+    public bool AllowUnverifiedTenantMembership { get; set; }
 }
 
 /// <summary>
