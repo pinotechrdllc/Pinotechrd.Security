@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **Plan modules.** A module row in a tenant schema now counts for a plan (`IsModuleActiveAsync`, `GetActiveModuleCodesAsync`, `GetActiveCatalogAsync`, and the security manager's `GetActiveCatalogAsync`) only when its id is `SecurityModuleId.FromCode` of its code. Plans in the shared catalog refer to modules by id, so a row whose code did not belong to its id (changed after creation, or created with `SecurityModule.Create`, which assigns a random id) was reported under its own code. Codes are compared normalised (trimmed, upper case) on every path, and `GetActiveModuleCodesAsync` returns them normalised. Modules that still have random ids from before deterministic ids stop counting: align them with the module-id migration script in the 1.2.0-preview.3 notes below, and create new modules with `SecuritySeeder` (`SecurityModule.Create` assigns a random id, so a module created with it never counts for a plan). That script maps plans by each row's current code: before running it, check that every module row's code is the module you mean, and that no schema holds two rows whose codes differ only in case or surrounding spaces.
+
 ## [1.2.0-preview.4] - 2026-11-19
 
 ### Added

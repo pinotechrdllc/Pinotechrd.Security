@@ -322,7 +322,7 @@ options.UseNpgsql(connectionString).UsePinotechrdSecurity(model =>
 });
 ```
 
-- The catalog table that maps plans to modules has no foreign key to a tenant table: modules live in every tenant schema and are matched by id (see `SecurityModuleId`).
+- The catalog table that maps plans to modules has no foreign key to a tenant table: modules live in every tenant schema and are matched by id (see `SecurityModuleId`). A module row counts for a plan only when its id is `SecurityModuleId.FromCode` of its code, so create modules with `SecuritySeeder` (`SecurityModule.Create` gives a random id) and do not change the code of an existing module row. Writing to `security_modules` is a provisioning task: do not let tenant users or tenant administrators edit those rows.
 - Keep these settings the same for every instance of one context type.
 
 **`SearchPath` mode in detail.** The interceptors do the following:
