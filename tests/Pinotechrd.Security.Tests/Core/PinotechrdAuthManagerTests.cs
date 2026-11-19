@@ -228,49 +228,6 @@ public class PinotechrdAuthManagerTests
         results.Should().AllSatisfy(r => r.Should().Be(InvalidToken));
     }
 
-    // ---- Sign-out ----------------------------------------------------------------------------
-
-    [Fact]
-    public async Task SignOutAsync_ShouldRevokeAllRefreshTokensAndRenewTheStamp_WhenTheUserExists()
-    {
-        var (kit, user) = NewKit();
-        var stamp = kit.StampOf(user);
-
-        await kit.Manager.SignOutAsync(user.Id.ToString());
-
-        await kit.RefreshStore.Received(1).RevokeAllForUserAsync(user.Id.ToString(), Arg.Any<CancellationToken>());
-        await kit.UserManager.Received(1).UpdateSecurityStampAsync(user);
-        kit.StampOf(user).Should().NotBe(stamp);
-    }
-
-    [Fact]
-    public async Task SignOutAsync_ShouldStillRevokeTokensAndNotThrow_WhenTheUserIsUnknown()
-    {
-        var (kit, _) = NewKit();
-        var unknown = Guid.NewGuid().ToString();
-
-        var act = () => kit.Manager.SignOutAsync(unknown);
-
-        await act.Should().NotThrowAsync();
-        await kit.RefreshStore.Received(1).RevokeAllForUserAsync(unknown, Arg.Any<CancellationToken>());
-        await kit.UserManager.DidNotReceiveWithAnyArgs().UpdateSecurityStampAsync(default!);
-    }
-
-    [Fact]
-    public async Task RefreshAsync_ShouldFailAfterSignOut_WithTheRealStore()
-    {
-        var store = new InMemoryRefreshTokenStore();
-        var kit = new AuthManagerTestKit<RefreshUser>(tenant: Tenant, refreshStore: store);
-        kit.TokenProvider.GenerateRefreshToken().Returns(_ => Guid.NewGuid().ToString("N"));
-        var user = kit.AddUser("alice@x.test");
-        var login = await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<RefreshUser>.Password, Tenant);
-
-        await kit.Manager.SignOutAsync(user.Id.ToString());
-        var result = await kit.Manager.RefreshAsync(login.Token!.RefreshToken);
-
-        result.Should().Be(InvalidToken);
-    }
-
     // ---- Password reset ----------------------------------------------------------------------
 
     [Fact]

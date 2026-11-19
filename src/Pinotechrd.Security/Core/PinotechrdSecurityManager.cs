@@ -329,6 +329,22 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     }
 
     /// <inheritdoc />
+    public async Task<bool> RevokeUserSessionsAsync(string userId)
+    {
+        if (_refreshTokenStore == null) return false;
+
+        var user = await _userManager.FindByIdAsync(userId);
+        if (user == null) return false;
+
+        // Revoke under the stored id: FindByIdAsync also accepts other spellings of the same id.
+        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user));
+        if (!_userManager.SupportsUserSecurityStamp) return true;
+
+        var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+        return stampResult.Succeeded;
+    }
+
+    /// <inheritdoc />
     public async Task<bool> ResetUserPasswordAsync(string userId, string newPassword)
     {
         var user = await _userManager.FindByIdAsync(userId);

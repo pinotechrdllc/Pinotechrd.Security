@@ -25,7 +25,16 @@ public interface ISecurityEngine
     /// Returns the complete set of permissions authorized for a user.
     /// This evaluates standard permissions but may be filtered by active modules.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user. For the authenticated user, use
+    /// <see cref="GetCurrentUserPermissionsAsync"/>.</remarks>
     /// <param name="userId">The unique identifier of the user.</param>
     /// <returns>A list of authorized permission codes.</returns>
     Task<IEnumerable<string>> GetPermissionsAsync(string userId);
+
+    /// <summary>
+    /// Returns the complete set of permissions authorized for the authenticated user of the request
+    /// (<see cref="ISecurityDataProvider.GetCurrentUserId"/>), filtered like <see cref="GetPermissionsAsync"/>.
+    /// </summary>
+    /// <returns>A list of authorized permission codes; empty when there is no authenticated user.</returns>
+    Task<IEnumerable<string>> GetCurrentUserPermissionsAsync();
 }

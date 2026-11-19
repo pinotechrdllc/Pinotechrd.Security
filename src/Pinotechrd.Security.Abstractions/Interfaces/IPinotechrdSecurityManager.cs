@@ -22,6 +22,7 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// <summary>
     /// Gets a user by unique identifier.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
     Task<TUser?> GetUserByIdAsync(string userId);
 
     /// <summary>
@@ -63,24 +64,40 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// Deletes a user by identifier.
     /// </summary>
     /// <remarks>
+    /// <para>Administrative: the caller must authorize acting on this user.</para>
+    /// <para>
     /// The user's refresh tokens are revoked first. An exception from the refresh token store propagates and the
     /// user is not deleted; a failed delete returns <c>false</c> with the tokens already revoked.
+    /// </para>
     /// </remarks>
     Task<bool> DeleteUserAsync(string userId);
 
     /// <summary>
     /// Enables or disables a user account.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
     Task<bool> SetUserActiveStatusAsync(string userId, bool isActive);
+
+    /// <summary>
+    /// Signs a user out of every session: revokes all of its refresh tokens and renews its security stamp.
+    /// Access tokens already issued stay valid until they expire.
+    /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    /// <returns><see langword="false"/>, with nothing changed, when the user is not found or no refresh token store is
+    /// registered; <see langword="false"/>, with the tokens already revoked, when renewing the stamp fails; otherwise
+    /// <see langword="true"/>.</returns>
+    Task<bool> RevokeUserSessionsAsync(string userId);
 
     /// <summary>
     /// Resets the user password without requiring the current password.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
     Task<bool> ResetUserPasswordAsync(string userId, string newPassword);
 
     /// <summary>
     /// Changes the user password using current password validation.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
     Task<bool> ChangeUserPasswordAsync(string userId, string currentPassword, string newPassword);
 
     /// <summary>
@@ -116,16 +133,19 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// <summary>
     /// Returns the role names currently assigned to the user.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
     Task<IEnumerable<string>> GetUserRolesAsync(string userId);
 
     /// <summary>
     /// Assigns one or more roles to a user.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
     Task<bool> AssignRolesToUserAsync(string userId, IEnumerable<string> roleNames);
 
     /// <summary>
     /// Removes one or more roles from a user.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
     Task<bool> RemoveRolesFromUserAsync(string userId, IEnumerable<string> roleNames);
 
     /// <summary>
@@ -168,12 +188,15 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// <summary>
     /// Returns the Allow and Deny overrides written for one user.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
     Task<IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride>> GetUserOverridesAsync(string userId);
 
     /// <summary>
     /// Replaces the user's Allow and Deny overrides. An empty list clears them.
     /// </summary>
     /// <remarks>
+    /// <para>Administrative: the caller must authorize acting on this user.</para>
+    /// <para>
     /// The replace is atomic: a failure leaves the previous overrides intact. Concurrent replaces for the same user
     /// run one after the other, so the final overrides are exactly one of the requested sets. Outside a transaction, a
     /// <c>DbUpdateException</c> from saving the new rows is retried up to five times; any other error, and the last
@@ -181,6 +204,7 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// savepoint and is not retried. The user row receives a no-op <c>UPDATE</c> that serializes the replaces, so
     /// <c>UPDATE</c> triggers on it fire and a row version (<c>xmin</c>, <c>rowversion</c>) changes.
     /// See the README for the details.
+    /// </para>
     /// </remarks>
     /// <exception cref="System.InvalidOperationException">
     /// The context has pending changes (save or discard them first), or its provider is not relational.
