@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ## [Unreleased]
 
+### Fixed
+
+- **SearchPath scanner.** Escape string constants (`E'...'`) are now decoded with PostgreSQL's escape rules: octal (`\o`, `\oo`, `\ooo`), hexadecimal (`\xh`, `\xhh`, with consecutive bytes decoded as UTF-8) and Unicode (`\uXXXX`, `\UXXXXXXXX`, surrogate pairs). Before, only `\b \f \n \r \t` were decoded, so the scanned text of such constants could differ from the text PostgreSQL runs. Now refused, as text the scanner cannot read the way PostgreSQL does: an `E''` string with an escape PostgreSQL rejects (a zero byte, an incomplete `\u` or `\U`, a code point above U+10FFFF, an unpaired surrogate; PostgreSQL rejects these too); a string constant continued after a line break (`'a'` line break `'b'`); and `E''` written directly after a number (`1E'..'`). EF Core generates none of these.
+
 ## [1.2.0-preview.4] - 2026-11-19
 
 ### Added
