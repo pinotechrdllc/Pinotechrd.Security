@@ -485,9 +485,24 @@ A response cache keyed only by path and query serves one tenant's response to an
   It keeps ASP.NET Core's default policy (GET and HEAD only, no authenticated requests) and adds `TenantOutputCachePolicy`. That policy varies the cache key by the resolved tenant (`TenantContext`, never the raw header). It turns caching off for the request when tenant resolution has not run (cache placed before it, or a skip path), or when a path that requires a tenant has none. For a named or base policy, add `TenantOutputCachePolicy` with `AddPolicy<TenantOutputCachePolicy>()`.
 - **Response caching** (`UseResponseCaching`) and any cache in front of the application (CDN, reverse proxy, browser) are the operator's responsibility. Make tenant-specific responses uncacheable (`Cache-Control: private, no-store`), or vary them on the tenant header (`Vary: TenantId`) only if every cache in front honours `Vary`.
 
+### Subscription and module cache
+
+`AddPinotechrdSecurity` caches each tenant's subscription state and active module codes in an `IDistributedCache` for `options.TenantCacheExpiration` (default 5 minutes). The plan catalog and the user overrides are never cached.
+
+- **Invalidate after a change.** After committing a change to a tenant's subscription, plan or modules, call `ISecurityCacheInvalidator.InvalidateTenantAsync(tenantId)` (registered as a scoped service). The next check reads fresh data; other tenants keep their entries. A change that is not followed by an invalidation, such as a subscription reaching its end date or an edit made directly in the database, is seen when the entries expire. Call it after the commit; if the call fails (cache unavailable, cancelled), stale answers last until the entries expire, so retry it.
+
+  ```csharp
+  await subscriptions.CancelAsync(tenantId);          // your code, committed first
+  await cacheInvalidator.InvalidateTenantAsync(tenantId);
+  ```
+
+- **Several instances need a shared cache.** If no `IDistributedCache` is registered, the library adds the in-memory one, which is per instance: an invalidation on one instance does not reach the others, which keep the old answer until it expires. Register a shared cache such as Redis (`AddStackExchangeRedisCache`) or SQL Server (`AddDistributedSqlServerCache`), before or after `AddPinotechrdSecurity`; it replaces the default. Permission checks read the cache on every call: if a shared cache is unavailable they fail (closed) with its exception, even while the database is healthy.
+- **Keys.** Entries are stored under `pinotechrd:security:tenant:{tenantId}:...`. Invalidation writes a new per-tenant generation token instead of enumerating keys, so the old entries become unreachable and expire. If the cache is shared with other applications, keep that prefix free.
+
 ## Before a stable release: known limits
 
 - **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. With more than one instance, use `AddPinotechrdEfRefreshTokenStore` (see "Persistent refresh token store") and `AddPinotechrdEfTwoFactorAttemptStore` (see "Persistent two-factor attempt store").
+- **In-memory distributed cache.** The default `IDistributedCache` is per instance, so a cache invalidation does not reach other instances. With more than one instance, register a shared cache (see "Subscription and module cache").
 - **No logging of refresh-token reuse.** The library does not log `Reused`; log it in your store (see "For operators").
 - **`SearchPath` mode is PostgreSQL-only**, and needs session-level pooling (see above).
 - **`SearchPath` binding is not re-checked per command.** A server-side function or procedure that changes `search_path` when called is invisible to the scanner, and the change then holds for every later command on that connection until it closes. Keep such functions out of the database, or give each tenant its own database role or login.
