@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using NSubstitute;
 using Pinotechrd.Security.Interfaces;
@@ -168,11 +169,10 @@ public class DefaultAuthenticationSchemesTests
             services.Configure<PinotechrdSecurityOptions>(o => o.SetDefaultAuthenticationSchemes = false);
         });
 
-        // Not Bearer: AddIdentity sets its own defaults, which the first test reports separately.
         var (authenticate, challenge, jwtRegistered) = await ResolveAsync(host);
 
-        authenticate.Should().NotBe(JwtBearerDefaults.AuthenticationScheme);
-        challenge.Should().NotBe(JwtBearerDefaults.AuthenticationScheme);
+        authenticate.Should().Be(Cookies);
+        challenge.Should().Be(Cookies);
         jwtRegistered.Should().BeTrue();
     }
 
@@ -204,8 +204,8 @@ public class DefaultAuthenticationSchemesTests
 
         var (authenticate, challenge, _) = await ResolveAsync(host);
 
-        authenticate.Should().NotBe(JwtBearerDefaults.AuthenticationScheme);
-        challenge.Should().NotBe(JwtBearerDefaults.AuthenticationScheme);
+        authenticate.Should().Be(Cookies);
+        challenge.Should().Be(Cookies);
     }
 
     [Fact]
@@ -226,6 +226,94 @@ public class DefaultAuthenticationSchemesTests
 
         authenticate.Should().Be(Cookies);
         challenge.Should().Be(Cookies);
+    }
+
+    [Fact]
+    public async Task FlagFalse_ShouldKeepAnExplicitHostAuthenticateAndChallengeScheme_SetBeforeTheLibrary()
+    {
+        await using var host = await StartAsync(services =>
+        {
+            AddHostCookies(services);
+            services.Configure<AuthenticationOptions>(o =>
+            {
+                o.DefaultAuthenticateScheme = Cookies;
+                o.DefaultChallengeScheme = Cookies;
+            });
+            AddSecurity(services, o => o.SetDefaultAuthenticationSchemes = false);
+        });
+
+        var (authenticate, challenge, _) = await ResolveAsync(host);
+
+        authenticate.Should().Be(Cookies);
+        challenge.Should().Be(Cookies);
+    }
+
+    [Fact]
+    public async Task FlagFalse_ShouldNotLeaveIdentityExternalAsTheDefaultSignInScheme_SoTheHostDefaultSchemeApplies()
+    {
+        await using var host = await StartAsync(services =>
+        {
+            AddHostCookies(services);
+            AddSecurity(services, o => o.SetDefaultAuthenticationSchemes = false);
+        });
+
+        var schemes = host.Services.GetRequiredService<IAuthenticationSchemeProvider>();
+        var options = host.Services.GetRequiredService<IOptions<AuthenticationOptions>>().Value;
+
+        options.DefaultSignInScheme.Should().NotBe("Identity.External");
+        (await schemes.GetDefaultSignInSchemeAsync())!.Name.Should().Be(Cookies);
+    }
+
+    [Fact]
+    public void WithoutAnyJwtConfiguration_ResolvingTheAuthenticationOptions_ShouldNotThrow_AndDefaultToJwtBearer()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(Guid.NewGuid().ToString()));
+        services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>();
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IOptions<AuthenticationOptions>>().Value;
+
+        var options = act.Should().NotThrow().Subject;
+        options.DefaultAuthenticateScheme.Should().Be(JwtBearerDefaults.AuthenticationScheme);
+        options.DefaultChallengeScheme.Should().Be(JwtBearerDefaults.AuthenticationScheme);
+        var schemes = provider.GetRequiredService<IAuthenticationSchemeProvider>();
+        schemes.GetDefaultAuthenticateSchemeAsync().GetAwaiter().GetResult()!.Name.Should().Be(JwtBearerDefaults.AuthenticationScheme);
+    }
+
+    [Fact]
+    public async Task FlagFalse_ShouldResolveTheTenantFromTheClaimOfACookiePrincipal_WithoutATenantHeader()
+    {
+        await using var host = await StartAsync(
+            services =>
+            {
+                AddHostCookies(services);
+                AddSecurity(services, o => o.SetDefaultAuthenticationSchemes = false);
+            },
+            app =>
+            {
+                app.UseAuthentication();
+                app.UseTenantResolution();
+                app.UseAuthorization();
+                app.MapGet("/login/{tenant}", async (HttpContext http, string tenant) =>
+                {
+                    var identity = new ClaimsIdentity([new Claim("sub", "user-1"), new Claim("tenant_id", tenant)], Cookies);
+                    await http.SignInAsync(Cookies, new ClaimsPrincipal(identity));
+                    return Results.Ok();
+                }).AllowAnonymous();
+                app.MapGet("/api/who", [Authorize] (TenantContext tenant) => Results.Text(tenant.TenantId ?? "none"));
+            });
+
+        var login = await host.Client.GetAsync("/login/tenant-a");
+        var cookie = login.Headers.GetValues("Set-Cookie").Single().Split(';')[0];
+
+        var request = new HttpRequestMessage(HttpMethod.Get, "/api/who");
+        request.Headers.Add("Cookie", cookie);
+        var who = await host.Client.SendAsync(request);
+
+        who.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await who.Content.ReadAsStringAsync()).Should().Be("tenant-a");
     }
 
     // WebApplication adds UseAuthentication() by itself when a scheme is registered, so the ordering guard is
