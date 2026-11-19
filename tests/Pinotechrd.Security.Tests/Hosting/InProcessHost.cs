@@ -82,7 +82,7 @@ public sealed class FixedTenantStore : ITenantStore
 
     public System.Collections.Concurrent.ConcurrentQueue<string> Asked { get; } = new();
 
-    public Task<bool> TenantExistsAsync(string tenantId)
+    public Task<bool> TenantExistsAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         Asked.Enqueue(tenantId);
         return Task.FromResult(_tenants.Contains(tenantId));

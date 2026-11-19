@@ -14,6 +14,7 @@ public interface IPinotechrdMessageService
     /// <param name="destination">Email or Phone number.</param>
     /// <param name="code">The generated code.</param>
     /// <param name="codeType">Type of flow (2FA, Reset, etc).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A task representing the operation.</returns>
-    Task SendCodeAsync(string destination, string code, SecurityCodeType codeType);
+    Task SendCodeAsync(string destination, string code, SecurityCodeType codeType, CancellationToken cancellationToken = default);
 }

@@ -18,10 +18,10 @@ public interface ISecurityDataProvider
     /// <summary>
     /// Gets the names of the roles assigned to the specified user.
     /// </summary>
-    Task<IEnumerable<string>> GetUserRolesAsync(string userId);
+    Task<IEnumerable<string>> GetUserRolesAsync(string userId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the names of the permissions assigned to the specified user.
     /// </summary>
-    Task<IEnumerable<string>> GetUserPermissionsAsync(string userId);
+    Task<IEnumerable<string>> GetUserPermissionsAsync(string userId, CancellationToken cancellationToken = default);
 }

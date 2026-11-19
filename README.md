@@ -60,15 +60,16 @@ public sealed class AppSecurityDataProvider(
 {
     public string? GetCurrentUserId() => http.HttpContext?.User.FindFirstValue("id");
     public string? GetCurrentTenantId() => tenant.TenantId;
-    public Task<IEnumerable<string>> GetUserRolesAsync(string userId) => security.GetUserRolesAsync(userId);
+    public Task<IEnumerable<string>> GetUserRolesAsync(string userId, CancellationToken cancellationToken = default)
+        => security.GetUserRolesAsync(userId, cancellationToken);
 
-    public async Task<IEnumerable<string>> GetUserPermissionsAsync(string userId)
+    public async Task<IEnumerable<string>> GetUserPermissionsAsync(string userId, CancellationToken cancellationToken = default)
     {
         var codes = new List<string>();
-        foreach (var name in await security.GetUserRolesAsync(userId))
+        foreach (var name in await security.GetUserRolesAsync(userId, cancellationToken))
         {
-            if (await security.GetRoleByNameAsync(name) is { } role)
-                codes.AddRange(await security.GetRolePermissionsAsync(role.Id.ToString()));
+            if (await security.GetRoleByNameAsync(name, cancellationToken) is { } role)
+                codes.AddRange(await security.GetRolePermissionsAsync(role.Id.ToString(), cancellationToken));
         }
         return codes; // full MODULE.PERMISSION codes
     }
@@ -76,13 +77,13 @@ public sealed class AppSecurityDataProvider(
 
 public sealed class AppTenantStore(NpgsqlDataSource dataSource) : ITenantStore // register: AddSingleton(NpgsqlDataSource.Create(cs))
 {
-    public async Task<bool> TenantExistsAsync(string tenantId)
+    public async Task<bool> TenantExistsAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         await using var command = dataSource.CreateCommand(
             "SELECT EXISTS (SELECT 1 FROM public.tenants WHERE \"Identifier\" = $1 AND \"Status\" = $2)");
         command.Parameters.Add(new NpgsqlParameter { Value = tenantId });
         command.Parameters.Add(new NpgsqlParameter { Value = (int)TenantStatus.Active });
-        return (bool)(await command.ExecuteScalarAsync())!;
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
 }
 ```

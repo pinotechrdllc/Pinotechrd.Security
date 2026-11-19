@@ -8,7 +8,7 @@ public interface ITenantStore
     /// <summary>
     /// Checks if a tenant exists and is active.
     /// </summary>
-    Task<bool> TenantExistsAsync(string tenantId);
+    Task<bool> TenantExistsAsync(string tenantId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

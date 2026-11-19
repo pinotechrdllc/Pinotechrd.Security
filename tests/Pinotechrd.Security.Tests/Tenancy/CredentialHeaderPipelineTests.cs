@@ -136,7 +136,7 @@ public class CredentialHeaderPipelineTests
     public async Task LibraryWiring_ShouldAnswer200_WhenTheClaimMatchesTheResolvedTenant_AndIgnoreTheHeader()
     {
         var engine = Substitute.For<ISecurityEngine>();
-        engine.CanAccessAsync("SALES", "VIEW").Returns(true);
+        engine.CanAccessAsync("SALES", "VIEW", Arg.Any<CancellationToken>()).Returns(true);
         await using var host = await InProcessHost.StartAsync(
             builder =>
             {

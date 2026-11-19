@@ -11,6 +11,8 @@ internal static class SavepointScope
     /// Runs <paramref name="work"/> under <paramref name="savepoint"/>: releases it when the work returns
     /// <see langword="true"/>, and rolls back to it when the work returns <see langword="false"/> or throws.
     /// Without savepoint support the work runs directly, and the caller must roll back its transaction on failure.
+    /// <paramref name="cancellationToken"/> cancels creating and releasing the savepoint, never the rollback to it,
+    /// so a cancelled request cannot leave the failed work applied inside the caller's transaction.
     /// </summary>
     /// <exception cref="AggregateException">
     /// The work threw and rolling back to the savepoint failed too; holds both exceptions.
@@ -19,7 +21,8 @@ internal static class SavepointScope
         IDbContextTransaction transaction,
         string savepoint,
         string operation,
-        Func<Task<bool>> work)
+        Func<Task<bool>> work,
+        CancellationToken cancellationToken)
     {
         if (!transaction.SupportsSavepoints)
         {
@@ -27,7 +30,7 @@ internal static class SavepointScope
             return await work();
         }
 
-        await transaction.CreateSavepointAsync(savepoint);
+        await transaction.CreateSavepointAsync(savepoint, cancellationToken);
         bool succeeded;
         try
         {
@@ -37,7 +40,7 @@ internal static class SavepointScope
         {
             try
             {
-                await transaction.RollbackToSavepointAsync(savepoint);
+                await transaction.RollbackToSavepointAsync(savepoint, CancellationToken.None);
             }
             catch (Exception rollbackFailure)
             {
@@ -52,11 +55,11 @@ internal static class SavepointScope
 
         if (succeeded)
         {
-            await transaction.ReleaseSavepointAsync(savepoint);
+            await transaction.ReleaseSavepointAsync(savepoint, cancellationToken);
         }
         else
         {
-            await transaction.RollbackToSavepointAsync(savepoint);
+            await transaction.RollbackToSavepointAsync(savepoint, CancellationToken.None);
         }
 
         return succeeded;
