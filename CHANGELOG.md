@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **JWT bearer validation policy.** After all `Configure<JwtBearerOptions>` calls, `AddPinotechrdSecurity` now also clears `TokenValidationParameters.ValidIssuers`, `ValidAudiences`, `IssuerValidator`, `IssuerValidatorUsingConfiguration`, `AudienceValidator`, `LifetimeValidator` and `AlgorithmValidator`. These replace or extend the built-in issuer, audience, lifetime and algorithm checks, so the documented policy did not hold when an application set them. The final bearer options are then validated against the policy when the host starts (and on every read): a `PostConfigure<JwtBearerOptions>` registered after `AddPinotechrdSecurity` that changes the issuer, audience, lifetime, signature, key or algorithm settings, or a `ClockSkew` above five minutes, now fails with an `OptionsValidationException` that names the setting. The same applies to custom token handlers, a `TokenValidationParameters` subclass, `TokenReader`, `TransformBeforeSignatureValidation`, and `ForwardDefault`/`ForwardAuthenticate`/`ForwardDefaultSelector` on the library's bearer scheme. Migration:
+  - `ClockSkew`: set it to five minutes or less (zero or more).
+  - Several issuers or audiences, or a custom `IssuerValidator` (for example for per-tenant issuers): register them as a separate authentication scheme with its own `AddJwtBearer("name", ...)`, and select it with a policy scheme (`AddPolicyScheme` with `ForwardDefaultSelector`) set as the default instead of the library's scheme. That scheme is not covered by the library's policy: the application is responsible for its validation, for a membership-verified tenant claim and for exempting that claim from inbound claim mapping, as for any other scheme (see `SetDefaultAuthenticationSchemes`).
+  - Validation logic in a `PostConfigure<JwtBearerOptions>` for the library's scheme: move it to a separate scheme as above.
+
 ## [1.2.0-preview.4] - 2026-11-19
 
 ### Added

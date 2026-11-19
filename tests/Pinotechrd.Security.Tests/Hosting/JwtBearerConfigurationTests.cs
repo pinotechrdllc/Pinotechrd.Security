@@ -104,15 +104,201 @@ public class JwtBearerConfigurationTests
     }
 
     [Fact]
-    public void ConsumerPostConfigure_CanStillChangeTheAlgorithms_BecauseItRunsAfterThePin()
+    public void ConsumerPostConfigure_ThatChangesTheAlgorithms_ShouldFailOptionsValidation()
     {
-        var options = Resolve(after: services => services.PostConfigure<JwtBearerOptions>(
+        // A later PostConfigure runs after the library's pin; the final options are validated, so the change is refused.
+        var act = () => Resolve(after: services => services.PostConfigure<JwtBearerOptions>(
             JwtBearerDefaults.AuthenticationScheme,
             o => o.TokenValidationParameters.ValidAlgorithms = [SecurityAlgorithms.HmacSha512]));
 
-        // A later PostConfigure runs after the library's: the consumer can still lower the pin this way.
-        // This test records that behavior; see the report.
-        options.TokenValidationParameters.ValidAlgorithms.Should().Equal(SecurityAlgorithms.HmacSha512);
+        act.Should().Throw<OptionsValidationException>().WithMessage("*ValidAlgorithms must be HS256 only*");
+    }
+
+    // ---- Members that widen what the policy accepts ---------------------------------------------
+
+    public static TheoryData<string, Action<TokenValidationParameters>> WideningMembers => new()
+    {
+        { "LifetimeValidator", p => p.LifetimeValidator = (_, _, _, _) => true },
+        { "AudienceValidator", p => p.AudienceValidator = (_, _, _) => true },
+        { "IssuerValidator", p => p.IssuerValidator = (issuer, _, _) => issuer },
+        { "AlgorithmValidator", p => p.AlgorithmValidator = (_, _, _, _) => true },
+        { "ValidIssuers", p => p.ValidIssuers = ["someone-else"] },
+        { "ValidAudiences", p => p.ValidAudiences = ["someone-else"] },
+    };
+
+    [Theory]
+    [MemberData(nameof(WideningMembers))]
+    public void ConsumerConfigure_ThatWidensThePolicy_ShouldBeCleared(string member, Action<TokenValidationParameters> widen)
+    {
+        foreach (var before in new[] { true, false })
+        {
+            Action<IServiceCollection> configure = services => services.Configure<JwtBearerOptions>(
+                JwtBearerDefaults.AuthenticationScheme, o => widen(o.TokenValidationParameters));
+            var parameters = (before ? Resolve(before: configure) : Resolve(after: configure)).TokenValidationParameters;
+
+            parameters.LifetimeValidator.Should().BeNull(member);
+            parameters.AudienceValidator.Should().BeNull(member);
+            parameters.IssuerValidator.Should().BeNull(member);
+            parameters.AlgorithmValidator.Should().BeNull(member);
+            parameters.ValidIssuers.Should().BeNull(member);
+            parameters.ValidAudiences.Should().BeNull(member);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(WideningMembers))]
+    public void ConsumerPostConfigure_ThatWidensThePolicy_ShouldFailOptionsValidation(string member, Action<TokenValidationParameters> widen)
+    {
+        var act = () => Resolve(after: services => services.PostConfigure<JwtBearerOptions>(
+            JwtBearerDefaults.AuthenticationScheme, o => widen(o.TokenValidationParameters)));
+
+        act.Should().Throw<OptionsValidationException>().WithMessage($"*{member} must*");
+    }
+
+    private static SymmetricSecurityKey OtherKey() => new(Encoding.UTF8.GetBytes(new string('k', 48)));
+
+    private sealed class SubclassedParameters : TokenValidationParameters;
+
+    private sealed class CustomHandler : Microsoft.IdentityModel.JsonWebTokens.JsonWebTokenHandler;
+
+    public static TheoryData<string, Action<JwtBearerOptions>> ReplacedSecurityMembers => new()
+    {
+        { "IssuerSigningKeys", o => o.TokenValidationParameters.IssuerSigningKeys = [OtherKey()] },
+        { "IssuerSigningKeys", o => o.TokenValidationParameters.IssuerSigningKeys = [.. o.TokenValidationParameters.IssuerSigningKeys, OtherKey()] },
+        { "IssuerSigningKey", o => o.TokenValidationParameters.IssuerSigningKey = OtherKey() },
+        { "IssuerSigningKeyResolver", o => o.TokenValidationParameters.IssuerSigningKeyResolver = (_, _, _, _) => [OtherKey()] },
+        { "IssuerSigningKeyResolverUsingConfiguration", o => o.TokenValidationParameters.IssuerSigningKeyResolverUsingConfiguration = (_, _, _, _, _) => [OtherKey()] },
+        { "ValidateIssuer", o => o.TokenValidationParameters.ValidateIssuer = false },
+        { "ValidateAudience", o => o.TokenValidationParameters.ValidateAudience = false },
+        { "ValidateLifetime", o => o.TokenValidationParameters.ValidateLifetime = false },
+        { "ValidateIssuerSigningKey", o => o.TokenValidationParameters.ValidateIssuerSigningKey = false },
+        { "RequireSignedTokens", o => o.TokenValidationParameters.RequireSignedTokens = false },
+        { "RequireExpirationTime", o => o.TokenValidationParameters.RequireExpirationTime = false },
+        { "ValidIssuer", o => o.TokenValidationParameters.ValidIssuer = "someone-else" },
+        { "ValidAudience", o => o.TokenValidationParameters.ValidAudience = "someone-else" },
+        { "IssuerValidatorUsingConfiguration", o => o.TokenValidationParameters.IssuerValidatorUsingConfiguration = (issuer, _, _, _) => issuer },
+        { "SignatureValidator", o => o.TokenValidationParameters.SignatureValidator = (token, _) => new JwtSecurityToken(token) },
+        { "SignatureValidatorUsingConfiguration", o => o.TokenValidationParameters.SignatureValidatorUsingConfiguration = (token, _, _) => new JwtSecurityToken(token) },
+        { "TokenReader", o => o.TokenValidationParameters.TokenReader = (token, _) => new JwtSecurityToken(token) },
+        { "TransformBeforeSignatureValidation", o => o.TokenValidationParameters.TransformBeforeSignatureValidation = (token, _) => token },
+        { "TokenValidationParameters", o => o.TokenValidationParameters = new SubclassedParameters() },
+        { "TokenHandlers", o => o.TokenHandlers.Add(new CustomHandler()) },
+        { "ForwardDefault", o => o.ForwardDefault = "other" },
+        { "ForwardAuthenticate", o => o.ForwardAuthenticate = "other" },
+        { "ForwardDefaultSelector", o => o.ForwardDefaultSelector = _ => "other" },
+        { "ClockSkew", o => o.TokenValidationParameters.ClockSkew = TimeSpan.FromDays(365) },
+        { "ClockSkew", o => o.TokenValidationParameters.ClockSkew = TimeSpan.FromMinutes(5) + TimeSpan.FromTicks(1) },
+    };
+
+    [Theory]
+    [MemberData(nameof(ReplacedSecurityMembers))]
+    public void ConsumerPostConfigure_ThatChangesThePolicy_ShouldFailOptionsValidation(string member, Action<JwtBearerOptions> change)
+    {
+        var act = () => Resolve(after: services => services.PostConfigure(JwtBearerDefaults.AuthenticationScheme, change));
+
+        act.Should().Throw<OptionsValidationException>().WithMessage($"*{member} must*");
+    }
+
+    [Fact]
+    public void ConsumerPostConfigure_ThatSetsTheParametersToNull_ShouldFailOptionsValidation()
+    {
+        var act = () => Resolve(after: services => services.PostConfigure<JwtBearerOptions>(
+            JwtBearerDefaults.AuthenticationScheme, o => o.TokenValidationParameters = null!));
+
+        act.Should().Throw<OptionsValidationException>().WithMessage("*TokenValidationParameters is null*");
+    }
+
+    [Fact]
+    public void ClockSkewOfExactlyFiveMinutes_ShouldBeAccepted()
+    {
+        var options = Resolve(after: services => services.PostConfigure<JwtBearerOptions>(
+            JwtBearerDefaults.AuthenticationScheme, o => o.TokenValidationParameters.ClockSkew = TimeSpan.FromMinutes(5)));
+
+        options.TokenValidationParameters.ClockSkew.Should().Be(TimeSpan.FromMinutes(5));
+    }
+
+    [Fact]
+    public void AnotherBearerScheme_ShouldNotBeCheckedByThePolicy()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddAuthentication().AddJwtBearer("Partner", o => o.TokenValidationParameters.ValidateLifetime = false);
+        services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(Guid.NewGuid().ToString()));
+        services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>(o =>
+        {
+            o.Jwt.Secret = Secret;
+            o.Jwt.Issuer = "the-issuer";
+            o.Jwt.Audience = "the-audience";
+            o.AllowUnverifiedTenantMembership = true;
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var other = provider.GetRequiredService<IOptionsMonitor<JwtBearerOptions>>().Get("Partner");
+
+        other.TokenValidationParameters.ValidateLifetime.Should().BeFalse("the policy covers the library's scheme only");
+    }
+
+    [Fact]
+    public async Task HostStart_ShouldFailWithOnlyTheSecurityOptionsError_WhenThoseAreInvalid()
+    {
+        var act = () => InProcessHost.StartAsync(
+            builder =>
+            {
+                var databaseName = Guid.NewGuid().ToString();
+                builder.Services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(databaseName));
+                builder.Services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>(o =>
+                {
+                    o.Jwt.Secret = Secret;
+                    o.Jwt.Issuer = "the-issuer";
+                    o.Jwt.Audience = "";
+                    o.AllowUnverifiedTenantMembership = true;
+                });
+                builder.Services.AddHostStubs();
+            },
+            app => app.MapGet("/", () => Results.Ok()));
+
+        (await act.Should().ThrowAsync<OptionsValidationException>())
+            .Which.Message.Should().Contain("PinotechrdSecurityOptions.Jwt.Audience").And.NotContain("JwtBearerOptions");
+    }
+
+    [Fact]
+    public void ConsumerPostConfigure_OfSettingsOutsideThePolicy_ShouldBeAccepted()
+    {
+        var options = Resolve(after: services => services.PostConfigure<JwtBearerOptions>(
+            JwtBearerDefaults.AuthenticationScheme,
+            o =>
+            {
+                o.TokenValidationParameters.NameClaimType = "name";
+                o.TokenValidationParameters.ClockSkew = TimeSpan.FromSeconds(30);
+                o.SaveToken = true;
+            }));
+
+        options.TokenValidationParameters.NameClaimType.Should().Be("name");
+        options.TokenValidationParameters.ClockSkew.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task HostStart_ShouldFail_WhenALaterPostConfigureWeakensThePolicy()
+    {
+        var act = () => InProcessHost.StartAsync(
+            builder =>
+            {
+                var databaseName = Guid.NewGuid().ToString();
+                builder.Services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(databaseName));
+                builder.Services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>(o =>
+                {
+                    o.Jwt.Secret = Secret;
+                    o.Jwt.Issuer = "the-issuer";
+                    o.Jwt.Audience = "the-audience";
+                    o.AllowUnverifiedTenantMembership = true;
+                });
+                builder.Services.AddHostStubs();
+                builder.Services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme,
+                    o => o.TokenValidationParameters.LifetimeValidator = (_, _, _, _) => true);
+            },
+            app => app.MapGet("/", () => Results.Ok()));
+
+        await act.Should().ThrowAsync<OptionsValidationException>().WithMessage("*LifetimeValidator*");
     }
 
     [Fact]
@@ -301,5 +487,50 @@ public class JwtBearerConfigurationTests
             signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
 
         (await CallAsync(host, expired)).Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task RealHandler_ShouldKeepThePolicy_WhenTheApplicationConfiguresValidatorDelegatesAndLists()
+    {
+        await using var host = await InProcessHost.StartAsync(
+            builder =>
+            {
+                var databaseName = Guid.NewGuid().ToString();
+                builder.Services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(databaseName));
+                builder.Services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>(o =>
+                {
+                    o.Jwt.Secret = Secret;
+                    o.Jwt.Issuer = "the-issuer";
+                    o.Jwt.Audience = "the-audience";
+                    o.AllowUnverifiedTenantMembership = true;
+                });
+                builder.Services.AddHostStubs();
+                builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, o =>
+                {
+                    var p = o.TokenValidationParameters;
+                    p.LifetimeValidator = (_, _, _, _) => true;
+                    p.AudienceValidator = (_, _, _) => true;
+                    p.IssuerValidator = (issuer, _, _) => issuer;
+                    p.AlgorithmValidator = (_, _, _, _) => true;
+                    p.ValidIssuers = ["someone-else"];
+                    p.ValidAudiences = ["someone-else"];
+                });
+            },
+            app =>
+            {
+                app.UseAuthentication();
+                app.UseAuthorization();
+                app.MapGet("/secured", [Authorize] () => Results.Ok());
+            });
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Secret));
+        var expired = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
+            "the-issuer", "the-audience", [new Claim("sub", "x")],
+            notBefore: DateTime.UtcNow.AddHours(-12), expires: DateTime.UtcNow.AddHours(-10),
+            signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
+
+        (await CallAsync(host, Token("the-issuer", "the-audience"))).Should().Be(HttpStatusCode.OK);
+        (await CallAsync(host, expired)).Should().Be(HttpStatusCode.Unauthorized);
+        (await CallAsync(host, Token("someone-else", "the-audience"))).Should().Be(HttpStatusCode.Unauthorized);
+        (await CallAsync(host, Token("the-issuer", "someone-else"))).Should().Be(HttpStatusCode.Unauthorized);
     }
 }
