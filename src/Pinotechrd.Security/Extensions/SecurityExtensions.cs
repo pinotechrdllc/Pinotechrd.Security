@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -76,6 +77,7 @@ public static class SecurityExtensions
                 o.Jwt = options.Jwt;
                 o.AllowUnverifiedTenantMembership = options.AllowUnverifiedTenantMembership;
                 o.TenantCacheExpiration = options.TenantCacheExpiration;
+                o.SetDefaultAuthenticationSchemes = options.SetDefaultAuthenticationSchemes;
                 // Keep IOptions<PinotechrdSecurityOptions>.Value.Tenancy equal to the registered TenantResolutionOptions.
                 var tenancy = o.Tenancy;
                 tenancy.HeaderName = options.Tenancy.HeaderName;
@@ -132,12 +134,12 @@ public static class SecurityExtensions
         services.AddScoped<ISecurityDbContext>(sp => sp.GetRequiredService<TContext>() as ISecurityDbContext ?? throw new InvalidOperationException("DbContext does not implement ISecurityDbContext"));
         services.AddScoped<IPinotechrdSecurityManager<TUser, TRole>, PinotechrdSecurityManager<TUser, TRole>>();
 
-        services.AddAuthentication(auth =>
-        {
-            auth.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-            auth.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-        })
-        .AddJwtBearer();
+        // The defaults are applied from the configured PinotechrdSecurityOptions, so the flag is honoured however and
+        // whenever the application sets it. Registered here, after AddIdentity (whose defaults it may clear), so a host
+        // Configure<AuthenticationOptions> after this call still wins, as before.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<AuthenticationOptions>, DefaultAuthenticationSchemesSetup>());
+        services.AddAuthentication()
+            .AddJwtBearer();
 
         // Applied from the validated options in a PostConfigure step, which runs after every Configure, so an
         // application that changes or replaces TokenValidationParameters keeps its other settings but cannot
@@ -207,5 +209,67 @@ public static class SecurityExtensions
     public static IApplicationBuilder UseTenantResolution(this IApplicationBuilder app)
     {
         return app.UseMiddleware<TenantResolutionMiddleware>();
+    }
+
+    /// <summary>
+    /// Sets JWT bearer as the default authenticate and challenge scheme unless
+    /// <see cref="PinotechrdSecurityOptions.SetDefaultAuthenticationSchemes"/> is <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// When the flag is <see langword="false"/>, the defaults that <c>AddIdentity</c> sets (authenticate and
+    /// challenge to <see cref="IdentityConstants.ApplicationScheme"/>, sign-in to
+    /// <see cref="IdentityConstants.ExternalScheme"/>) are cleared, but only while they still hold Identity's values,
+    /// so the host's <c>DefaultScheme</c> applies and a value the host set explicitly is kept. Registered after
+    /// <c>AddIdentity</c>, so its values are already in place when this runs.
+    /// </remarks>
+    private sealed class DefaultAuthenticationSchemesSetup : IConfigureOptions<AuthenticationOptions>
+    {
+        private readonly IOptions<PinotechrdSecurityOptions> _security;
+
+        public DefaultAuthenticationSchemesSetup(IOptions<PinotechrdSecurityOptions> security)
+        {
+            _security = security;
+        }
+
+        private bool ReadSetDefaultAuthenticationSchemes()
+        {
+            try
+            {
+                return _security.Value.SetDefaultAuthenticationSchemes;
+            }
+            catch (OptionsValidationException)
+            {
+                // The authentication options are also built by tools that resolve the scheme provider without
+                // configuration (for example OpenAPI generation at build time), which must keep working. Falling back
+                // to the flag's default is safe: an invalid configuration still fails the host at start
+                // (ValidateOnStart), and every other read of these options throws the same exception.
+                return true;
+            }
+        }
+
+        public void Configure(AuthenticationOptions options)
+        {
+            if (ReadSetDefaultAuthenticationSchemes())
+            {
+                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+                return;
+            }
+
+            if (options.DefaultAuthenticateScheme == IdentityConstants.ApplicationScheme)
+            {
+                options.DefaultAuthenticateScheme = null;
+            }
+
+            if (options.DefaultChallengeScheme == IdentityConstants.ApplicationScheme)
+            {
+                options.DefaultChallengeScheme = null;
+            }
+
+            if (options.DefaultSignInScheme == IdentityConstants.ExternalScheme)
+            {
+                options.DefaultSignInScheme = null;
+            }
+        }
     }
 }

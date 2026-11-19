@@ -267,3 +267,5 @@ Pinotechrd.Security.Options.PinotechrdSecurityOptions.TenantCacheExpiration.set 
 Pinotechrd.Security.Core.PinotechrdSecurityManager<TUser, TRole>.RevokeUserSessionsAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
 Pinotechrd.Security.Core.SecurityEngine.GetCurrentUserPermissionsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
 Pinotechrd.Security.Interfaces.ISecurityEngine.GetCurrentUserPermissionsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IEnumerable<string!>!>!
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.SetDefaultAuthenticationSchemes.get -> bool
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.SetDefaultAuthenticationSchemes.set -> void

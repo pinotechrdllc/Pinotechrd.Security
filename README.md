@@ -253,6 +253,19 @@ Tokens carry a `kid` header: the first 16 lowercase hex characters of SHA-256 ov
 
 The library enforces no time limit: a secret in `PreviousSecrets` is accepted until you remove it. Never keep a leaked secret there: whoever holds it can forge tokens, and `GetPrincipalFromExpiredToken` accepts them at any age; remove it and rotate at once. Keys are read once, when the host starts, so each step takes effect only after a restart.
 
+### Authentication schemes
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `SetDefaultAuthenticationSchemes` | `true` | `true` sets JWT bearer as `DefaultAuthenticateScheme` and `DefaultChallengeScheme`. `false` sets no default and clears the ones ASP.NET Core Identity set, so the host's `DefaultScheme` applies. |
+
+By default the library makes JWT bearer the default authenticate and challenge scheme, and these two settings take precedence over a `DefaultScheme` the host set. A host that signs users in with cookies or OpenID Connect sets `o.SetDefaultAuthenticationSchemes = false` to keep its own defaults. The JWT bearer scheme and the validation settings the library enforces on it are still registered, and JWT endpoints select it with `[Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]`. `AddIdentity`, which the library calls, sets `DefaultAuthenticateScheme` and `DefaultChallengeScheme` to `Identity.Application` and `DefaultSignInScheme` to `Identity.External`; with the flag off the library clears them while they still hold those values, so your `DefaultScheme` applies. A value you set explicitly is kept. The flag is read from `IOptions<PinotechrdSecurityOptions>`, so setting it later with `Configure<PinotechrdSecurityOptions>` or configuration binding also works.
+
+With the flag off:
+
+- `UseTenantResolution()` reads the principal of your default scheme. A request that carries only a bearer token is anonymous there and must send the tenant header, unless your default is a policy scheme whose `ForwardDefaultSelector` picks `JwtBearerDefaults.AuthenticationScheme` when an `Authorization: Bearer` header is present.
+- Only the library's JWT bearer scheme guarantees a tenant claim from a token whose signature was validated. Its tenant membership was proven at sign-in by the tenant-scoped user store or a registered `IIdentityValidator<TUser>`, unless `AllowUnverifiedTenantMembership` is set. For your own schemes, you are responsible for issuing a tenant claim whose membership was verified, and for exempting that claim type from inbound claim mapping so it keeps its name.
+
 ### Tenant resolution (`options.Tenancy`)
 
 Where the tenant id comes from depends on whether the request is authenticated:
