@@ -23,7 +23,9 @@ public enum TenantSchemaMode
     /// ambient transaction, and refuse every command on a connection not bound to the current tenant. They also
     /// refuse connection strings with <c>Multiplexing</c>, <c>No Reset On Close</c>, <c>Search Path</c> or
     /// <c>Options</c> setting <c>search_path</c>, and EF Core commands that change <c>search_path</c>, the role or the
-    /// session state. PostgreSQL only, with session-level pooling (not PgBouncer transaction or statement mode).
+    /// session state. PostgreSQL only, with session-level pooling: a connection pooler is detected when a connection is
+    /// bound and refused unless <see cref="PinotechrdSecurityModelOptions.ConnectionPoolerUsesSessionMode"/> says it runs in
+    /// session mode (transaction or statement mode would share one tenant's session with another).
     /// </summary>
     SearchPath = 1
 }
@@ -59,6 +61,25 @@ public sealed class PinotechrdSecurityModelOptions
     /// path. Without the interceptors and without this flag, the context refuses to start. Default <see langword="false"/>.
     /// </summary>
     public bool ApplicationTakesResponsibilityForSearchPath { get; set; }
+
+    /// <summary>
+    /// <see cref="TenantSchemaMode.SearchPath"/> only. Set it to <see langword="true"/> when the application connects
+    /// through a connection pooler (PgBouncer, Odyssey, PgCat, a cloud proxy) that runs in <b>session</b> mode, where a
+    /// client keeps one server session until it disconnects. Default <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// When a connection is bound, the library compares the server's <c>pg_backend_pid()</c> with the process id the
+    /// client was given; a pooler gives its own, so they differ. Unless this option is on, binding is then refused:
+    /// in transaction or statement mode the pooler hands the same server session, with the <c>search_path</c> one tenant
+    /// set, to another client between statements, so one tenant's commands can run on another tenant's schema. Turn it
+    /// on only for session mode. <see cref="TenantSchemaMode.SchemaPerTenantInModel"/> works with every pooler mode,
+    /// because each query names its schema.
+    /// The detection is best effort (a pooler that forwards the server's process id is not seen), and this option is a
+    /// declaration the library cannot verify: declared for a pooler that actually runs in transaction or statement mode
+    /// (including a per-database or per-user override, or a pooler without a session mode such as AWS RDS Proxy),
+    /// tenants' sessions are shared without an error.
+    /// </remarks>
+    public bool ConnectionPoolerUsesSessionMode { get; set; }
 
     /// <summary>
     /// When <see langword="true"/>, the model maps the tables of the persistent refresh token store
@@ -105,7 +126,8 @@ public static class PinotechrdSecurityDbContextOptionsExtensions
             options.ExcludeCatalogFromMigrations,
             options.ApplicationTakesResponsibilityForSearchPath,
             options.MapRefreshTokens,
-            options.MapTwoFactorAttempts));
+            options.MapTwoFactorAttempts,
+            options.ConnectionPoolerUsesSessionMode));
 
         ((IDbContextOptionsBuilderInfrastructure)builder).AddOrUpdateExtension(extension);
         builder.ReplaceService<IModelCacheKeyFactory, ModelSchemaCacheKeyFactory>();
@@ -132,7 +154,8 @@ internal sealed record PinotechrdSecurityModelSettings(
     bool ExcludeCatalogFromMigrations,
     bool ApplicationTakesResponsibilityForSearchPath,
     bool MapRefreshTokens = false,
-    bool MapTwoFactorAttempts = false)
+    bool MapTwoFactorAttempts = false,
+    bool ConnectionPoolerUsesSessionMode = false)
 {
     public static readonly PinotechrdSecurityModelSettings Default = new(TenantSchemaMode.SchemaPerTenantInModel, "public", false, false);
 }

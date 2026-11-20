@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using System.Transactions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 
 namespace Pinotechrd.Security.Data;
 
@@ -71,7 +72,7 @@ internal static partial class SearchPathBinder
             using var verify = CreateVerifyCommand(connection);
             using (var reader = verify.ExecuteReader())
             {
-                Record(connection, schema, ReadVerify(reader));
+                Record(connection, schema, ReadVerify(reader), PoolerInSessionModeDeclared(context));
             }
         }
         catch
@@ -95,7 +96,7 @@ internal static partial class SearchPathBinder
             await using var verify = CreateVerifyCommand(connection);
             await using (var reader = await verify.ExecuteReaderAsync(cancellationToken))
             {
-                Record(connection, schema, ReadVerify(reader));
+                Record(connection, schema, ReadVerify(reader), PoolerInSessionModeDeclared(context));
             }
         }
         catch
@@ -195,7 +196,12 @@ internal static partial class SearchPathBinder
         }
     }
 
+    // Keyed by a SHA-256 of the connection string, never the string itself: with a database role per tenant there is
+    // one entry per tenant, and a connection string can hold a password.
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> ConnectionStringProblems = new(StringComparer.Ordinal);
+
+    private static string ConnectionStringKey(string connectionString) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(connectionString)));
 
     /// <summary>
     /// Refuses connection settings under which a bound session path cannot be trusted: multiplexing (commands of
@@ -204,7 +210,8 @@ internal static partial class SearchPathBinder
     /// </summary>
     private static void EnsureSupportedConnection(DbConnection connection)
     {
-        var problem = ConnectionStringProblems.GetOrAdd(connection.ConnectionString ?? string.Empty, AnalyzeConnectionString);
+        var connectionString = connection.ConnectionString ?? string.Empty;
+        var problem = ConnectionStringProblems.GetOrAdd(ConnectionStringKey(connectionString), _ => AnalyzeConnectionString(connectionString));
         if (problem != null)
         {
             throw new InvalidOperationException(problem + " TenantSchemaMode.SearchPath needs one physical connection per open, reset between uses, with no default search path.");
@@ -276,23 +283,41 @@ internal static partial class SearchPathBinder
     }
 
     /// <summary>
-    /// Reads the bound path and <c>standard_conforming_strings</c> in the same round trip. The session-change scanner
-    /// lexes strings as PostgreSQL does with <c>standard_conforming_strings</c> on (its default); with it off, backslashes
-    /// in plain strings would make the scanner and the server split a command differently, so binding is refused.
+    /// Reads the bound path, <c>standard_conforming_strings</c> and the server's process id in the same round trip. The
+    /// session-change scanner lexes strings as PostgreSQL does with <c>standard_conforming_strings</c> on (its default);
+    /// with it off, backslashes in plain strings would make the scanner and the server split a command differently, so
+    /// binding is refused. The process id detects a connection pooler (see <see cref="Record"/>).
     /// </summary>
     private static DbCommand CreateVerifyCommand(DbConnection connection)
     {
         var command = connection.CreateCommand();
-        command.CommandText = "SELECT current_setting('search_path'), current_setting('standard_conforming_strings')";
+        command.CommandText = "SELECT current_setting('search_path'), current_setting('standard_conforming_strings'), pg_backend_pid()";
         return command;
     }
 
-    private static (string? Path, string? ConformingStrings) ReadVerify(DbDataReader reader) =>
+    private static (string? Path, string? ConformingStrings, int? ServerProcessId) ReadVerify(DbDataReader reader) =>
         reader.Read()
-            ? (reader.IsDBNull(0) ? null : reader.GetString(0), reader.FieldCount > 1 && !reader.IsDBNull(1) ? reader.GetString(1) : null)
-            : (null, null);
+            ? (reader.IsDBNull(0) ? null : reader.GetString(0),
+               reader.FieldCount > 1 && !reader.IsDBNull(1) ? reader.GetString(1) : null,
+               reader.FieldCount > 2 && !reader.IsDBNull(2) ? Convert.ToInt32(reader.GetValue(2), System.Globalization.CultureInfo.InvariantCulture) : null)
+            : (null, null, null);
 
-    private static void Record(DbConnection connection, string schema, (string? Path, string? ConformingStrings) actual)
+    /// <summary>Whether the context's model options declare a connection pooler in session mode.</summary>
+    private static bool PoolerInSessionModeDeclared(DbContext? context) =>
+        context?.GetService<IDbContextOptions>().FindExtension<PinotechrdSecurityDbContextOptionsExtension>()?.Settings
+            .ConnectionPoolerUsesSessionMode == true;
+
+    /// <summary>
+    /// Records the binding after checking it. A connection pooler gives the client a process id of its own, so the
+    /// server's <c>pg_backend_pid()</c> differs from the client's; in transaction or statement mode the pooler would hand
+    /// this server session, bound to this tenant, to other clients between statements, and this client's later commands
+    /// to sessions bound to other tenants. So a pooler is refused unless the application declared session mode.
+    /// </summary>
+    private static void Record(
+        DbConnection connection,
+        string schema,
+        (string? Path, string? ConformingStrings, int? ServerProcessId) actual,
+        bool poolerInSessionModeDeclared)
     {
         if (!string.Equals(actual.Path, schema, StringComparison.Ordinal))
         {
@@ -307,8 +332,22 @@ internal static partial class SearchPathBinder
                 "TenantSchemaMode.SearchPath requires it on, because the session-change check reads SQL text the way PostgreSQL does with it on.");
         }
 
+        var clientProcessId = ProcessIdOf(connection);
+        if (!poolerInSessionModeDeclared
+            && actual.ServerProcessId is { } serverProcessId
+            && clientProcessId is { } clientProcess
+            && serverProcessId != clientProcess)
+        {
+            throw new InvalidOperationException(
+                "The connection goes through a connection pooler (the server's process id differs from the one the client " +
+                "was given). TenantSchemaMode.SearchPath binds search_path to the database session, so a pooler in transaction " +
+                "or statement mode would run one tenant's commands on a session bound to another tenant. Connect to PostgreSQL " +
+                "directly, use a pooler in session mode and set PinotechrdSecurityModelOptions.ConnectionPoolerUsesSessionMode, " +
+                "give each tenant its own database role, or use TenantSchemaMode.SchemaPerTenantInModel.");
+        }
+
         var state = StateFor(connection);
-        state.ProcessId = ProcessIdOf(connection);
+        state.ProcessId = clientProcessId;
         state.Schema = schema;
     }
 }

@@ -359,7 +359,41 @@ options.UseNpgsql(connectionString).UsePinotechrdSecurity(model =>
   - `Search Path`;
   - `Options` that set `search_path` in any spelling.
 
-  A pooler between the application and PostgreSQL breaks the mode in the same way unless it pools whole sessions: PgBouncer in transaction or statement mode can run the next command on a server session bound to another tenant. Use session pooling only.
+  A pooler between the application and PostgreSQL breaks the mode in the same way unless it pools whole sessions: PgBouncer in transaction or statement mode can run the next command on a server session bound to another tenant. When a connection is bound, the library compares the server's `pg_backend_pid()` with the process id the client was given (a pooler gives its own) and refuses to bind through a pooler unless you set `model.ConnectionPoolerUsesSessionMode = true`. Set it only for a pooler in session mode; with transaction or statement pooling, use `SchemaPerTenantInModel`.
+
+  The detection is best effort. PgBouncer, Odyssey and PgCat give the client a process id of their own and are detected; a pooler that forwards the server's id, or a provider that exposes no process id, is not. `ConnectionPoolerUsesSessionMode` is your declaration and is not verified: if the pooler (or a per-database or per-user `pool_mode` override in PgBouncer) actually runs in transaction mode, tenants' sessions are shared without an error. Never declare it for poolers that have no session mode, such as AWS RDS Proxy, or for a transaction-mode port (for example Supavisor's 6543; its session port is 5432).
+
+#### Database roles and poolers
+
+The schema binding decides where unqualified names resolve; it does not limit what the session may read. With one database role for every tenant, SQL that names another schema, a server-side function that changes the path, or a raw ADO.NET command can reach every tenant. The boundary against hostile SQL is the database's privileges:
+
+| Role | Login | Privileges |
+|---|---|---|
+| Owner of the schemas and tables (runs migrations and provisioning) | only from the deployment pipeline | owns `public` and every `tenant_*` schema |
+| One application role per tenant | yes, used by the application | `USAGE` on its own `tenant_*` schema and `SELECT, INSERT, UPDATE, DELETE` on its tables; `USAGE` on `public` and `SELECT` on the catalog tables. Not superuser, no `CREATEDB`, `CREATEROLE` or `BYPASSRLS`, no `CREATE` on any schema |
+| `PUBLIC` | — | `REVOKE ALL ON SCHEMA tenant_x FROM PUBLIC` and `REVOKE CREATE ON SCHEMA public FROM PUBLIC` |
+
+Also keep `SECURITY DEFINER` functions, and functions that call `set_config` or `SET` on `search_path` or the role, out of the database, or review each one.
+
+Select the tenant's role per request with EF Core's scoped options; both schema modes work this way:
+
+```csharp
+builder.Services.AddDbContext<AppDbContext>((sp, options) =>
+{
+    var tenant = sp.GetRequiredService<TenantContext>().TenantId
+        ?? throw new InvalidOperationException("No tenant is resolved.");
+    options.UseNpgsql(tenantConnectionStrings.For(tenant)); // the tenant role's login, from your secret store
+    options.UsePinotechrdSecurity(o => o.TenantSchemaMode = TenantSchemaMode.SearchPath);
+}, contextLifetime: ServiceLifetime.Scoped, optionsLifetime: ServiceLifetime.Scoped);
+```
+
+With per-tenant roles, a query that names another tenant's schema fails with `permission denied`, and so does a session whose path was moved to another tenant by something the scanner cannot see. The connection strings differ per tenant, so Npgsql and the pooler keep one pool per tenant role. This pattern needs `AddDbContext` with scoped options; it does not work with `AddDbContextPool`, whose options are fixed.
+
+| Pooler between the application and PostgreSQL | `SchemaPerTenantInModel` | `SearchPath`, one role for all tenants | `SearchPath`, one role per tenant |
+|---|---|---|---|
+| None | yes | yes | yes |
+| Session mode | yes | yes, with `ConnectionPoolerUsesSessionMode = true` | yes, with `ConnectionPoolerUsesSessionMode = true` |
+| Transaction or statement mode | yes | **no**: refused when binding | **no**: refused when binding. Per-role pools keep tenants' sessions apart, but a client's next transaction can still run on a server session that was never bound, with the default path; use session mode or `SchemaPerTenantInModel` |
 
 To bind connections yourself instead, set `model.ApplicationTakesResponsibilityForSearchPath = true`; you then own every case above. Your binding must refuse when there is no tenant, for example:
 
@@ -597,7 +631,7 @@ A response cache keyed only by path and query serves one tenant's response to an
 - **`SearchPath` binding is not re-checked per command.** A server-side function or procedure that changes `search_path` when called is invisible to the scanner, and the change then holds for every later command on that connection until it closes. Keep such functions out of the database, or give each tenant its own database role or login.
 - **Long-lived connections.** SignalR and other long-lived connections are checked once, when they connect. Each hub method call gets a new DI scope, so `TenantContext` is empty in hub methods. Set it in every hub method (or in a hub filter) from the connection's authenticated tenant claim, after checking the claim is still valid, before touching tenant data.
 - **`AuthenticateAsync` inside endpoints** is not covered by the consistency check; compare the claim with `TenantContext` yourself.
-- **One database role for every tenant.** If one database role owns every tenant schema, any SQL that names a schema explicitly (`SELECT * FROM tenant_other.users`) can reach any tenant; the schema binding only governs unqualified names. For stronger isolation, use a role per tenant with grants on its own schema only, or PostgreSQL row-level security.
+- **One database role for every tenant.** If one database role owns every tenant schema, any SQL that names a schema explicitly (`SELECT * FROM tenant_other.users`) can reach any tenant; the schema binding only governs unqualified names. For stronger isolation, use a role per tenant with grants on its own schema only (see "Database roles and poolers"), or PostgreSQL row-level security.
 
 ## Sample API
 

@@ -6,6 +6,18 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **`SearchPath` mode refuses a connection pooler unless it is declared to run in session mode.** When a connection is bound, the library now also reads `pg_backend_pid()` (in the same round trip that verifies the path) and compares it with the process id the client was given; a pooler gives its own, so they differ, and binding is refused with an `InvalidOperationException`. A pooler in transaction or statement mode hands one tenant's session, with its `search_path`, to other clients between statements, so another tenant's commands could run on it. Behind a pooler in session mode, set the new `PinotechrdSecurityModelOptions.ConnectionPoolerUsesSessionMode = true`. The detection is best effort (a pooler that forwards the server's process id is not seen), and the option is a declaration the library cannot verify. `SchemaPerTenantInModel` is not affected.
+
+### Fixed
+
+- The cache of checked connection strings in `SearchPath` mode is keyed by a SHA-256 of the string, so it no longer keeps connection strings (which may hold passwords) in memory.
+
+### Added
+
+- README, "Database roles and poolers": the privilege layout for a database role per tenant, how to select the tenant's role per request with EF Core's scoped options (both schema modes), and which pooler modes each schema mode supports.
+
 ## [1.2.0-preview.4] - 2026-11-19
 
 ### Added

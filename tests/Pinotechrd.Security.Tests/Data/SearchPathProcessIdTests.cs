@@ -44,7 +44,12 @@ public sealed class SearchPathProcessIdTests : IDisposable
             });
             CreateFunction("current_setting", (string name) => name == "search_path" ? _path : null);
             CreateFunction("probe", () => ++ProbeCalls);
+            // A direct connection: the server's process id is the one the client was given, unless a test sets ServerPid.
+            CreateFunction("pg_backend_pid", () => ServerPid ?? Pid);
         }
+
+        /// <summary>What pg_backend_pid() answers when it differs from ProcessID, as behind a connection pooler.</summary>
+        public int? ServerPid { get; set; }
 
         public int ProbeCalls { get; private set; }
 
@@ -66,6 +71,10 @@ public sealed class SearchPathProcessIdTests : IDisposable
     private sealed class StableProcessId(string file) : FakeConnection(file) { public int ProcessID => ReadProcessId(); }
     private sealed class ChangedSession(string file) : FakeConnection(file) { public int ProcessID => ReadProcessId(); }
     private sealed class WithoutProcessId(string file) : FakeConnection(file) { }
+    private sealed class BehindPooler(string file) : FakeConnection(file) { public int ProcessID => ReadProcessId(); }
+    private sealed class BehindPoolerAsync(string file) : FakeConnection(file) { public int ProcessID => ReadProcessId(); }
+    private sealed class BehindSessionPooler(string file) : FakeConnection(file) { public int ProcessID => ReadProcessId(); }
+    private sealed class WithoutProcessIdBehindPooler(string file) : FakeConnection(file) { }
 
     private sealed class ScalarRecorder : DbCommandInterceptor
     {
@@ -84,12 +93,66 @@ public sealed class SearchPathProcessIdTests : IDisposable
         }
     }
 
-    private static SecDb Create(SqliteConnection connection, IInterceptor? extra = null)
+    private static SecDb Create(SqliteConnection connection, IInterceptor? extra = null, bool poolerInSessionMode = false)
     {
         var builder = new DbContextOptionsBuilder<SecDb>().UseSqlite(connection);
         if (extra != null) builder.AddInterceptors(extra);
-        builder.UsePinotechrdSecurity(o => o.TenantSchemaMode = TenantSchemaMode.SearchPath);
+        builder.UsePinotechrdSecurity(o =>
+        {
+            o.TenantSchemaMode = TenantSchemaMode.SearchPath;
+            o.ConnectionPoolerUsesSessionMode = poolerInSessionMode;
+        });
         return new SecDb(builder.Options, new DbSchemaProvider(SecDbFactory.Tenant("a")));
+    }
+
+    // ---- Connection pooler between the client and the server -------------------------------
+
+    [Fact]
+    public void Open_ShouldBeRefusedAndClosed_WhenAPoolerSitsBetweenTheClientAndTheServer()
+    {
+        using var connection = new BehindPooler(_file) { ServerPid = 90 };
+        using var db = Create(connection);
+
+        var act = () => db.Database.OpenConnection();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*connection pooler*ConnectionPoolerUsesSessionMode*");
+        connection.State.Should().Be(ConnectionState.Closed);
+    }
+
+    [Fact]
+    public async Task OpenAsync_ShouldBeRefusedAndClosed_WhenAPoolerSitsBetweenTheClientAndTheServer()
+    {
+        await using var connection = new BehindPoolerAsync(_file) { ServerPid = 90 };
+        await using var db = Create(connection);
+
+        var act = () => db.Database.OpenConnectionAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*connection pooler*ConnectionPoolerUsesSessionMode*");
+        connection.State.Should().Be(ConnectionState.Closed);
+    }
+
+    [Fact]
+    public void Open_ShouldBind_WhenTheProviderExposesNoProcessId_SoThePoolerCheckCannotRun()
+    {
+        // Best effort, by design: without a client process id there is nothing to compare the server's with.
+        using var connection = new WithoutProcessIdBehindPooler(_file) { ServerPid = 90 };
+        using var db = Create(connection);
+
+        db.Database.OpenConnection();
+
+        connection.State.Should().Be(ConnectionState.Open);
+    }
+
+    [Fact]
+    public void Open_ShouldBind_WhenThePoolerIsDeclaredToRunInSessionMode()
+    {
+        using var connection = new BehindSessionPooler(_file) { ServerPid = 90 };
+        using var db = Create(connection, poolerInSessionMode: true);
+
+        db.Database.OpenConnection();
+
+        connection.State.Should().Be(ConnectionState.Open);
+        db.Database.SqlQueryRaw<long>(ProbeSql).AsEnumerable().Single().Should().Be(1);
     }
 
     private static InvalidOperationException Boom() => new("provider failure");
