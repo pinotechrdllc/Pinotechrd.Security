@@ -1,3 +1,5 @@
+// PTRDSEC001 (SecurityModule.Create gives a random id): these fixtures link their plans to the ids it gives.
+#pragma warning disable PTRDSEC001
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;

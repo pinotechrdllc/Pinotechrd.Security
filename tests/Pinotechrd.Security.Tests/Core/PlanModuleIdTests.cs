@@ -46,9 +46,8 @@ public class PlanModuleIdTests
         var db = new SecDb(builder.Options, new Pinotechrd.Security.Tenancy.DbSchemaProvider(SecDbFactory.Tenant("tenant-a")));
         await db.Database.EnsureCreatedAsync();
         var plan = SubscriptionPlan.Create("Basic", "BASIC", null, null);
-        var module = SecurityModule.Create("Sales", "SALES");
-        module.Id = moduleId;
-        module.Code = storedCode;
+        // The row is written as given (id and stored code are what the test is about), so no factory is used.
+        var module = new SecurityModule { Id = moduleId, Name = "Sales", Code = storedCode, IsActive = true, CreatedAt = DateTime.UtcNow };
         db.SubscriptionPlans.Add(plan);
         db.SecurityModules.Add(module);
         db.SystemSubscriptions.Add(SystemSubscription.Create("Acme", "tenant-a", plan.Id, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-1)));
