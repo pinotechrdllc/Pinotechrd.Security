@@ -20,7 +20,6 @@ Pinotechrd.Security.Core.InMemoryRefreshTokenStore.InMemoryRefreshTokenStore() -
 Pinotechrd.Security.Core.JwtTokenProvider
 Pinotechrd.Security.Core.JwtTokenProvider.GenerateAccessToken(System.Collections.Generic.IEnumerable<System.Security.Claims.Claim!>! claims) -> string!
 Pinotechrd.Security.Core.JwtTokenProvider.GenerateRefreshToken() -> string!
-Pinotechrd.Security.Core.JwtTokenProvider.GetPrincipalFromExpiredToken(string! token) -> System.Security.Claims.ClaimsPrincipal!
 Pinotechrd.Security.Core.JwtTokenProvider.JwtTokenProvider(Microsoft.Extensions.Options.IOptions<Pinotechrd.Security.Options.PinotechrdSecurityOptions!>! options) -> void
 Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>
 Pinotechrd.Security.Core.PinotechrdAuthManager<TUser>.ChangeOwnPasswordAsync(string! currentPassword, string! newPassword, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Pinotechrd.Security.Models.AuthResult!>!

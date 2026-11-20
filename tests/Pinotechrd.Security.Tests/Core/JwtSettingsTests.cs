@@ -332,12 +332,6 @@ public class JwtSettingsTests
         + Base64Url($"{{\"id\":\"user-1\",\"tenant_id\":\"tenant-a\",\"iss\":\"{Issuer}\",\"aud\":\"{Audience}\",\"exp\":{DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds()}}}")
         + ".";
 
-    private static JwtTokenProvider Provider() =>
-        new(Microsoft.Extensions.Options.Options.Create(new PinotechrdSecurityOptions
-        {
-            Jwt = new JwtSettings { Secret = Secret, Issuer = Issuer, Audience = Audience }
-        }));
-
     public static TheoryData<string, string> RejectedTokens() => new()
     {
         { "HS512 with the same key", Sign(SecurityAlgorithms.HmacSha512) },
@@ -346,25 +340,6 @@ public class JwtSettingsTests
         { "wrong issuer", Sign(SecurityAlgorithms.HmacSha256, issuer: "someone-else") },
         { "wrong audience", Sign(SecurityAlgorithms.HmacSha256, audience: "someone-else") }
     };
-
-    [Theory]
-    [MemberData(nameof(RejectedTokens))]
-    public void GetPrincipalFromExpiredToken_ShouldReject(string name, string token)
-    {
-        var act = () => Provider().GetPrincipalFromExpiredToken(token);
-
-        act.Should().Throw<Exception>(name);
-    }
-
-    [Fact]
-    public void GetPrincipalFromExpiredToken_ShouldAcceptAnExpiredHs256Token_ForTheRightIssuerAndAudience()
-    {
-        var token = Sign(SecurityAlgorithms.HmacSha256, expires: DateTime.UtcNow.AddMinutes(-30));
-
-        var principal = Provider().GetPrincipalFromExpiredToken(token);
-
-        principal.FindFirst("id")?.Value.Should().Be("user-1");
-    }
 
     [Theory]
     [MemberData(nameof(RejectedTokens))]

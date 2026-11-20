@@ -263,11 +263,53 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// Sessions are ended when the update deactivates the user: the entity was stored active (read from the context's
+    /// change tracker), and is stored inactive now. Editing a user that was already inactive changes nothing else, so
+    /// pending reset or confirmation links keep working. When the entity is not tracked by the security context (a
+    /// detached instance), its stored state is unknown and every update that stores it inactive ends its sessions.
+    /// </para>
+    /// <para>
+    /// Returns <see langword="false"/> when the update fails or, after a deactivation, when renewing the security stamp
+    /// fails (the user is then stored inactive and its refresh tokens are revoked). Once the update is stored, the
+    /// revocation runs to the end even if the request is cancelled.
+    /// </para>
+    /// </remarks>
     public async Task<bool> UpdateUserAsync(TUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var wasActive = WasStoredActive(user);
         var result = await _userManager.UpdateAsync(user);
-        return result.Succeeded;
+        if (!result.Succeeded) return false;
+        if (user is not BaseSecurityUser { IsActive: false } || !wasActive) return true;
+
+        return await EndSessionsOfInactiveUserAsync(user);
+    }
+
+    /// <summary>
+    /// Whether the user was stored active before this update: the original value the security context tracks, or
+    /// <see langword="true"/> when the entity is not tracked (unknown, so the safe answer ends sessions).
+    /// </summary>
+    private bool WasStoredActive(TUser user)
+    {
+        if (user is not BaseSecurityUser || _securityDb is not DbContext context) return true;
+        var entry = context.ChangeTracker.Entries<TUser>().FirstOrDefault(e => ReferenceEquals(e.Entity, user));
+        return entry == null || entry.Property(nameof(BaseSecurityUser.IsActive)).OriginalValue is not false;
+    }
+
+    private async Task<bool> EndSessionsOfInactiveUserAsync(TUser user)
+    {
+        if (_refreshTokenStore != null)
+        {
+            var storedId = await _userManager.GetUserIdAsync(user);
+            await _refreshTokenStore.RevokeAllForUserAsync(storedId, CancellationToken.None);
+            SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, storedId, "Deactivated");
+        }
+
+        if (!_userManager.SupportsUserSecurityStamp) return true;
+        var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+        return stampResult.Succeeded;
     }
 
     /// <inheritdoc />
@@ -322,17 +364,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
             if (!isActive)
             {
                 // The user is already stored inactive: finish the revocation even if the request is cancelled.
-                if (_refreshTokenStore != null)
-                {
-                    var storedId = await _userManager.GetUserIdAsync(user);
-                    await _refreshTokenStore.RevokeAllForUserAsync(storedId, CancellationToken.None);
-                    SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, storedId, "Deactivated");
-                }
-                if (_userManager.SupportsUserSecurityStamp)
-                {
-                    var stampResult = await _userManager.UpdateSecurityStampAsync(user);
-                    if (!stampResult.Succeeded) return false;
-                }
+                return await EndSessionsOfInactiveUserAsync(user);
             }
 
             return true;

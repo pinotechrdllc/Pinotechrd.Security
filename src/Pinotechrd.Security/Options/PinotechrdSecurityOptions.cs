@@ -138,8 +138,7 @@ public class JwtSettings
     /// remove it. The library enforces no time limit: a secret here is accepted until it is removed.
     /// </para>
     /// <para>
-    /// Never keep a leaked secret here: whoever holds it can forge tokens, and <c>GetPrincipalFromExpiredToken</c>
-    /// accepts them at any age. Remove it and rotate at once. Keys are read once, when the host starts: a change
+    /// Never keep a leaked secret here: whoever holds it can forge tokens. Remove it and rotate at once. Keys are read once, when the host starts: a change
     /// takes effect only after a restart.
     /// </para>
     /// <para>
