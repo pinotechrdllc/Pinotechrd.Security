@@ -652,7 +652,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, signedOutId, "SignOut");
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
-        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user);
+        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user, _securityDbContext as DbContext);
         return stampResult.Succeeded;
     }
 

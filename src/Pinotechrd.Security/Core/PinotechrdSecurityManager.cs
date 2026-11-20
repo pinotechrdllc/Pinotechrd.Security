@@ -277,7 +277,9 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// <para>
     /// Returns <see langword="false"/> when the update fails or, after a deactivation, when renewing the security stamp
     /// fails (the user is then stored inactive and its refresh tokens are revoked). Once the update is stored, the
-    /// revocation runs to the end even if the request is cancelled.
+    /// revocation runs to the end even if the request is cancelled. If another request updated the user in the
+    /// meantime, the stamp renewal reloads the tracked instance and retries, so the instance passed in may hold that
+    /// request's changes afterwards.
     /// </para>
     /// </remarks>
     public async Task<bool> UpdateUserAsync(TUser user, CancellationToken cancellationToken = default)
@@ -312,7 +314,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         }
 
         if (!_userManager.SupportsUserSecurityStamp) return true;
-        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user);
+        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user, _securityDb as DbContext);
         return stampResult.Succeeded;
     }
 
@@ -394,7 +396,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, revokedId, "Revoked");
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
-        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user);
+        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user, _securityDb as DbContext);
         return stampResult.Succeeded;
     }
 
