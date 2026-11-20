@@ -67,6 +67,7 @@ public class JwtKeyRotationTests
     private static async Task StartAndStopAsync(Action<PinotechrdSecurityOptions> configure)
     {
         var builder = Host.CreateApplicationBuilder();
+        builder.Services.AllowEphemeralSecurityState();
         builder.Logging.ClearProviders();
         var databaseName = Guid.NewGuid().ToString();
         builder.Services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(databaseName));

@@ -88,6 +88,9 @@ public static class SecurityExtensions
             {
                 o.Jwt = options.Jwt;
                 o.AllowUnverifiedTenantMembership = options.AllowUnverifiedTenantMembership;
+                // Opt-outs are kept once set, by an earlier Configure, configuration binding or another call.
+                o.AllowInMemoryStores |= options.AllowInMemoryStores;
+                o.AllowUnpersistedDataProtectionKeys |= options.AllowUnpersistedDataProtectionKeys;
                 o.TenantCacheExpiration = options.TenantCacheExpiration;
                 o.SetDefaultAuthenticationSchemes = options.SetDefaultAuthenticationSchemes;
                 // Keep IOptions<PinotechrdSecurityOptions>.Value.Tenancy equal to the registered TenantResolutionOptions.
@@ -142,8 +145,10 @@ public static class SecurityExtensions
         // registrations cannot silently fall back to the in-memory default.
         services.TryAddSingleton<IRefreshTokenStore, InMemoryRefreshTokenStore>();
         services.TryAddSingleton<ITwoFactorAttemptStore, InMemoryTwoFactorAttemptStore>();
-        // Two-factor tokens need Data Protection keys shared by every instance: warn when they are not persisted.
-        services.AddHostedService<DataProtectionKeyCheck>();
+        // Outside Development, in-memory stores and unpersisted Data Protection keys (two-factor tokens) fail the start
+        // unless allowed. The registrations are read when the host starts, so a store registered after this call counts.
+        services.TryAddSingleton(new SecurityServiceRegistrations(services));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, DurableStateCheck>());
         services.AddScoped<IPinotechrdAuthManager<TUser>, PinotechrdAuthManager<TUser>>();
         services.AddScoped<ISecurityDbContext>(sp => sp.GetRequiredService<TContext>() as ISecurityDbContext ?? throw new InvalidOperationException("DbContext does not implement ISecurityDbContext"));
         services.AddScoped<IPinotechrdSecurityManager<TUser, TRole>, PinotechrdSecurityManager<TUser, TRole>>();

@@ -507,7 +507,7 @@ builder.Services.AddDataProtection()
     .SetApplicationName("my-app");
 ```
 
-Protect the keys at rest as well (`ProtectKeysWith*`). Outside Development, `AddPinotechrdSecurity` logs a warning at startup (event id `4101`, `DataProtectionKeysNotPersisted`) when no key repository is configured. Startup continues. The check only sees whether a repository is set: it cannot tell whether that storage is shared (a local container path is not), and it also warns on Azure App Service, whose default key folder is already shared.
+Protect the keys at rest as well (`ProtectKeysWith*`). Outside Development, the host fails to start when no key repository is configured, with an `InvalidOperationException` that says how to fix it. Set `AllowUnpersistedDataProtectionKeys = true` when the default key folder is already shared (Azure App Service) or for a single instance whose key folder survives restarts; startup then continues with a warning (event id `4101`, `DataProtectionKeysNotPersisted`). Every environment other than Development is checked, including names such as `Testing` that integration tests use: allow it there, or persist the keys. The check only sees whether a repository is set: it cannot tell whether that storage is shared (a local container path is not).
 
 ### Refresh tokens and sign-out
 
@@ -637,7 +637,7 @@ A response cache keyed only by path and query serves one tenant's response to an
 
 ## Before a stable release: known limits
 
-- **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. With more than one instance, use `AddPinotechrdEfRefreshTokenStore` (see "Persistent refresh token store") and `AddPinotechrdEfTwoFactorAttemptStore` (see "Persistent two-factor attempt store").
+- **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. Outside Development (any other environment name, including `Testing`) the host fails to start while either is the registered store, unless `AllowInMemoryStores = true` (a single instance whose sessions may be lost; warning event `4102` is logged). The check reads the service registrations: a factory, decorator or keyed registration, or a store registered in another container (Autofac), is trusted as yours. The key check and this one report together, before any hosted service starts. Use `AddPinotechrdEfRefreshTokenStore` (see "Persistent refresh token store") and `AddPinotechrdEfTwoFactorAttemptStore` (see "Persistent two-factor attempt store").
 - **In-memory distributed cache.** The default `IDistributedCache` is per instance, so a cache invalidation does not reach other instances. With more than one instance, register a shared cache (see "Subscription and module cache").
 - **No logging of refresh-token reuse.** The library does not log `Reused`; log it in your store (see "For operators").
 - **`SearchPath` mode is PostgreSQL-only**, and needs session-level pooling (see above).

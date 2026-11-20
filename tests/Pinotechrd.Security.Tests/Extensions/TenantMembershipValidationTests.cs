@@ -47,6 +47,7 @@ public class TenantMembershipValidationTests
     private static async Task StartAsync(Action<IServiceCollection> configure)
     {
         var builder = Host.CreateApplicationBuilder();
+        builder.Services.AllowEphemeralSecurityState();
         builder.Logging.ClearProviders();
         configure(builder.Services);
         using var host = builder.Build();

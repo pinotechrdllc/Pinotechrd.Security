@@ -115,6 +115,10 @@ Pinotechrd.Security.Options.PinotechrdSecurityOptions
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.Jwt.get -> Pinotechrd.Security.Options.JwtSettings!
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.Jwt.set -> void
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.PinotechrdSecurityOptions() -> void
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.AllowInMemoryStores.get -> bool
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.AllowInMemoryStores.set -> void
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.AllowUnpersistedDataProtectionKeys.get -> bool
+Pinotechrd.Security.Options.PinotechrdSecurityOptions.AllowUnpersistedDataProtectionKeys.set -> void
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.AllowUnverifiedTenantMembership.get -> bool
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.AllowUnverifiedTenantMembership.set -> void
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.Tenancy.get -> Pinotechrd.Security.Tenancy.TenantResolutionOptions!
