@@ -135,12 +135,28 @@ public class JwtSettings
     public string? Audience { get; set; }
 
     /// <summary>
-    /// Access token lifetime in minutes.
+    /// Access token lifetime in minutes. Default 15; accepted range 1 to 60.
     /// </summary>
-    public int ExpiryMinutes { get; set; } = 60;
+    /// <remarks>
+    /// An access token is accepted until it expires, plus at most <see cref="MaximumClockSkew"/>: signing out, changing
+    /// the password or deactivating the user does not reach a token already issued. This lifetime is therefore the
+    /// longest time such a change takes to apply to access tokens. Clients renew with the refresh token.
+    /// </remarks>
+    public int ExpiryMinutes { get; set; } = 15;
 
     /// <summary>
-    /// Refresh token lifetime in days.
+    /// Refresh token lifetime in days. Default 7; accepted range 1 to 90.
     /// </summary>
     public int RefreshTokenExpiryDays { get; set; } = 7;
+
+    /// <summary>
+    /// Largest clock skew the bearer scheme tolerates when it checks a token's lifetime. Default 1 minute; accepted
+    /// range zero to 5 minutes.
+    /// </summary>
+    /// <remarks>
+    /// A <c>TokenValidationParameters.ClockSkew</c> the application sets on the bearer scheme is kept when it is not
+    /// larger; a larger one, including the framework default of 5 minutes, is lowered to this value. The final bearer
+    /// options must not exceed it, or the host fails to start.
+    /// </remarks>
+    public TimeSpan MaximumClockSkew { get; set; } = TimeSpan.FromMinutes(1);
 }

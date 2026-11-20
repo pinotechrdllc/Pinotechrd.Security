@@ -31,6 +31,17 @@ internal static class JwtSettingsRules
     /// </summary>
     public const int MinimumSecretBytes = 32;
 
+    public const int MinimumExpiryMinutes = 1;
+    public const int MaximumExpiryMinutes = 60;
+    public const int MinimumRefreshTokenExpiryDays = 1;
+    public const int MaximumRefreshTokenExpiryDays = 90;
+
+    /// <summary>
+    /// Upper bound of <see cref="JwtSettings.MaximumClockSkew"/>: the framework default skew. A larger skew keeps
+    /// expired tokens valid for longer, which defeats the lifetime check.
+    /// </summary>
+    public static readonly TimeSpan ClockSkewCeiling = TimeSpan.FromMinutes(5);
+
     public static int EffectiveMinimumBytes(JwtSettings settings) =>
         Math.Max(MinimumSecretBytes, settings.MinimumSecretLength);
 
@@ -61,6 +72,21 @@ internal static class JwtSettingsRules
         if (string.IsNullOrWhiteSpace(settings.Audience))
         {
             errors.Add("PinotechrdSecurityOptions.Jwt.Audience is required.");
+        }
+
+        if (settings.ExpiryMinutes is < MinimumExpiryMinutes or > MaximumExpiryMinutes)
+        {
+            errors.Add($"PinotechrdSecurityOptions.Jwt.ExpiryMinutes must be between {MinimumExpiryMinutes} and {MaximumExpiryMinutes}.");
+        }
+
+        if (settings.RefreshTokenExpiryDays is < MinimumRefreshTokenExpiryDays or > MaximumRefreshTokenExpiryDays)
+        {
+            errors.Add($"PinotechrdSecurityOptions.Jwt.RefreshTokenExpiryDays must be between {MinimumRefreshTokenExpiryDays} and {MaximumRefreshTokenExpiryDays}.");
+        }
+
+        if (settings.MaximumClockSkew < TimeSpan.Zero || settings.MaximumClockSkew > ClockSkewCeiling)
+        {
+            errors.Add($"PinotechrdSecurityOptions.Jwt.MaximumClockSkew must be between zero and {ClockSkewCeiling.TotalMinutes:0} minutes.");
         }
 
         return errors;

@@ -50,15 +50,16 @@ public static class SecurityExtensions
     /// Bearer options: in a <c>PostConfigure</c> step, which runs after every <c>Configure</c>, the library sets on
     /// the final <see cref="TokenValidationParameters"/> (creating it if the application set it to null):
     /// issuer, audience, lifetime and signing-key validation on; signed tokens and expiration required; the
-    /// configured issuer, audience and key; HMAC-SHA256 as the only algorithm. It also clears what would widen
+    /// configured issuer, audience and key; HMAC-SHA256 as the only algorithm; a <c>ClockSkew</c> no larger than
+    /// <see cref="JwtSettings.MaximumClockSkew"/> (a larger one is lowered to it). It also clears what would widen
     /// those checks: <c>ValidIssuers</c>, <c>ValidAudiences</c>, the issuer, audience, lifetime and algorithm
     /// validator delegates, and every other source of keys or signature validation. Every other property the
     /// application configures, even by replacing the whole object, is kept.
     /// </para>
     /// <para>
     /// The final bearer options are then validated against that policy, after every <c>Configure</c> and
-    /// <c>PostConfigure</c>: a <c>PostConfigure</c> registered after this call that changes any of these settings, or a
-    /// <c>ClockSkew</c> above five minutes, fails the host at start with an <see cref="OptionsValidationException"/>
+    /// <c>PostConfigure</c>: a <c>PostConfigure</c> registered after this call that changes any of these settings or sets a
+    /// <c>ClockSkew</c> above <see cref="JwtSettings.MaximumClockSkew"/>, fails the host at start with an <see cref="OptionsValidationException"/>
     /// that names the setting. So do custom token handlers, a <see cref="TokenValidationParameters"/> subclass, a token
     /// reader or pre-signature transform, and forwarding the bearer scheme's authentication to another scheme. The check
     /// covers the options as configured; code the application runs during authentication (for example event handlers
@@ -175,6 +176,13 @@ public static class SecurityExtensions
                 parameters.ValidIssuer = settings.Issuer;
                 parameters.ValidAudience = settings.Audience;
                 parameters.ValidAlgorithms = [SecurityAlgorithms.HmacSha256];
+                // A smaller skew the application chose is kept; a larger one (the framework default is 5 minutes) is
+                // lowered, so an expired token is not accepted for longer than the configured maximum.
+                if (parameters.ClockSkew > settings.MaximumClockSkew)
+                {
+                    parameters.ClockSkew = settings.MaximumClockSkew;
+                }
+
                 // Every other way to widen what those settings accept is cleared: an issuer or audience list (accepted
                 // in addition to the single value), and validator delegates, which replace the built-in issuer,
                 // audience, lifetime and algorithm checks instead of adding to them.

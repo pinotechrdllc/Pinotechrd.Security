@@ -30,12 +30,6 @@ namespace Pinotechrd.Security.Options;
 /// </remarks>
 internal sealed class JwtBearerPolicyValidator : IValidateOptions<JwtBearerOptions>
 {
-    /// <summary>
-    /// Largest accepted <see cref="TokenValidationParameters.ClockSkew"/>: the framework default. A larger skew keeps
-    /// expired tokens valid for longer, which defeats the lifetime check the policy requires.
-    /// </summary>
-    public static readonly TimeSpan MaximumClockSkew = TimeSpan.FromMinutes(5);
-
     private readonly IOptions<PinotechrdSecurityOptions> _security;
 
     public JwtBearerPolicyValidator(IOptions<PinotechrdSecurityOptions> security)
@@ -105,8 +99,8 @@ internal sealed class JwtBearerPolicyValidator : IValidateOptions<JwtBearerOptio
         Require(errors, HasExactlyTheConfiguredKeys(parameters.IssuerSigningKeys, settings),
             "IssuerSigningKeys must be the keys of PinotechrdSecurityOptions.Jwt.Secret and PreviousSecrets");
 
-        Require(errors, parameters.ClockSkew >= TimeSpan.Zero && parameters.ClockSkew <= MaximumClockSkew,
-            $"ClockSkew must be between zero and {MaximumClockSkew.TotalMinutes:0} minutes");
+        Require(errors, parameters.ClockSkew >= TimeSpan.Zero && parameters.ClockSkew <= settings.MaximumClockSkew,
+            "ClockSkew must be between zero and PinotechrdSecurityOptions.Jwt.MaximumClockSkew");
 
         // Ways to run something other than this validation: a parameters subclass (the handler clones the parameters
         // on every request, and Clone is virtual), delegates that hand a different token to the signature check,

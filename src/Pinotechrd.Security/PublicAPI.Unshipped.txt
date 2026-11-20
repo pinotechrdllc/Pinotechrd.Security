@@ -97,6 +97,8 @@ Pinotechrd.Security.Options.JwtSettings.ExpiryMinutes.set -> void
 Pinotechrd.Security.Options.JwtSettings.Issuer.get -> string?
 Pinotechrd.Security.Options.JwtSettings.Issuer.set -> void
 Pinotechrd.Security.Options.JwtSettings.JwtSettings() -> void
+Pinotechrd.Security.Options.JwtSettings.MaximumClockSkew.get -> System.TimeSpan
+Pinotechrd.Security.Options.JwtSettings.MaximumClockSkew.set -> void
 Pinotechrd.Security.Options.JwtSettings.MinimumSecretLength.get -> int
 Pinotechrd.Security.Options.JwtSettings.MinimumSecretLength.set -> void
 Pinotechrd.Security.Options.JwtSettings.PreviousSecrets.get -> System.Collections.Generic.IList<string!>!

@@ -542,7 +542,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// <remarks>
     /// Revokes every refresh token of the authenticated user, in every session, and renews the security stamp.
     /// Access tokens already issued stay valid until they expire (<see cref="JwtSettings.ExpiryMinutes"/>,
-    /// 60 minutes by default), because JWT validation does not consult the server. Returns <see langword="false"/>
+    /// 15 minutes by default, plus at most <see cref="JwtSettings.MaximumClockSkew"/>), because JWT validation does not consult the server. Returns <see langword="false"/>
     /// when no <see cref="ISecurityDataProvider"/> was supplied to the constructor, and, with the tokens already
     /// revoked, when renewing the security stamp fails. A user store without security stamps only has its tokens revoked.
     /// </remarks>
