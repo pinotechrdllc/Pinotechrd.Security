@@ -312,7 +312,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         }
 
         if (!_userManager.SupportsUserSecurityStamp) return true;
-        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user);
+        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user, _securityDb as DbContext);
         return stampResult.Succeeded;
     }
 
@@ -394,7 +394,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, revokedId, "Revoked");
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
-        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user);
+        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user, _securityDb as DbContext);
         return stampResult.Succeeded;
     }
 

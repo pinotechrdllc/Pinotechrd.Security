@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Reflection;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 
 namespace Pinotechrd.Security.Core;
 
@@ -28,7 +29,52 @@ namespace Pinotechrd.Security.Core;
 /// </remarks>
 internal static class UncancellableUserWrites
 {
-    public static async Task<IdentityResult> RenewSecurityStampAsync<TUser>(UserManager<TUser> userManager, IUserStore<TUser>? store, TUser user)
+    /// <summary>Attempts at renewing the stamp when another request updated the user in between.</summary>
+    private const int MaxConcurrencyAttempts = 10;
+
+    /// <summary>
+    /// Renews the stamp; when another request updated the user since it was loaded (a concurrency failure), reloads it
+    /// and tries again, up to <see cref="MaxConcurrencyAttempts"/> times, so a concurrent sign-in cannot keep the old
+    /// stamp alive. <paramref name="context"/> is the context that tracks the user, when there is one.
+    /// </summary>
+    public static async Task<IdentityResult> RenewSecurityStampAsync<TUser>(
+        UserManager<TUser> userManager, IUserStore<TUser>? store, TUser user, DbContext? context = null)
+        where TUser : class
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var result = await RenewOnceAsync(userManager, store, user);
+            if (result.Succeeded || attempt == MaxConcurrencyAttempts || !IsConcurrencyFailure(result)) return result;
+
+            var reloaded = await ReloadAsync(userManager, store, user, context);
+            if (reloaded == null) return result;
+            user = reloaded;
+        }
+    }
+
+    private static bool IsConcurrencyFailure(IdentityResult result) =>
+        result.Errors.Any(e => e.Code == nameof(IdentityErrorDescriber.ConcurrencyFailure));
+
+    /// <summary>The user as stored now, or <see langword="null"/> when it no longer exists.</summary>
+    private static async Task<TUser?> ReloadAsync<TUser>(UserManager<TUser> userManager, IUserStore<TUser>? store, TUser user, DbContext? context)
+        where TUser : class
+    {
+        // An EF Core store returns the tracked (stale) instance from a lookup, so the entry itself is reloaded.
+        if (context != null)
+        {
+            var entry = context.Entry(user);
+            if (entry.State != EntityState.Detached)
+            {
+                await entry.ReloadAsync(CancellationToken.None);
+                return entry.State == EntityState.Detached ? null : user;
+            }
+        }
+
+        if (store == null) return await userManager.FindByIdAsync(await userManager.GetUserIdAsync(user));
+        return await store.FindByIdAsync(await store.GetUserIdAsync(user, CancellationToken.None), CancellationToken.None);
+    }
+
+    private static async Task<IdentityResult> RenewOnceAsync<TUser>(UserManager<TUser> userManager, IUserStore<TUser>? store, TUser user)
         where TUser : class
     {
         if (store is not IUserSecurityStampStore<TUser> stamps || Overrides<TUser>.Stamp(userManager.GetType()))

@@ -1,0 +1,29 @@
+using Microsoft.EntityFrameworkCore;
+using Pinotechrd.Security.Data;
+using Pinotechrd.Security.Tests.Hosting;
+using Xunit;
+
+namespace Pinotechrd.Security.Tests.Postgres;
+
+/// <summary>The session-ending stamp renewal survives a concurrent update of the user, in both schema modes.</summary>
+[Collection(PostgresCollection.Name)]
+public class PostgresStampRenewalConcurrencyTests(PostgresFixture postgres)
+{
+    public static IEnumerable<object[]> Modes() => PgProvisioning.BothModes();
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task RevokeUserSessions_ShouldRenewTheStamp_AfterAConcurrentUpdateOfTheUser(TenantSchemaMode mode)
+    {
+        var cs = await postgres.CreateDatabaseAsync();
+        await PgProvisioning.ProvisionAsync(cs, mode, "a");
+        await using var api = await TenantDatabaseApi.StartAsync(
+            new Dictionary<string, string[]> { ["a"] = ["user@a.test"] },
+            mode,
+            useDatabase: (options, _) => options.UseNpgsql(cs),
+            provision: false);
+
+        await StampRenewalConcurrency.RevokeShouldRenewTheStampAsync(api, "user@a.test");
+        Npgsql.NpgsqlConnection.ClearAllPools();
+    }
+}
