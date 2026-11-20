@@ -241,7 +241,7 @@ With EF Core migrations instead of `GenerateCreateScript`, run `MigrateAsync()` 
 | `ExpiryMinutes` | `60` | Access token lifetime. |
 | `RefreshTokenExpiryDays` | `7` | Refresh token lifetime. |
 
-The JWT settings are checked when the host starts, not inside `AddPinotechrdSecurity`, so tools that build the host without configuration (such as OpenAPI generation at build time) still work. A missing or weak setting makes the host fail to start with an `OptionsValidationException` that names the setting, for example `PinotechrdSecurityOptions.Jwt.Secret`. Tokens are signed with HMAC-SHA256, and only that algorithm is accepted when they are validated. The bearer handler's validation settings that the library guarantees (issuer, audience, lifetime and signing-key validation, signed tokens with an expiry, the configured issuer, audience and keys, the algorithm) are applied after all your `Configure<JwtBearerOptions>` calls, even if you replace `TokenValidationParameters` entirely; your other settings are kept. Only the configured secrets are accepted: a signing key, key resolver or signature validator you set on `TokenValidationParameters`, and keys from OpenID Connect metadata (`Authority`, `MetadataAddress`, `Configuration`, `ConfigurationManager`), are cleared.
+The JWT settings are checked when the host starts, not inside `AddPinotechrdSecurity`, so tools that build the host without configuration (such as OpenAPI generation at build time) still work. A missing or weak setting makes the host fail to start with an `OptionsValidationException` that names the setting, for example `PinotechrdSecurityOptions.Jwt.Secret`. Tokens are signed with HMAC-SHA256, and only that algorithm is accepted when they are validated. The bearer handler's validation settings that the library guarantees (issuer, audience, lifetime and signing-key validation, signed tokens with an expiry, the configured issuer, audience and keys, the algorithm) are applied after all your `Configure<JwtBearerOptions>` calls, even if you replace `TokenValidationParameters` entirely; your other settings are kept. Only the configured secrets are accepted: a signing key, key resolver or signature validator you set on `TokenValidationParameters`, and keys from OpenID Connect metadata (`Authority`, `MetadataAddress`, `Configuration`, `ConfigurationManager`), are cleared. So is anything that would widen the issuer, audience, lifetime or algorithm checks: `ValidIssuers`, `ValidAudiences`, and the `IssuerValidator`, `IssuerValidatorUsingConfiguration`, `AudienceValidator`, `LifetimeValidator` and `AlgorithmValidator` delegates. The final bearer options are then validated, after every `Configure` and `PostConfigure`: a `PostConfigure<JwtBearerOptions>` registered after `AddPinotechrdSecurity` that changes any of these settings, or a `ClockSkew` above five minutes, makes the host fail to start with an `OptionsValidationException` that names the setting; so do custom token handlers, a `TokenValidationParameters` subclass, a `TokenReader` or `TransformBeforeSignatureValidation`, and `ForwardDefault`, `ForwardAuthenticate` or `ForwardDefaultSelector` on the bearer scheme. The check covers the options as configured. Code your application runs during authentication (for example `JwtBearerEvents` handlers that set a result), other authentication schemes you add, and replacing the options infrastructure are your responsibility. If you bind `JwtBearerOptions` from configuration with reload, a reloaded value that breaks the policy makes requests fail until it is fixed.
 
 #### Rotating the JWT secret
 
@@ -322,7 +322,7 @@ options.UseNpgsql(connectionString).UsePinotechrdSecurity(model =>
 });
 ```
 
-- The catalog table that maps plans to modules has no foreign key to a tenant table: modules live in every tenant schema and are matched by id (see `SecurityModuleId`).
+- The catalog table that maps plans to modules has no foreign key to a tenant table: modules live in every tenant schema and are matched by id (see `SecurityModuleId`). A module row counts for a plan only when its id is `SecurityModuleId.FromCode` of its code, so create modules with `SecuritySeeder` (`SecurityModule.Create` gives a random id) and do not change the code of an existing module row. Writing to `security_modules` is a provisioning task: do not let tenant users or tenant administrators edit those rows.
 - Keep these settings the same for every instance of one context type.
 
 **`SearchPath` mode in detail.** The interceptors do the following:
@@ -335,12 +335,14 @@ options.UseNpgsql(connectionString).UsePinotechrdSecurity(model =>
   - you opened the connection yourself;
   - you closed and reopened it yourself (the binding is dropped as soon as the connection reports `Closed` or `Broken`, and Npgsql's server process id is compared with the one recorded at binding);
   - the tenant changed after the connection opened.
-- Each command's text is also scanned, statement by statement, the way PostgreSQL tokenises it (strings, `E''` and dollar-quoted strings, quoted identifiers, nested comments). A command is **refused before it is sent**, whether it is alone or in a batch, when a statement:
+- Each command's text is also scanned, statement by statement, the way PostgreSQL tokenises it (strings, `E''` strings decoded with PostgreSQL's escape rules, including octal, hexadecimal and Unicode escapes, dollar-quoted strings, quoted identifiers, nested comments). A command is **refused before it is sent**, whether it is alone or in a batch, when a statement:
   - is `SET`, `SET SESSION`, `SET LOCAL` or `RESET` of `search_path`, `schema`, `role`, `session_authorization` or `standard_conforming_strings`; `SET ROLE`; `SET SESSION AUTHORIZATION`; `RESET ALL`; or `DISCARD ALL`;
   - is `ALTER ROLE|USER|DATABASE|SYSTEM ... SET|RESET` of those settings;
   - calls `set_config` (also schema-qualified or quoted) with a first argument that is not one plain string literal naming another setting;
   - writes to `pg_settings` (`UPDATE`, `INSERT INTO`, `DELETE FROM`, `MERGE INTO`, plain, `pg_catalog.`-qualified or quoted), which is equivalent to `SET`;
-  - uses a `U&"..."` identifier.
+  - uses a `U&"..."` identifier;
+  - holds an `E''` string with an escape PostgreSQL rejects (a zero byte, an incomplete `\u` or `\U`, a code point above U+10FFFF, an unpaired surrogate), which cannot be decoded;
+  - continues a string constant on the next line (`'a'` line break `'b'`, which PostgreSQL joins), or puts `E''` right after a number (`1E'..'`, an escape string on PostgreSQL 14 and older). EF Core writes neither.
 
   The bodies of `DO` blocks and `CREATE FUNCTION|PROCEDURE`, and the text of `PREPARE ... AS`, are scanned the same way. Inside a body, `EXECUTE` of exactly one string literal (optionally in parentheses) is scanned; any other `EXECUTE` (a concatenation, `format(...)`, a variable) cannot be checked and is refused, so a migration that creates such a function must run outside `SearchPath` mode. Column and table names are not matched: `UPDATE t SET search_path = @p0`, `WHERE role = @p`, `ON CONFLICT ... DO UPDATE SET role = ...`, `set_config_log`, `SELECT ... FROM pg_settings`, `current_setting('search_path')`, `SHOW search_path` and string literals all pass.
 - Binding is refused when the session has `standard_conforming_strings` off (for example through `ALTER DATABASE ... SET`): the scanner reads strings as PostgreSQL does with it on, its default. This is checked in the same round trip that verifies the path.
@@ -645,6 +647,17 @@ curl -H "TenantId: tenant-a" http://localhost:5000/api/tenant
 ## Quality and Security Checks
 
 Every pull request runs the build with warnings as errors, a vulnerability audit of dependencies, the test suite with a minimum line-coverage gate, CodeQL static analysis, a dependency review and package validation of the public API. Releases are tag-driven and published with nuget.org Trusted Publishing, so no API key is stored in the repository.
+
+From the release after 1.2.0-preview.4, each release also carries build provenance and an SBOM. To check that a package you downloaded from nuget.org came from this repository's release workflow for its tag:
+
+```bash
+gh attestation verify pinotechrd.security.<version>.nupkg \
+  --repo pinotechrdllc/Pinotechrd.Security \
+  --signer-workflow pinotechrdllc/Pinotechrd.Security/.github/workflows/release.yml \
+  --source-ref refs/tags/v<version>
+```
+
+nuget.org adds its own repository signature (`.signature.p7s`) to each package after upload, which changes the file. The attestation for the file nuget.org serves is issued by the release workflow after it checks that the package's content, apart from that signature, is exactly what the workflow built. The GitHub Release of each tag holds the packages as published, the symbol packages, a CycloneDX SBOM per package and `SHA256SUMS`; the SBOM is also attached as an attestation to each package (`--predicate-type https://cyclonedx.org/bom`).
 
 ## Project Links
 

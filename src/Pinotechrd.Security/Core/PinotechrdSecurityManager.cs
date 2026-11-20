@@ -529,24 +529,16 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// <inheritdoc />
     public async Task<IReadOnlyList<SecurityModule>> GetActiveCatalogAsync(string tenantId, CancellationToken cancellationToken = default)
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var codes = await (from sub in _securityDb.SystemSubscriptions
-                           join map in _securityDb.SubscriptionPlanModules on sub.PlanId equals map.PlanId
-                           join mod in _securityDb.Modules on map.ModuleId equals mod.Id
-                           where sub.TenantName == tenantId
-                                 && sub.IsActive
-                                 && sub.StartDate <= today
-                                 && (!sub.EndDate.HasValue || sub.EndDate >= today)
-                                 && mod.IsActive
-                           select mod.Code).ToListAsync(cancellationToken);
+        // Same rule as DbSecurityStore: a plan names modules by id, so a row counts only when its code belongs to its id.
+        var ids = (await DbSecurityStore.PlanModulesAsync(_securityDb, tenantId, cancellationToken)).Select(module => module.Id).ToList();
 
-        if (codes.Count == 0)
+        if (ids.Count == 0)
         {
             return [];
         }
 
         var modules = await _securityDb.Modules
-            .Where(module => module.IsActive && codes.Contains(module.Code))
+            .Where(module => module.IsActive && ids.Contains(module.Id))
             .OrderBy(module => module.DisplayOrder)
             .ToListAsync(cancellationToken);
         var moduleIds = modules.Select(module => module.Id).ToList();
@@ -593,12 +585,9 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         var byCode = new Dictionary<string, PermissionAccessType>(StringComparer.Ordinal);
         foreach (var item in overrides ?? [])
         {
-            if (string.IsNullOrWhiteSpace(item.Code))
-            {
-                continue;
-            }
-
-            if (!SecurityCodes.TryNormalize(item.Code, out var code))
+            // An empty code is invalid like any other: refusing it, instead of skipping it, keeps a Deny the caller meant
+            // to write from being reported as written.
+            if (item is null || !SecurityCodes.TryNormalize(item.Code, out var code))
             {
                 return false;
             }

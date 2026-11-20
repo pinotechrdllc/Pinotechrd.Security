@@ -23,6 +23,36 @@ public class PinotechrdSecurityManagerOverrideTests
         replaced.Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public async Task ReplaceUserOverridesAsync_ShouldRefuseAnEmptyCode_AndKeepTheStoredOverrides(string? code)
+    {
+        await using var rig = await SqliteSecurityManagerRig.CreateAsync();
+        var userId = rig.UserId.ToString();
+        (await rig.Manager.ReplaceUserOverridesAsync(userId, [new UserPermissionOverride("SALES.EDIT", PermissionAccessType.Deny)]))
+            .Should().BeTrue();
+
+        var replaced = await rig.Manager.ReplaceUserOverridesAsync(userId, [
+            new UserPermissionOverride("SALES.VIEW", PermissionAccessType.Allow),
+            new UserPermissionOverride(code!, PermissionAccessType.Deny)
+        ]);
+
+        replaced.Should().BeFalse("an empty code is invalid; skipping it would report a Deny as written");
+        (await rig.UserOverridesAsync()).Should().Equal("SALES.EDIT:Deny");
+    }
+
+    [Fact]
+    public async Task ReplaceUserOverridesAsync_ShouldReturnFalse_ForANullItem()
+    {
+        await using var rig = await SqliteSecurityManagerRig.CreateAsync();
+
+        var replaced = await rig.Manager.ReplaceUserOverridesAsync(rig.UserId.ToString(), [null!]);
+
+        replaced.Should().BeFalse();
+    }
+
     [Fact]
     public async Task ReplaceUserOverridesAsync_ShouldKeepDenyWhenBothAreSent_AndClearOnAnEmptyList()
     {
