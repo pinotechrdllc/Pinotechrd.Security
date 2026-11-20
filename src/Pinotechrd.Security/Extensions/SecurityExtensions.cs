@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Pinotechrd.Security.Authorization;
@@ -49,9 +50,19 @@ public static class SecurityExtensions
     /// Bearer options: in a <c>PostConfigure</c> step, which runs after every <c>Configure</c>, the library sets on
     /// the final <see cref="TokenValidationParameters"/> (creating it if the application set it to null):
     /// issuer, audience, lifetime and signing-key validation on; signed tokens and expiration required; the
-    /// configured issuer, audience and key; HMAC-SHA256 as the only algorithm. Every other property the
-    /// application configures, even by replacing the whole object, is kept. Only a <c>PostConfigure</c>
-    /// registered after this call could change these settings.
+    /// configured issuer, audience and key; HMAC-SHA256 as the only algorithm. It also clears what would widen
+    /// those checks: <c>ValidIssuers</c>, <c>ValidAudiences</c>, the issuer, audience, lifetime and algorithm
+    /// validator delegates, and every other source of keys or signature validation. Every other property the
+    /// application configures, even by replacing the whole object, is kept.
+    /// </para>
+    /// <para>
+    /// The final bearer options are then validated against that policy, after every <c>Configure</c> and
+    /// <c>PostConfigure</c>: a <c>PostConfigure</c> registered after this call that changes any of these settings, or a
+    /// <c>ClockSkew</c> above five minutes, fails the host at start with an <see cref="OptionsValidationException"/>
+    /// that names the setting. So do custom token handlers, a <see cref="TokenValidationParameters"/> subclass, a token
+    /// reader or pre-signature transform, and forwarding the bearer scheme's authentication to another scheme. The check
+    /// covers the options as configured; code the application runs during authentication (for example event handlers
+    /// that set a result) and other authentication schemes are the application's responsibility.
     /// </para>
     /// <para>
     /// Tenant resolution: <c>UseTenantResolution</c> also checks, right before each endpoint runs, that an
@@ -164,6 +175,16 @@ public static class SecurityExtensions
                 parameters.ValidIssuer = settings.Issuer;
                 parameters.ValidAudience = settings.Audience;
                 parameters.ValidAlgorithms = [SecurityAlgorithms.HmacSha256];
+                // Every other way to widen what those settings accept is cleared: an issuer or audience list (accepted
+                // in addition to the single value), and validator delegates, which replace the built-in issuer,
+                // audience, lifetime and algorithm checks instead of adding to them.
+                parameters.ValidIssuers = null;
+                parameters.ValidAudiences = null;
+                parameters.IssuerValidator = null;
+                parameters.IssuerValidatorUsingConfiguration = null;
+                parameters.AudienceValidator = null;
+                parameters.LifetimeValidator = null;
+                parameters.AlgorithmValidator = null;
                 // Only the configured secrets are accepted: the current one first, then the previous ones
                 // (validation only). Every other way to supply a key or skip the signature check is cleared: a key,
                 // resolver or signature validator the application set, and keys from OpenID Connect metadata
@@ -179,6 +200,14 @@ public static class SecurityExtensions
                 jwt.Configuration = null;
                 jwt.ConfigurationManager = null;
             });
+
+        // The PostConfigure above runs after every Configure, but a PostConfigure registered after this call runs after
+        // it. Validation runs once all of them have run: it checks the final options, so a later change that weakens
+        // the policy fails the host at start (and the first use of the options) instead of accepting tokens.
+        // Checked at start by a hosted service rather than ValidateOnStart: hosted services start after the options
+        // marked ValidateOnStart are validated, so invalid security options still fail with their own single error.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<JwtBearerOptions>, JwtBearerPolicyValidator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, JwtBearerPolicyStartupCheck>());
 
         services.AddAuthorization();
         services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();
