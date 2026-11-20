@@ -397,6 +397,8 @@ builder.Services.AddDbContext<AppDbContext>((sp, options) =>
 }, contextLifetime: ServiceLifetime.Scoped, optionsLifetime: ServiceLifetime.Scoped);
 ```
 
+With options that depend on the tenant like these, the tenant membership check cannot read them when the host starts (there is no tenant yet), so the start goes on and logs the deferral (event `4103`). The same check also runs at the start of every sign-in, two-factor completion and refresh, against the context the users are read from: if the setup does not prove membership it throws `InvalidOperationException` (an error response, not a failed sign-in) before reading or changing anything. The tenant roles only read the catalog, so run provisioning (the `ProvisionTenantAsync` example above writes catalog rows) with the owner's connection string, from the deployment pipeline.
+
 With per-tenant roles, a query that names another tenant's schema fails with `permission denied`, and so does a session whose path was moved to another tenant by something the scanner cannot see. The connection strings differ per tenant, so Npgsql and the pooler keep one pool per tenant role. This pattern needs `AddDbContext` with scoped options; it does not work with `AddDbContextPool`, whose options are fixed.
 
 | Pooler between the application and PostgreSQL | `SchemaPerTenantInModel` | `SearchPath`, one role for all tenants | `SearchPath`, one role per tenant |
