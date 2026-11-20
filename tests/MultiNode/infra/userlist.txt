@@ -1,0 +1,3 @@
+"tenant_acme_app" "app-acme-pass"
+"tenant_globex_app" "app-globex-pass"
+"catalog_app" "catalog-pass"
