@@ -210,8 +210,9 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// The context has pending changes (save or discard them first), or its provider is not relational.
     /// </exception>
     /// <returns>
-    /// <see langword="false"/>, with nothing changed, when the user id is not a guid, the user does not exist, or a
-    /// code is invalid or names a permission that does not exist.
+    /// <see langword="false"/>, with nothing changed, when the user id is not a guid, the user does not exist, an item is
+    /// <see langword="null"/>, or a code is null, empty or invalid (an empty code is refused, not skipped) or names a
+    /// permission that does not exist.
     /// </returns>
     Task<bool> ReplaceUserOverridesAsync(string userId, IEnumerable<Pinotechrd.Security.Models.UserPermissionOverride> overrides, CancellationToken cancellationToken = default);
 }
