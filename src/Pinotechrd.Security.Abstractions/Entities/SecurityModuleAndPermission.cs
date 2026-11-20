@@ -47,8 +47,15 @@ public class SecurityModule : BaseSecurityEntity
     public SecurityModule() { }
 
     /// <summary>
-    /// Creates a new security module.
+    /// Creates a new security module with a random id.
     /// </summary>
+    /// <remarks>
+    /// Plans in the shared catalog refer to modules by the deterministic id <c>SecurityModuleId.FromCode(code)</c> (in
+    /// Pinotechrd.Security), the same in every tenant schema. A random id differs per tenant schema, so one shared plan
+    /// cannot match the module in every tenant. Use <c>SecuritySeeder.SeedModuleAsync</c> (Pinotechrd.Security), or set
+    /// <c>Id</c> to <c>SecurityModuleId.FromCode(code)</c>.
+    /// </remarks>
+    [Obsolete("Gives a random id that differs per tenant schema, so a shared plan cannot match the module. Use SecuritySeeder.SeedModuleAsync (Pinotechrd.Security), or set Id = SecurityModuleId.FromCode(code).", DiagnosticId = "PTRDSEC001")]
     public static SecurityModule Create(string name, string code, string? description = null, int displayOrder = 0)
     {
         return new SecurityModule

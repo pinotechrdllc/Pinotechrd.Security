@@ -11,7 +11,9 @@ namespace Pinotechrd.Security.Data;
 /// <remarks>
 /// <para>
 /// The text is tokenised the way PostgreSQL does (with <c>standard_conforming_strings</c> on, its default): standard
-/// strings with doubled quotes, <c>E'..'</c> with backslash escapes, <c>U&amp;'..'</c>, bit and national strings, quoted
+/// strings with doubled quotes, <c>E'..'</c> decoded with PostgreSQL's backslash escape rules (octal, hexadecimal and
+/// Unicode escapes included; an escape it rejects makes the statement count as a change), <c>U&amp;'..'</c>, bit and
+/// national strings (a string continued after a line break, and <c>E'..'</c> right after a number, count as a change), quoted
 /// identifiers (unquoted to their name), <c>U&amp;".."</c> identifiers (always counted as a change: escapes can spell any
 /// setting name, and EF Core never generates them), dollar quotes where one can start, nested block comments, and line
 /// comments ended by <c>\n</c> or <c>\r</c>.
@@ -97,7 +99,8 @@ internal static class SessionChangeDetector
 
         foreach (var token in tokens)
         {
-            if (token.Kind == TokenKind.Undecodable) return "U&-quoted identifier, refused because it can spell any setting name";
+            // The token's text holds the reason it cannot be decoded.
+            if (token.Kind == TokenKind.Undecodable) return token.Text;
         }
 
         var change = Leading(tokens, 0, depth);
@@ -395,16 +398,17 @@ internal static class SessionChangeDetector
                 if ((c is 'u' or 'U') && i + 2 < s.Length && s[i + 1] == '&' && (s[i + 2] == '\'' || s[i + 2] == '"'))
                 {
                     var quote = s[i + 2];
-                    var raw = Quoted(s, ref i, i + 2, quote, backslashEscapes: false);
+                    var raw = Quoted(s, ref i, i + 2, quote);
                     var escape = Uescape(s, ref i);
                     if (quote == '"')
                     {
                         // Fail closed: an escaped identifier can spell any setting name, and EF Core never generates one.
-                        yield return new Token(TokenKind.Undecodable, raw);
+                        yield return new Token(TokenKind.Undecodable, "U&-quoted identifier, refused because it can spell any setting name");
                     }
                     else
                     {
                         yield return new Token(TokenKind.OtherString, DecodeUnicode(raw, escape) ?? raw);
+                        if (ContinuesString(s, i)) yield return Continuation;
                     }
 
                     continue;
@@ -413,20 +417,33 @@ internal static class SessionChangeDetector
                 if ((c is 'e' or 'E' or 'b' or 'B' or 'x' or 'X' or 'n' or 'N') && i + 1 < s.Length && s[i + 1] == '\''
                     && (i == 0 || !IsIdentPart(s[i - 1])))
                 {
-                    var backslash = c is 'e' or 'E';
-                    yield return new Token(TokenKind.OtherString, Quoted(s, ref i, i + 1, '\'', backslash));
+                    if (c is 'e' or 'E')
+                    {
+                        // Decoded the way PostgreSQL does, so the scanned text is the text the server runs. An escape the
+                        // server rejects, or one that cannot be decoded, is refused rather than guessed.
+                        var decoded = EscapeQuoted(s, ref i, i + 1);
+                        yield return decoded == null
+                            ? new Token(TokenKind.Undecodable, "escape string constant with an escape that cannot be decoded, refused")
+                            : new Token(TokenKind.OtherString, decoded);
+                        if (ContinuesString(s, i)) yield return Continuation;
+                        continue;
+                    }
+
+                    yield return new Token(TokenKind.OtherString, Quoted(s, ref i, i + 1, '\''));
+                    if (ContinuesString(s, i)) yield return Continuation;
                     continue;
                 }
 
                 if (c == '\'')
                 {
-                    yield return new Token(TokenKind.PlainString, Quoted(s, ref i, i, '\'', backslashEscapes: false));
+                    yield return new Token(TokenKind.PlainString, Quoted(s, ref i, i, '\''));
+                    if (ContinuesString(s, i)) yield return Continuation;
                     continue;
                 }
 
                 if (c == '"')
                 {
-                    yield return new Token(TokenKind.QuotedIdentifier, Quoted(s, ref i, i, '"', backslashEscapes: false));
+                    yield return new Token(TokenKind.QuotedIdentifier, Quoted(s, ref i, i, '"'));
                     continue;
                 }
 
@@ -471,6 +488,13 @@ internal static class SessionChangeDetector
                 {
                     while (i < s.Length && (char.IsLetterOrDigit(s[i]) || s[i] == '.' || s[i] == '_')) i++;
                     yield return new Token(TokenKind.Other, "0");
+                    // PostgreSQL 14 and older read 1E'..' as the number 1 followed by an escape string constant (15 and
+                    // later reject it). This lexer has already swallowed the E, so refuse the shape instead of misreading it.
+                    if (s[i - 1] is 'e' or 'E' && i < s.Length && s[i] == '\'')
+                    {
+                        yield return new Token(TokenKind.Undecodable, "number directly followed by E'', refused because older PostgreSQL versions read it as an escape string");
+                    }
+
                     continue;
                 }
 
@@ -503,21 +527,191 @@ internal static class SessionChangeDetector
             }
         }
 
+        private static readonly Token Continuation = new(
+            TokenKind.Undecodable,
+            "string constant continued after a line break, refused because PostgreSQL joins the parts in the first part's mode");
+
+        /// <summary>
+        /// Whether a string constant that ended at <paramref name="i"/> continues: PostgreSQL joins two string constants
+        /// separated only by whitespace that holds at least one line break (line comments may sit in between), and reads
+        /// the later parts with the first part's rules (an <c>E''</c> continuation keeps backslash escapes). EF Core never
+        /// writes one, so the lexer refuses it instead of modelling it.
+        /// </summary>
+        private static bool ContinuesString(string s, int i)
+        {
+            var newline = false;
+            var j = i;
+            while (j < s.Length)
+            {
+                var c = s[j];
+                if (c is '\n' or '\r') { newline = true; j++; }
+                else if (c is ' ' or '\t' or '\f' or '\v') j++;
+                else if (c == '-' && j + 1 < s.Length && s[j + 1] == '-')
+                {
+                    while (j < s.Length && s[j] is not ('\n' or '\r')) j++;
+                }
+                else break;
+            }
+
+            return newline && j < s.Length && s[j] == '\'';
+        }
+
+        /// <summary>
+        /// Reads an escape string constant (<c>E'..'</c>) whose opening quote is at <paramref name="quoteAt"/> and returns
+        /// its value as PostgreSQL computes it, or <see langword="null"/> when an escape cannot be decoded.
+        /// </summary>
+        /// <remarks>
+        /// PostgreSQL's rules ("String Constants with C-Style Escapes"): <c>\b \f \n \r \t</c>; <c>\o</c>, <c>\oo</c>,
+        /// <c>\ooo</c> (octal) and <c>\xh</c>, <c>\xhh</c> (hexadecimal) give one byte each, and consecutive bytes form the
+        /// characters of the server encoding (decoded here as UTF-8: every encoding PostgreSQL supports as a server encoding
+        /// keeps ASCII as is, and only ASCII spells keywords and setting names); <c>\uXXXX</c> and <c>\UXXXXXXXX</c> give a
+        /// code point, a surrogate pair written as two <c>\u</c>/<c>\U</c> escapes gives one; any other character after a backslash
+        /// stands for itself (<c>\x</c> without a hex digit is <c>x</c>). Refused, as PostgreSQL refuses them: a zero byte or
+        /// code point, a <c>\u</c> or <c>\U</c> with too few hex digits, a code point above U+10FFFF and an unpaired surrogate.
+        /// </remarks>
+        private static string? EscapeQuoted(string s, ref int i, int quoteAt)
+        {
+            var sb = new StringBuilder();
+            var bytes = new List<byte>();
+            var undecodable = false;
+            var j = quoteAt + 1;
+
+            void FlushBytes()
+            {
+                if (bytes.Count == 0) return;
+                // Invalid UTF-8 becomes U+FFFD, never an ASCII character, so it cannot spell a keyword.
+                sb.Append(Encoding.UTF8.GetString(bytes.ToArray()));
+                bytes.Clear();
+            }
+
+            while (j < s.Length)
+            {
+                var ch = s[j];
+                if (ch == '\\' && j + 1 < s.Length)
+                {
+                    var next = s[j + 1];
+                    if (next is >= '0' and <= '7')
+                    {
+                        var end = j + 1;
+                        var value = 0;
+                        while (end < s.Length && end < j + 4 && s[end] is >= '0' and <= '7') value = value * 8 + (s[end++] - '0');
+                        // PostgreSQL keeps the low eight bits of an octal escape (\777 is 0xFF).
+                        var b = (byte)(value & 0xFF);
+                        if (b == 0) undecodable = true;
+                        bytes.Add(b);
+                        j = end;
+                        continue;
+                    }
+
+                    if (next == 'x' && j + 2 < s.Length && IsHex(s[j + 2]))
+                    {
+                        var end = j + 2;
+                        var value = 0;
+                        while (end < s.Length && end < j + 4 && IsHex(s[end])) value = value * 16 + HexValue(s[end++]);
+                        if (value == 0) undecodable = true;
+                        bytes.Add((byte)value);
+                        j = end;
+                        continue;
+                    }
+
+                    FlushBytes();
+                    if (next is 'u' or 'U')
+                    {
+                        var escapeAt = j;
+                        if (!TryUnicodeEscape(s, ref j, sb))
+                        {
+                            undecodable = true;
+                            // A rejected escape may leave j where it was: step past "\u" so the scan always advances.
+                            if (j == escapeAt) j += 2;
+                        }
+
+                        continue;
+                    }
+
+                    sb.Append(next switch { 'b' => '\b', 'f' => '\f', 'n' => '\n', 'r' => '\r', 't' => '\t', var other => other });
+                    j += 2;
+                    continue;
+                }
+
+                FlushBytes();
+                if (ch == '\'')
+                {
+                    if (j + 1 < s.Length && s[j + 1] == '\'') { sb.Append('\''); j += 2; continue; }
+                    j++;
+                    break;
+                }
+
+                sb.Append(ch);
+                j++;
+            }
+
+            FlushBytes();
+            i = j;
+            return undecodable ? null : sb.ToString();
+        }
+
+        /// <summary>
+        /// Decodes <c>\uXXXX</c> or <c>\UXXXXXXXX</c> at <paramref name="j"/> (a high surrogate must be followed by a
+        /// <c>\u</c> low surrogate) and moves past it; <see langword="false"/> for every form PostgreSQL rejects.
+        /// </summary>
+        private static bool TryUnicodeEscape(string s, ref int j, StringBuilder sb)
+        {
+            if (!TryReadCodePoint(s, ref j, out var code)) return false;
+
+            if (code is >= 0xD800 and <= 0xDBFF)
+            {
+                if (j + 1 >= s.Length || s[j] != '\\' || s[j + 1] is not ('u' or 'U')
+                    || !TryReadCodePoint(s, ref j, out var low) || low is < 0xDC00 or > 0xDFFF)
+                {
+                    return false;
+                }
+
+                code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+            }
+            else if (code is >= 0xDC00 and <= 0xDFFF)
+            {
+                return false;
+            }
+
+            if (code is 0 or > 0x10FFFF) return false;
+            sb.Append(char.ConvertFromUtf32(code));
+            return true;
+        }
+
+        /// <summary>Reads the hex digits of one <c>\u</c> (4) or <c>\U</c> (8) escape starting at the backslash.</summary>
+        private static bool TryReadCodePoint(string s, ref int j, out int code)
+        {
+            code = 0;
+            var digits = s[j + 1] == 'u' ? 4 : 8;
+            var from = j + 2;
+            if (from + digits > s.Length) return false;
+
+            long value = 0;
+            for (var k = from; k < from + digits; k++)
+            {
+                if (!IsHex(s[k])) return false;
+                value = value * 16 + HexValue(s[k]);
+            }
+
+            if (value > 0x10FFFF) return false;
+            code = (int)value;
+            j = from + digits;
+            return true;
+        }
+
+        private static bool IsHex(char c) => c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F';
+
+        private static int HexValue(char c) => c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10;
+
         /// <summary>Reads a quoted run starting at <paramref name="quoteAt"/>; doubled quotes stand for one.</summary>
-        private static string Quoted(string s, ref int i, int quoteAt, char quote, bool backslashEscapes)
+        /// <remarks>No backslash escapes: escape string constants are read by <see cref="EscapeQuoted"/>.</remarks>
+        private static string Quoted(string s, ref int i, int quoteAt, char quote)
         {
             var sb = new StringBuilder();
             var j = quoteAt + 1;
             while (j < s.Length)
             {
                 var ch = s[j];
-                if (backslashEscapes && ch == '\\' && j + 1 < s.Length)
-                {
-                    sb.Append(s[j + 1] switch { 'n' => '\n', 'r' => '\r', 't' => '\t', 'b' => '\b', 'f' => '\f', var other => other });
-                    j += 2;
-                    continue;
-                }
-
                 if (ch == quote)
                 {
                     if (j + 1 < s.Length && s[j + 1] == quote) { sb.Append(quote); j += 2; continue; }
