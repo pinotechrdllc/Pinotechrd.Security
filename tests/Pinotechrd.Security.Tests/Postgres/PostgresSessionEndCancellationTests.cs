@@ -13,7 +13,7 @@ namespace Pinotechrd.Security.Tests.Postgres;
 public class PostgresSessionEndCancellationTests(PostgresFixture postgres)
 {
     public static IEnumerable<object[]> Cases() =>
-        PgProvisioning.Modes.SelectMany(mode => new[] { "Revoke", "Deactivate", "Delete" }.Select(action => new object[] { mode, action }));
+        PgProvisioning.Modes.SelectMany(mode => new[] { "Revoke", "Deactivate", "Delete", "SignOut" }.Select(action => new object[] { mode, action }));
 
     [Theory]
     [MemberData(nameof(Cases))]

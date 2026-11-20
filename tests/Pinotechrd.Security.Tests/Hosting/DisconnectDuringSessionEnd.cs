@@ -78,6 +78,26 @@ internal static class DisconnectDuringSessionEnd
         }
     }
 
+    /// <summary>A manager that soft-deletes: the library must keep calling it rather than delete through the store.</summary>
+    public sealed class SoftDeletingUserManager(
+        IUserStore<HostUser> store,
+        IOptions<IdentityOptions> options,
+        IPasswordHasher<HostUser> hasher,
+        IEnumerable<IUserValidator<HostUser>> userValidators,
+        IEnumerable<IPasswordValidator<HostUser>> passwordValidators,
+        ILookupNormalizer normalizer,
+        IdentityErrorDescriber errors,
+        IServiceProvider services,
+        ILogger<UserManager<HostUser>> logger)
+        : UserManager<HostUser>(store, options, hasher, userValidators, passwordValidators, normalizer, errors, services, logger)
+    {
+        public override Task<IdentityResult> DeleteAsync(HostUser user)
+        {
+            user.IsActive = false;
+            return UpdateAsync(user);
+        }
+    }
+
     public static void Configure(WebApplicationBuilder builder)
     {
         builder.Services.AddSingleton<Disconnect>();
@@ -99,6 +119,18 @@ internal static class DisconnectDuringSessionEnd
         var disconnect = api.Host.Services.GetRequiredService<Disconnect>();
         var before = await StampAsync(api, email);
         before.Should().NotBeNull();
+
+        if (action == "SignOut")
+        {
+            var (access, _) = await api.LoginAsync(email, "a");
+            disconnect.Armed = true;
+            var response = await api.PostAsync("/api/auth/logout", new { }, "a", access);
+            disconnect.Token.IsCancellationRequested.Should().BeTrue("the client disconnected after the revocation");
+            disconnect.Reset();
+            response.StatusCode.Should().Be(System.Net.HttpStatusCode.NoContent);
+            (await StampAsync(api, email)).Should().NotBe(before, "the stamp is renewed although the request was cancelled");
+            return;
+        }
 
         var ended = await api.InTenantAsync("a", async sp =>
         {
