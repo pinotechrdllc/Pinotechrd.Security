@@ -263,7 +263,8 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// <remarks>
     /// The user's refresh tokens are revoked before the user is deleted. If revocation throws, the exception
     /// propagates and the user is not deleted. If the delete then fails, the method returns <c>false</c> and the
-    /// tokens stay revoked. Access tokens already issued stay valid until they expire.
+    /// tokens stay revoked. Access tokens already issued stop working once the user is deleted, with
+    /// <c>JwtSettings.ValidateSecurityStamp</c> on (the default); otherwise when they expire.
     /// </remarks>
     public async Task<bool> DeleteUserAsync(string userId, CancellationToken cancellationToken = default)
     {
@@ -285,7 +286,8 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// <inheritdoc />
     /// <remarks>
     /// Deactivating a user also revokes all its refresh tokens and renews its security stamp, which invalidates
-    /// pending two-factor, reset and confirmation tokens. Access tokens already issued stay valid until they expire.
+    /// pending two-factor, reset and confirmation tokens. Access tokens already issued stop working at once with
+    /// <c>JwtSettings.ValidateSecurityStamp</c> on (the default); otherwise when they expire.
     /// </remarks>
     public async Task<bool> SetUserActiveStatusAsync(string userId, bool isActive, CancellationToken cancellationToken = default)
     {

@@ -78,6 +78,13 @@ public static class TenantResolutionErrorCodes
     /// claim. All these cases return this same code.
     /// </summary>
     public const string TenantInvalid = "tenant_invalid";
+
+    /// <summary>
+    /// The access token's user signed out, had its sessions revoked, changed or reset its password, was deactivated or
+    /// no longer exists in the tenant (<see cref="Options.JwtSettings.ValidateSecurityStamp"/>). Returned with status
+    /// <c>401</c>; sign in again.
+    /// </summary>
+    public const string SessionRevoked = "session_revoked";
 }
 
 /// <summary>
@@ -126,7 +133,9 @@ public class TenantResolutionOptions
     /// An endpoint can authenticate with its own schemes after this middleware has run. So, before any endpoint of
     /// the request runs (after authorization), an authenticated user must carry exactly one tenant claim equal to
     /// the resolved tenant; otherwise the request gets <c>400</c> <see cref="TenantResolutionErrorCodes.TenantInvalid"/>.
-    /// This also applies to an authenticated user without the claim on a path that does not require a tenant.
+    /// This also applies to an authenticated user without the claim on a path that does not require a tenant. Then
+    /// the library's access token must still belong to a live session, or the request gets <c>401</c>
+    /// <see cref="TenantResolutionErrorCodes.SessionRevoked"/> (see <c>JwtSettings.ValidateSecurityStamp</c>).
     /// Skip paths are not checked.
     /// </para>
     /// </remarks>
@@ -342,18 +351,19 @@ public class TenantResolutionMiddleware
             "app.UseTenantResolution(), so the tenant of an authenticated user comes from its verified claim.");
     }
 
-    internal static async Task RejectAsync(HttpContext context, ILogger logger, string code, string title, string plainTextMessage)
+    internal static async Task RejectAsync(
+        HttpContext context, ILogger logger, string code, string title, string plainTextMessage, int status = StatusCodes.Status400BadRequest)
     {
         logger.LogDebug("Tenant resolution rejected the request with code {Code}.", code);
 
-        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        context.Response.StatusCode = status;
 
         var problemDetailsService = context.RequestServices?.GetService<IProblemDetailsService>();
         if (problemDetailsService != null)
         {
             var problem = new ProblemDetails
             {
-                Status = StatusCodes.Status400BadRequest,
+                Status = status,
                 Title = title
             };
             problem.Extensions["code"] = code;

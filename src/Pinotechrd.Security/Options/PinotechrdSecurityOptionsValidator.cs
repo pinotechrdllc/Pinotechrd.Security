@@ -42,6 +42,9 @@ internal static class JwtSettingsRules
     /// </summary>
     public static readonly TimeSpan ClockSkewCeiling = TimeSpan.FromMinutes(5);
 
+    /// <summary>Upper bound of <see cref="JwtSettings.SecurityStampValidationInterval"/>.</summary>
+    public static readonly TimeSpan MaximumStampValidationInterval = TimeSpan.FromMinutes(5);
+
     public static int EffectiveMinimumBytes(JwtSettings settings) =>
         Math.Max(MinimumSecretBytes, settings.MinimumSecretLength);
 
@@ -87,6 +90,11 @@ internal static class JwtSettingsRules
         if (settings.MaximumClockSkew < TimeSpan.Zero || settings.MaximumClockSkew > ClockSkewCeiling)
         {
             errors.Add($"PinotechrdSecurityOptions.Jwt.MaximumClockSkew must be between zero and {ClockSkewCeiling.TotalMinutes:0} minutes.");
+        }
+
+        if (settings.SecurityStampValidationInterval < TimeSpan.Zero || settings.SecurityStampValidationInterval > MaximumStampValidationInterval)
+        {
+            errors.Add($"PinotechrdSecurityOptions.Jwt.SecurityStampValidationInterval must be between zero and {MaximumStampValidationInterval.TotalMinutes:0} minutes.");
         }
 
         return errors;

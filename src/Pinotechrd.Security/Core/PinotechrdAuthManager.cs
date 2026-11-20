@@ -227,10 +227,24 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             new Claim(ClaimTypes.Email, email)
         };
 
-        claims.AddRange(additionalClaims);
+        // The user id and stamp claims are the library's: a validator cannot supply or duplicate them.
+        claims.AddRange(additionalClaims.Where(c =>
+            !string.Equals(c.Type, SecurityStampClaim.Type, StringComparison.Ordinal)
+            && !string.Equals(c.Type, SecurityStampClaim.UserIdType, StringComparison.Ordinal)));
         foreach (var p in permissions)
         {
             claims.Add(new Claim("permission", p));
+        }
+
+        var securityStamp = _userManager.SupportsUserSecurityStamp
+            ? await _userManager.GetSecurityStampAsync(user)
+            : null;
+        // Binds the access token to this stamp, so renewing it (sign-out, revocation, password change, deactivation)
+        // reaches the token before it expires (JwtSettings.ValidateSecurityStamp).
+        var stampHash = SecurityStampClaim.Hash(securityStamp);
+        if (stampHash.Length > 0)
+        {
+            claims.Add(new Claim(SecurityStampClaim.Type, stampHash));
         }
 
         // 4. Generate Tokens
@@ -239,9 +253,6 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         var refreshToken = _tokenProvider.GenerateRefreshToken();
         var expiresAt = now.AddMinutes(_options.Jwt.ExpiryMinutes);
         var refreshTokenExpiresAt = now.AddDays(_options.Jwt.RefreshTokenExpiryDays);
-        var securityStamp = _userManager.SupportsUserSecurityStamp
-            ? await _userManager.GetSecurityStampAsync(user)
-            : null;
 
         await _refreshTokenStore.SaveAsync(
             userId,
@@ -541,8 +552,10 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// <inheritdoc />
     /// <remarks>
     /// Revokes every refresh token of the authenticated user, in every session, and renews the security stamp.
-    /// Access tokens already issued stay valid until they expire (<see cref="JwtSettings.ExpiryMinutes"/>,
-    /// 15 minutes by default, plus at most <see cref="JwtSettings.MaximumClockSkew"/>), because JWT validation does not consult the server. Returns <see langword="false"/>
+    /// Access tokens already issued, including the one of this request, stop working at once with
+    /// <see cref="JwtSettings.ValidateSecurityStamp"/> on (the default) and a user store that keeps security stamps;
+    /// otherwise they stay valid until they expire (<see cref="JwtSettings.ExpiryMinutes"/>, plus at most
+    /// <see cref="JwtSettings.MaximumClockSkew"/>). Returns <see langword="false"/>
     /// when no <see cref="ISecurityDataProvider"/> was supplied to the constructor, and, with the tokens already
     /// revoked, when renewing the security stamp fails. A user store without security stamps only has its tokens revoked.
     /// </remarks>

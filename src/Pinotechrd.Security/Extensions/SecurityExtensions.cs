@@ -136,6 +136,8 @@ public static class SecurityExtensions
         .AddDefaultTokenProviders();
 
         services.AddScoped<ITokenProvider, JwtTokenProvider>();
+        // Run by UseTenantResolution before each endpoint (JwtSettings.ValidateSecurityStamp).
+        services.TryAddScoped<IAccessTokenSessionCheck, SecurityStampSessionCheck<TUser>>();
         // TryAdd: a store registered before this call (for example a persistent one) is kept, so the order of the
         // registrations cannot silently fall back to the in-memory default.
         services.TryAddSingleton<IRefreshTokenStore, InMemoryRefreshTokenStore>();
@@ -207,6 +209,17 @@ public static class SecurityExtensions
                 parameters.ConfigurationManager = null;
                 jwt.Configuration = null;
                 jwt.ConfigurationManager = null;
+
+                // Records the user id and stamp of every token this scheme validates, from the handler's own principal,
+                // before the application's handler and any claims transformation run, for the security-stamp check
+                // (JwtSettings.ValidateSecurityStamp). The application's own OnTokenValidated still runs after it.
+                var events = jwt.Events ??= new JwtBearerEvents();
+                var onTokenValidated = events.OnTokenValidated;
+                events.OnTokenValidated = context =>
+                {
+                    ValidatedAccessToken.Record(context.HttpContext, context.Principal);
+                    return onTokenValidated(context);
+                };
             });
 
         // The PostConfigure above runs after every Configure, but a PostConfigure registered after this call runs after
@@ -232,7 +245,9 @@ public static class SecurityExtensions
     /// Order: after <c>UseAuthentication()</c>, before <c>UseAuthorization()</c> and <c>UseOutputCache()</c>.
     /// The middleware also installs an endpoint feature that wraps every endpoint set on the request, by routing
     /// before or after it or by a re-execution, so that after authorization and before the endpoint runs an
-    /// authenticated user's tenant claim must equal the resolved tenant (<c>400 tenant_invalid</c> otherwise). This
+    /// authenticated user's tenant claim must equal the resolved tenant (<c>400 tenant_invalid</c> otherwise), and the
+    /// library's access token must still belong to a live session (<c>401 session_revoked</c> otherwise, see
+    /// <see cref="JwtSettings.ValidateSecurityStamp"/>). This
     /// covers minimal APIs, MVC, Razor Pages and fallback endpoints, including endpoints that authenticate with
     /// their own schemes, and does not depend on where <c>UseRouting()</c> is. Skip paths are not checked.
     /// </para>

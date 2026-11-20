@@ -1,8 +1,11 @@
 using System.Runtime.CompilerServices;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Pinotechrd.Security.Core;
 
 namespace Pinotechrd.Security.Tenancy;
 
@@ -16,7 +19,10 @@ namespace Pinotechrd.Security.Tenancy;
 /// wrapped endpoint starts, <see cref="HttpContext.User"/> is final. If any identity is authenticated, the
 /// tenant claim of the authenticated identities must exist, be a single value, and equal
 /// <see cref="TenantContext.TenantId"/>; otherwise the request gets the <c>tenant_invalid</c> rejection and
-/// the endpoint does not run. The wrapper keeps the endpoint's route pattern, order, metadata and name.
+/// the endpoint does not run. Then the access tokens of the library must still belong to a live session
+/// (<see cref="IAccessTokenSessionCheck"/>), or the request gets <c>401 session_revoked</c>; an endpoint that allows
+/// anonymous access (sign-in, refresh) runs instead as anonymous, so a client still sending its ended token can sign in
+/// again. The wrapper keeps the endpoint's route pattern, order, metadata and name.
 /// </remarks>
 internal sealed class TenantConsistencyCheck
 {
@@ -70,7 +76,20 @@ internal sealed class TenantConsistencyCheck
             && resolved != null
             && string.Equals(resolved, claimTenant, StringComparison.Ordinal))
         {
-            return true;
+            var sessions = context.RequestServices?.GetService<IAccessTokenSessionCheck>();
+            if (sessions == null || await sessions.IsCurrentAsync(context, resolved, context.RequestAborted)) return true;
+
+            if (context.GetEndpoint()?.Metadata.GetMetadata<IAllowAnonymous>() != null)
+            {
+                // The ended session's identity is dropped: the endpoint sees an anonymous request.
+                context.User = new ClaimsPrincipal(new ClaimsIdentity());
+                return true;
+            }
+
+            context.Response.Headers.WWWAuthenticate = "Bearer error=\"invalid_token\"";
+            await TenantResolutionMiddleware.RejectAsync(
+                context, _logger, TenantResolutionErrorCodes.SessionRevoked, "Session revoked", "Session revoked.", StatusCodes.Status401Unauthorized);
+            return false;
         }
 
         await TenantResolutionMiddleware.RejectAsync(
