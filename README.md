@@ -603,10 +603,26 @@ RETURNING t.user_id, t.tenant_id, t.family_id, t.security_stamp;
 
 ### For operators: what to log and alert on
 
-- **Refresh token reuse.** When a stolen, already-used refresh token is replayed, the whole family is revoked: the attacker gets nothing, and the real user is signed out of that session and must log in again. That sign-out is the intended signal. `RefreshAsync` returns the generic `Invalid token` and the library does not log, so record it where the result is visible: in your `IRefreshTokenStore` or a decorator around it. Log every `ConsumeAsync` result of `Reused` (user id, tenant, family id, client address, user agent; never the token) and alert when it happens, more so when it repeats for one user or comes from many addresses.
-- **Tenant mismatches.** `ConsumeAsync` returning `TenantMismatch`, and permission checks failing because the tenant claim differs from the resolved tenant, mean a client is sending one tenant's credentials to another. Log and alert.
-- **Two-factor.** Track failed codes and lockouts per user and per client address; a spent challenge (all attempts used) is a guessing signal.
-- **Login.** Track `Invalid credentials` per user and per address for credential stuffing. The library logs no tenant ids, header values or tokens; keep it that way in your own logs.
+The library logs security events under the category `Pinotechrd.Security.Events` (`SecurityEvents.Category`), with stable event ids (`SecurityEvents`). Route that category to your log store and alert on the warnings. Events carry the resolved tenant id and the user id; never an email, user name, password, token, token hash, security stamp or code. The user id is the user store's key (a `Guid` for `BaseSecurityUser`): do not key users by an email or other personal data, and treat the ids as pseudonymous personal data in your retention policy. Outside a request (a background job) the tenant id is empty. Responses to clients stay generic: the reason is only in the log. The client address and user agent are not in the events: add them with a logging scope or enricher in your host.
+
+| Id | Name | Level | Properties | Meaning |
+| --- | --- | --- | --- | --- |
+| 4201 | `SignInFailed` | Information | `TenantId`, `UserId` (empty when unknown), `Reason` | A password sign-in failed. `Reason`: `TenantMismatch`, `UnknownUser`, `Inactive`, `WrongPassword`, `LockedOut`, `NotAllowed`, `NoPassword`, `ValidatorRefused`. Count per user and per address for credential stuffing. |
+| 4202 | `TokensIssued` | Information | `TenantId`, `UserId`, `Method` | Tokens issued by `Password`, `TwoFactor` or `Refresh`. |
+| 4203 | `AccountLockedOut` | Warning | `TenantId`, `UserId` | A wrong password or two-factor code locked the account (logged by the failure that locks it). |
+| 4204 | `RefreshTokenReused` | Warning | `TenantId`, `UserId`, `FamilyId` | A used refresh token was presented again and its family was revoked: a stolen token, or a client that refreshes twice in parallel. Alert, more so when it repeats for one user. |
+| 4205 | `RefreshTokenTenantMismatch` | Warning | `TenantId` | A refresh token of another tenant was presented. Only a store that sees every tenant's tokens can tell this; with `AddPinotechrdEfRefreshTokenStore`, whose tables are per tenant, it shows as 4206 `NotFound`. |
+| 4206 | `RefreshRefused` | Information | `TenantId`, `UserId` (when known), `Reason` | `NotFound`, `Expired`, `Revoked`, `UnknownUser`, `Inactive`, `LockedOut`, `NotAllowed`, `StampChanged`, `ValidatorRefused`, `InvalidStoreResult` (a store reported a consumed token without a user). |
+| 4207 | `TwoFactorCodeFailed` | Warning | `TenantId`, `UserId` | A wrong two-factor code. |
+| 4208 | `TwoFactorChallengeExhausted` | Warning | `TenantId`, `UserId` | A challenge ran out: the wrong code that used its last attempt, each attempt past the limit, or a failure that could not be recorded. At least once per exhausted challenge: a guessing signal. |
+| 4209 | `SessionsEnded` | Information | `TenantId`, `UserId`, `Trigger` | Every session of a user ended: `SignOut`, `Revoked`, `Deactivated` or `Deleted`. |
+| 4210 | `AccessTokenSessionEnded` | Information | `TenantId` | An access token whose session ended was refused (`ValidateSecurityStamp`). |
+| 4211 | `TenantMismatch` | Warning | `Code` | `tenant_invalid`: an authenticated request's tenant claim differs from the resolved tenant. `conflicting_tenant_claims`: its identities name different tenants. The tenant values are not logged. |
+| 4212 | `TenantCacheInvalidated` | Information | `TenantId` | `InvalidateTenantAsync` ran. |
+
+Startup warnings `4101` (Data Protection keys not persisted, allowed) and `4102` (in-memory stores in use, allowed) are logged under their own categories.
+
+The events are logged by the library's own classes when they get an `ILoggerFactory`, which `AddPinotechrdSecurity` provides. A refresh token store of your own should return the user, tenant and family with `Reused`, as the library's stores do, or event 4204 has no user. Failures inside your stores and validators surface as exceptions; log them in the host.
 
 ## Caching
 
@@ -639,7 +655,6 @@ A response cache keyed only by path and query serves one tenant's response to an
 
 - **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. Outside Development (any other environment name, including `Testing`) the host fails to start while either is the registered store, unless `AllowInMemoryStores = true` (a single instance whose sessions may be lost; warning event `4102` is logged). The check reads the service registrations: a factory, decorator or keyed registration, or a store registered in another container (Autofac), is trusted as yours. The key check and this one report together, before any hosted service starts. Use `AddPinotechrdEfRefreshTokenStore` (see "Persistent refresh token store") and `AddPinotechrdEfTwoFactorAttemptStore` (see "Persistent two-factor attempt store").
 - **In-memory distributed cache.** The default `IDistributedCache` is per instance, so a cache invalidation does not reach other instances. With more than one instance, register a shared cache (see "Subscription and module cache").
-- **No logging of refresh-token reuse.** The library does not log `Reused`; log it in your store (see "For operators").
 - **`SearchPath` mode is PostgreSQL-only**, and needs session-level pooling (see above).
 - **`SearchPath` binding is not re-checked per command.** A server-side function or procedure that changes `search_path` when called is invisible to the scanner, and the change then holds for every later command on that connection until it closes. Keep such functions out of the database, or give each tenant its own database role or login.
 - **Long-lived connections.** SignalR and other long-lived connections are checked once, when they connect. Each hub method call gets a new DI scope, so `TenantContext` is empty in hub methods. Set it in every hub method (or in a hub filter) from the connection's authenticated tenant claim, after checking the claim is still valid, before touching tenant data.

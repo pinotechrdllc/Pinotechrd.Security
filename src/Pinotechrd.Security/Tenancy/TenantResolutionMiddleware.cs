@@ -182,7 +182,8 @@ public class TenantResolutionOptions
 /// When authentication is configured, the middleware must run after <c>UseAuthentication()</c>; otherwise it
 /// throws <see cref="InvalidOperationException"/> instead of trusting the header of a request whose principal
 /// was never read. Hosts without any authentication scheme are not affected.
-/// Tenant identifiers and header values are never written to logs.
+/// Header values and unvalidated tenant identifiers are never written to logs; the security events
+/// (<see cref="Core.SecurityEvents"/>) carry the resolved tenant id.
 /// </remarks>
 public class TenantResolutionMiddleware
 {
@@ -263,6 +264,8 @@ public class TenantResolutionMiddleware
         if (claimStatus == TenantClaimStatus.Conflict)
         {
             // Two authenticated identities name different tenants: neither can be trusted.
+            Core.SecurityLog.TenantMismatch(
+                Core.SecurityLog.Create(context.RequestServices?.GetService<ILoggerFactory>()), "conflicting_tenant_claims");
             await RejectAsync(context, _logger, TenantResolutionErrorCodes.TenantInvalid, "Invalid tenant", $"Invalid {_options.HeaderName}.");
             return;
         }

@@ -174,7 +174,7 @@ internal sealed class EfRefreshTokenStore<TContext> : IRefreshTokenStore
         {
             // Reuse, even if the token has expired or was revoked on its own since.
             await RevokeFamilyAsync(token.FamilyId, now, CancellationToken.None);
-            return new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.Reused);
+            return new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.Reused, token.UserId, token.TenantId, token.FamilyId);
         }
 
         if (token.RevokedAt != null)
