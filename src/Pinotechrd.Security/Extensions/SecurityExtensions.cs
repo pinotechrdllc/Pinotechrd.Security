@@ -151,6 +151,11 @@ public static class SecurityExtensions
         services.TryAddSingleton(new SecurityServiceRegistrations(services));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, DurableStateCheck>());
         services.AddScoped<IPinotechrdAuthManager<TUser>, PinotechrdAuthManager<TUser>>();
+        // The default data provider: the user of the request's library access token, the resolved tenant, and roles and
+        // permissions from the tenant's tables. An ISecurityDataProvider the application registers, before or after
+        // this call, replaces it.
+        services.AddHttpContextAccessor();
+        services.TryAddScoped<ISecurityDataProvider, DefaultSecurityDataProvider<TContext, TUser, TRole>>();
         services.AddScoped<ISecurityDbContext>(sp => sp.GetRequiredService<TContext>() as ISecurityDbContext ?? throw new InvalidOperationException("DbContext does not implement ISecurityDbContext"));
         services.AddScoped<IPinotechrdSecurityManager<TUser, TRole>, PinotechrdSecurityManager<TUser, TRole>>();
 
@@ -221,10 +226,16 @@ public static class SecurityExtensions
                 // (JwtSettings.ValidateSecurityStamp). The application's own OnTokenValidated still runs after it.
                 var events = jwt.Events ??= new JwtBearerEvents();
                 var onTokenValidated = events.OnTokenValidated;
-                events.OnTokenValidated = context =>
+                events.OnTokenValidated = async context =>
                 {
-                    ValidatedAccessToken.Record(context.HttpContext, context.Principal);
-                    return onTokenValidated(context);
+                    // Captured before the application's handler can change the principal, kept only if that handler
+                    // did not fail or discard the authentication.
+                    var token = ValidatedAccessToken.Capture(context.Principal);
+                    await onTokenValidated(context);
+                    if (token != null && (context.Result == null || context.Result.Succeeded))
+                    {
+                        ValidatedAccessToken.Store(context.HttpContext, token);
+                    }
                 };
             });
 
