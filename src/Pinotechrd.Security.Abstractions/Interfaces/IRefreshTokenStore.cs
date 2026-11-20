@@ -141,9 +141,10 @@ public enum RefreshTokenConsumeStatus
 /// Result of <see cref="IRefreshTokenStore.ConsumeAsync"/>.
 /// </summary>
 /// <param name="Status">Outcome of the call.</param>
-/// <param name="UserId">Owner user identifier, when consumed.</param>
-/// <param name="TenantId">Tenant bound to the token, when consumed.</param>
-/// <param name="FamilyId">Family of the token, when consumed.</param>
+/// <param name="UserId">Owner user identifier, when consumed or reused.</param>
+/// <param name="TenantId">Tenant bound to the token, when consumed or reused.</param>
+/// <param name="FamilyId">Family of the token, when consumed or reused. Callers decide by <c>Status</c> (or
+/// <c>Succeeded</c>), never by the presence of these values.</param>
 /// <param name="SecurityStamp">Security stamp captured when the token was issued, when consumed.</param>
 public sealed record RefreshTokenConsumeResult(
     RefreshTokenConsumeStatus Status,

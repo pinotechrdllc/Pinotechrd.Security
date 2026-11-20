@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
@@ -34,6 +35,7 @@ public class TenantCacheStore : ISecurityStore, ISecurityCacheInvalidator
     private readonly ISecurityStore _inner;
     private readonly IDistributedCache _cache;
     private readonly TimeSpan _expiration;
+    private readonly ILogger? _events;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TenantCacheStore"/> class.
@@ -42,8 +44,10 @@ public class TenantCacheStore : ISecurityStore, ISecurityCacheInvalidator
     /// <param name="cache">The distributed cache shared by every instance of the application.</param>
     /// <param name="options">Security options; <see cref="PinotechrdSecurityOptions.TenantCacheExpiration"/> sets how
     /// long an entry is kept.</param>
-    public TenantCacheStore(ISecurityStore inner, IDistributedCache cache, IOptions<PinotechrdSecurityOptions> options)
+    /// <param name="loggerFactory">Logs <see cref="SecurityEvents.TenantCacheInvalidated"/>; optional.</param>
+    public TenantCacheStore(ISecurityStore inner, IDistributedCache cache, IOptions<PinotechrdSecurityOptions> options, ILoggerFactory? loggerFactory = null)
     {
+        _events = SecurityLog.Create(loggerFactory);
         ArgumentNullException.ThrowIfNull(inner);
         ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(options);
@@ -144,6 +148,7 @@ public class TenantCacheStore : ISecurityStore, ISecurityCacheInvalidator
         // Entries written under the old generation, including one a concurrent read is storing right now from data
         // loaded before the change, are never read again.
         await WriteGenerationAsync(GenerationKey(tenantId), NewGeneration(), cancellationToken);
+        SecurityLog.TenantCacheInvalidated(_events, tenantId);
     }
 
     private static string GenerationKey(string tenantId) => KeyPrefix + tenantId + ":gen";

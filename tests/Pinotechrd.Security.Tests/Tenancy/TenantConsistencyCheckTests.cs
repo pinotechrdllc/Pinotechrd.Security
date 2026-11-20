@@ -231,6 +231,9 @@ public class TenantConsistencyCheckTests
 
         await AssertTenantInvalidAsync(response);
         app.Counter.Count.Should().Be(0, "the endpoint body must not run");
+        app.Logs.Entries.Should().Contain(e => e.Level == LogLevel.Warning && e.Message == "An authenticated request was refused: tenant_invalid.",
+            "the mismatch is a security event (4211), without the tenant values");
+        app.Logs.Entries.Should().NotContain(e => e.Message.Contains("\"a\"") || e.Message.Contains(" b."));
     }
 
     [Theory]

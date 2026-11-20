@@ -79,6 +79,8 @@ internal sealed class TenantConsistencyCheck
             var sessions = context.RequestServices?.GetService<IAccessTokenSessionCheck>();
             if (sessions == null || await sessions.IsCurrentAsync(context, resolved, context.RequestAborted)) return true;
 
+            SecurityLog.AccessTokenSessionEnded(Events(context), resolved);
+
             if (context.GetEndpoint()?.Metadata.GetMetadata<IAllowAnonymous>() != null)
             {
                 // The ended session's identity is dropped: the endpoint sees an anonymous request.
@@ -92,8 +94,11 @@ internal sealed class TenantConsistencyCheck
             return false;
         }
 
+        SecurityLog.TenantMismatch(Events(context), TenantResolutionErrorCodes.TenantInvalid);
         await TenantResolutionMiddleware.RejectAsync(
             context, _logger, TenantResolutionErrorCodes.TenantInvalid, "Invalid tenant", $"Invalid {_options.HeaderName}.");
         return false;
     }
+
+    private static ILogger? Events(HttpContext context) => SecurityLog.Create(context.RequestServices?.GetService<ILoggerFactory>());
 }

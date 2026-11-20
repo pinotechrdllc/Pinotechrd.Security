@@ -178,7 +178,7 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
 
         // Already consumed: reuse, even if the token has expired or was revoked on its own since.
         RevokeFamily(entry.FamilyId);
-        return Task.FromResult(new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.Reused));
+        return Task.FromResult(new RefreshTokenConsumeResult(RefreshTokenConsumeStatus.Reused, entry.UserId, entry.TenantId, entry.FamilyId));
     }
 
     /// <inheritdoc />

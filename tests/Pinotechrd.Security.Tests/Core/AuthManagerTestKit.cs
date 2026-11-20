@@ -74,7 +74,8 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
         FakeTimeProvider? timeProvider = null,
         IRefreshTokenStore? refreshStore = null,
         IIdentityValidator<TUser>? identityValidator = null,
-        ISecurityDataProvider? dataProvider = null)
+        ISecurityDataProvider? dataProvider = null,
+        Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
     {
         Time = timeProvider ?? new FakeTimeProvider();
         if (withTenantContext)
@@ -165,7 +166,8 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
             tenantContext: TenantContext,
             twoFactorAttemptStore: Attempts,
             timeProvider: Time,
-            dataProvider: dataProvider);
+            dataProvider: dataProvider,
+            loggerFactory: loggerFactory);
     }
 
     public PinotechrdAuthManager<TUser> Manager { get; }

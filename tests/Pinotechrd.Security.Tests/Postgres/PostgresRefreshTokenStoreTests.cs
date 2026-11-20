@@ -250,7 +250,12 @@ public class PostgresRefreshTokenStoreTests(PostgresFixture postgres) : IAsyncLi
         await store.SaveAsync("user-1", TenantA, other, expires, "other-" + family);
 
         (await store.ConsumeAsync(a, TenantA)).Status.Should().Be(RefreshTokenConsumeStatus.Consumed);
-        (await store.ConsumeAsync(a, TenantA)).Status.Should().Be(RefreshTokenConsumeStatus.Reused);
+        var reused = await store.ConsumeAsync(a, TenantA);
+        reused.Status.Should().Be(RefreshTokenConsumeStatus.Reused);
+        reused.Succeeded.Should().BeFalse();
+        // Attributed, so the reuse can be logged against its user and family (security event 4204).
+        (reused.UserId, reused.TenantId, reused.FamilyId).Should().Be(("user-1", TenantA, family));
+        reused.SecurityStamp.Should().BeNull();
         await store.SaveAsync("user-1", TenantA, c, expires, family);
 
         (await store.ConsumeAsync(b, TenantA)).Status.Should().Be(RefreshTokenConsumeStatus.Revoked);

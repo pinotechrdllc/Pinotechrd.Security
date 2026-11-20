@@ -6,6 +6,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Pinotechrd.Security.Tenancy;
 using Microsoft.EntityFrameworkCore.Storage;
 using Pinotechrd.Security.Entities;
 using Pinotechrd.Security.Enums;
@@ -34,19 +36,28 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// </summary>
     /// <remarks>
     /// Without <paramref name="refreshTokenStore"/>, deactivating a user cannot revoke its refresh tokens;
-    /// refresh still fails for an inactive user. <c>AddPinotechrdSecurity</c> registers the store.
+    /// refresh still fails for an inactive user. <c>AddPinotechrdSecurity</c> registers the store. Without
+    /// <paramref name="loggerFactory"/> no security events are logged; <paramref name="tenantContext"/> names the tenant
+    /// in them.
     /// </remarks>
     public PinotechrdSecurityManager(
         UserManager<TUser> userManager,
         RoleManager<TRole> roleManager,
         ISecurityDbContext securityDb,
-        IRefreshTokenStore? refreshTokenStore = null)
+        IRefreshTokenStore? refreshTokenStore = null,
+        ILoggerFactory? loggerFactory = null,
+        TenantContext? tenantContext = null)
     {
         _userManager = userManager;
         _roleManager = roleManager;
         _securityDb = securityDb;
         _refreshTokenStore = refreshTokenStore;
+        _events = SecurityLog.Create(loggerFactory);
+        _tenantContext = tenantContext;
     }
+
+    private readonly ILogger? _events;
+    private readonly TenantContext? _tenantContext;
 
     #region User Management
 
@@ -277,7 +288,12 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         // Last cancellation point: once revocation starts, it and the delete run to the end, so a cancelled request
         // cannot leave the tokens half revoked.
         cancellationToken.ThrowIfCancellationRequested();
-        if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), CancellationToken.None);
+        var storedId = await _userManager.GetUserIdAsync(user);
+        if (_refreshTokenStore != null)
+        {
+            await _refreshTokenStore.RevokeAllForUserAsync(storedId, CancellationToken.None);
+            SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, storedId, "Deleted");
+        }
 
         var result = await _userManager.DeleteAsync(user);
         return result.Succeeded;
@@ -306,7 +322,12 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
             if (!isActive)
             {
                 // The user is already stored inactive: finish the revocation even if the request is cancelled.
-                if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), CancellationToken.None);
+                if (_refreshTokenStore != null)
+                {
+                    var storedId = await _userManager.GetUserIdAsync(user);
+                    await _refreshTokenStore.RevokeAllForUserAsync(storedId, CancellationToken.None);
+                    SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, storedId, "Deactivated");
+                }
                 if (_userManager.SupportsUserSecurityStamp)
                 {
                     var stampResult = await _userManager.UpdateSecurityStampAsync(user);
@@ -332,7 +353,9 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         // Revoke under the stored id: FindByIdAsync also accepts other spellings of the same id.
         // Last cancellation point: the revocation and the stamp renewal then run to the end.
         cancellationToken.ThrowIfCancellationRequested();
-        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), CancellationToken.None);
+        var revokedId = await _userManager.GetUserIdAsync(user);
+        await _refreshTokenStore.RevokeAllForUserAsync(revokedId, CancellationToken.None);
+        SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, revokedId, "Revoked");
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
         var stampResult = await _userManager.UpdateSecurityStampAsync(user);

@@ -118,7 +118,8 @@ public static class SecurityExtensions
         services.AddScoped(sp => new TenantCacheStore(
             sp.GetRequiredService<DbSecurityStore>(),
             sp.GetRequiredService<IDistributedCache>(),
-            sp.GetRequiredService<IOptions<PinotechrdSecurityOptions>>()));
+            sp.GetRequiredService<IOptions<PinotechrdSecurityOptions>>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()));
         services.AddScoped<ISecurityStore>(sp => sp.GetRequiredService<TenantCacheStore>());
         services.AddScoped<ISecurityCacheInvalidator>(sp => sp.GetRequiredService<TenantCacheStore>());
 
