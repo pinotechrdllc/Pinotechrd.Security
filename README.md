@@ -225,7 +225,7 @@ public static async Task ProvisionTenantAsync(IServiceProvider services, string 
 }
 ```
 
-With EF Core migrations instead of `GenerateCreateScript`, run `MigrateAsync()` once per tenant in the same scope, and once with the catalog included.
+With EF Core migrations instead of `GenerateCreateScript`, run `MigrateAsync()` once per tenant in the same scope, and once with the catalog included. **This works in `SearchPath` mode only**; see "Migrations and the schema mode" below.
 
 ## Configuration Reference
 
@@ -426,6 +426,8 @@ await db.Database.ExecuteSqlRawAsync(db.Database.GenerateCreateScript()); // tab
 
 With migrations, run `db.Database.MigrateAsync()` in the same way, once per tenant. Each tenant schema then gets its own `__EFMigrationsHistory`. The example above was tested on PostgreSQL 17.7: the generated script holds only the tenant tables, and a user created afterwards is visible in the new tenant only.
 
+**Migrations and the schema mode.** EF Core migrations work per tenant in `SearchPath` mode only, where the model names no tenant schema: run `MigrateAsync()` with each tenant's context, and each tenant schema gets its own tables and its own `__EFMigrationsHistory` (verified on PostgreSQL 17.7). In `SchemaPerTenantInModel` mode, `dotnet ef migrations add` builds the model for the one tenant its design-time context resolves, so every operation of the migration names that tenant's schema, and the history table is created outside the tenant schemas, shared by all of them. Running `MigrateAsync()` per tenant then creates the tables in the design-time schema for the first tenant and does nothing for the others, without an error. In that mode, provision each tenant with `GenerateCreateScript` (as above) and apply later schema changes with a script per tenant, or move to `SearchPath` mode.
+
 **`ITenantStore` and the model cache.**
 
 - The middleware asks `ITenantStore` before the tenant is set and before any tenant-scoped context or model exists, so an unknown tenant is rejected without building a model.
@@ -469,7 +471,7 @@ A module code has no dot, and a permission code is `MODULE.PERMISSION` (for exam
     WHERE a."UserId" = b."UserId" AND a."PermissionId" = b."PermissionId" AND a."Id" > b."Id";
    ```
 
-2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add UniquePermissionAssignments`. For tenants provisioned with `GenerateCreateScript` instead of migrations, create the indexes in each tenant schema with the names EF Core gives them:
+2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add UniquePermissionAssignments` (`SearchPath` mode; in `SchemaPerTenantInModel` mode use a script per tenant, see "Migrations and the schema mode"). For tenants provisioned with `GenerateCreateScript` instead of migrations, create the indexes in each tenant schema with the names EF Core gives them:
 
    ```sql
    CREATE UNIQUE INDEX "IX_role_permissions_RoleId_PermissionId" ON role_permissions ("RoleId", "PermissionId");
@@ -499,7 +501,7 @@ With several instances, the in-memory store lets a two-factor token try five cod
    ```
 
    This adds `two_factor_attempts` (`challenge_hash` primary key, the SHA-256 of the token's random challenge id; `count`, `exhausted`, `expires_at`; index on `expires_at`) in the tenant schema, never the catalog schema. With the flag off the model does not change.
-2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddTwoFactorAttempts`.
+2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddTwoFactorAttempts` (`SearchPath` mode; in `SchemaPerTenantInModel` mode use a script per tenant, see "Migrations and the schema mode").
 3. Register the store (before or after `AddPinotechrdSecurity`): `builder.Services.AddPinotechrdEfTwoFactorAttemptStore<AppSecurityDbContext>();`
 
 Each attempt is one atomic `UPDATE ... SET count = count + 1` (the first one inserts the row), so concurrent attempts on any instance add up to five in total; a database error refuses the attempt rather than allowing one more. The store throws inside a database transaction or `TransactionScope`, because a rollback would erase the counted attempts: call `VerifyTwoFactorCodeAsync` outside any transaction. The store shares the request's context without using its change tracker. Expired rows are deleted by `IPinotechrdSessionPurger` (see "Purging expired sessions" below). If the flag is off, every call of the store throws `InvalidOperationException`.
@@ -559,7 +561,7 @@ For production, or more than one instance, keep refresh tokens in the database. 
    ```
 
    This adds `refresh_tokens` (`token_hash` primary key, the SHA-256 of the token; `tenant_id`, `user_id`, `family_id`, `security_stamp`, `expires_at`, `consumed_at`, `revoked_at`; indexes on `user_id` and `family_id`) and `refresh_token_families` (`family_id`, `revoked_at`) in the tenant schema, never the catalog schema. There is no foreign key to `users`. With the flag off the model does not change.
-2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddRefreshTokens`.
+2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddRefreshTokens` (`SearchPath` mode; in `SchemaPerTenantInModel` mode use a script per tenant, see "Migrations and the schema mode").
 3. Register the store (before or after `AddPinotechrdSecurity`):
 
    ```csharp
