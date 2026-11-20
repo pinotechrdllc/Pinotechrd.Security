@@ -254,6 +254,80 @@ public class SessionChangeDetectorTests
     }
 
     [Theory]
+    // E'' constants decode octal, hexadecimal and Unicode escapes before the server runs the text (PostgreSQL docs,
+    // "String Constants with C-Style Escapes"). Each row changes the session, or defines code that does when it runs.
+    [InlineData("DO $$ BEGIN EXECUTE E'\\x53ET search_path TO x'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'\\123ET search_path TO x'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'\\163\\145\\164 search_path TO x'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'\\u0053ET search_path TO x'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'\\U00000053ET search_path TO x'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'SET search\\x5fpath TO x'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'SET search\\137path TO x'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'SET\\x20ROLE r'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE (E'\\x52ESET ALL'); END $$")]
+    [InlineData("CREATE FUNCTION f() RETURNS void AS $$ BEGIN EXECUTE E'\\x53ET search_path TO x'; END $$ LANGUAGE plpgsql")]
+    [InlineData("DO $$ BEGIN EXECUTE E'\\x53ELECT set_config(''search_path'', ''x'', false)'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'SELECT \\x73et_config(''search_path'', ''x'', false)'; END $$")]
+    public void BypassEscapeStringEscapes_ShouldBeRecognised(string sql)
+    {
+        InternalApi.Find(sql).Should().NotBeNull();
+    }
+
+    [Theory]
+    // PostgreSQL joins string constants separated by whitespace holding a line break, and reads the later parts with the
+    // first part's rules, so the parts cannot be scanned one by one.
+    [InlineData("SELECT E'x'\n'\\'', set_config('search_path','x',false) --'")]
+    [InlineData("SELECT E'x' -- c\n'\\'', set_config('search_path','x',false) --'")]
+    [InlineData("DO 'BEGIN SE'\n'T search_path TO x; END'")]
+    // PostgreSQL 14 and older read 1E'..' as a number followed by an escape string constant.
+    [InlineData("SELECT 1E'a\\'', set_config('search_path','x',false) --'")]
+    public void BypassStringContinuationAndNumberPrefix_ShouldBeRecognised(string sql)
+    {
+        InternalApi.Find(sql).Should().NotBeNull();
+    }
+
+    [Theory]
+    // Escapes PostgreSQL rejects: the text cannot be decoded, so the statement is refused (fail closed).
+    [InlineData("SELECT E'\\u12'")]
+    [InlineData("SELECT E'\\U0011FFFF'")]
+    [InlineData("SELECT E'\\uD83D'")]
+    [InlineData("SELECT E'\\uDE00'")]
+    [InlineData("SELECT E'\\x00'")]
+    [InlineData("SELECT E'\\000'")]
+    [InlineData("DO $$ BEGIN EXECUTE E'\\u005'; END $$")]
+    [InlineData("SELECT E'\\uZZZZ SET search_path TO x'")]
+    [InlineData("SELECT E'\\u' || 'tail'")]
+    [InlineData("SELECT E'\\UFFFFFFFF'")]
+    [InlineData("SELECT E'\\uD83D\\x41'")]
+    [InlineData("SELECT E'\\uD83D plain'")]
+    public void Find_ShouldRefuseAnEscapeStringItCannotDecode(string sql)
+    {
+        InternalApi.Find(sql).Should().Contain("escape string constant");
+    }
+
+    [Theory]
+    // Valid escapes that change nothing stay allowed.
+    [InlineData("SELECT E'caf\\xC3\\xA9 \\303\\251 \\u00e9 \\U0001F600 \\uD83D\\uDE00'")]
+    [InlineData("SELECT E'tab\\there\\nnew line \\\\ backslash \\' quote \\x no hex digit'")]
+    [InlineData("SELECT E'\\101 \\8 \\1234 \\x414'")]
+    [InlineData("SELECT E'\\uD83D\\U0000DE00 \\U0000D83D\\uDE00'")]
+    [InlineData("SELECT 'a' 'b'")]
+    [InlineData("SELECT 1e5, 1E+5, 'x'")]
+    [InlineData("SELECT E'\\")]
+    [InlineData("DO $$ BEGIN EXECUTE E'SELECT \\x31'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'UPDATE t SET name = \\'x\\''; END $$")]
+    public void Find_ShouldAllowEscapeStringsThatChangeNothing(string sql)
+    {
+        InternalApi.Find(sql).Should().BeNull();
+    }
+
+    [Fact]
+    public void Find_ShouldRefuseAHarmlessStringContinuationToo_BecauseItsPartsCannotBeScannedApart()
+    {
+        InternalApi.Find("SELECT 'a'\r\n  'b'").Should().Contain("continued after a line break");
+    }
+
+    [Theory]
     // Nested block comments: PostgreSQL nests them, so the whole /* /* */ */ is one comment; the matcher ends it at the first */.
     [InlineData("SELECT set_config/* /* */ */('search_path','x',false)")]
     [InlineData("SET /* /* */ */ ROLE r")]
