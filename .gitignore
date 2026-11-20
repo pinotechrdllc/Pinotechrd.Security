@@ -49,6 +49,8 @@ Thumbs.db
 .env.*
 appsettings.Local.json
 appsettings.Development.json
+# The sample's development settings hold only local-container values, never secrets.
+!samples/Pinotechrd.Security.SampleApi/appsettings.Development.json
 appsettings.*.local.json
 *.pfx
 *.snk
