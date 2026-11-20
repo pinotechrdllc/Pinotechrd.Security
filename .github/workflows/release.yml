@@ -11,14 +11,17 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+# Three jobs so that no code from the repository's dependencies (restore, build, test, pack, SBOM tool) runs while a
+# write scope is held: `build` is read-only; `publish` and `release` only run pinned actions, the .NET CLI push and
+# shell. After a failure past the push, "Re-run failed jobs" reruns the later jobs on this run's artifacts.
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
-    # Must match the environment configured in the nuget.org Trusted Publishing policy.
-    environment: nuget-production
+    timeout-minutes: 45
     permissions:
       contents: read
-      id-token: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
 
     steps:
       - name: Checkout
@@ -33,12 +36,14 @@ jobs:
           global-json-file: global.json
 
       - name: Validate tag, version and changelog
+        id: meta
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
         run: |
           version=$(dotnet msbuild src/Pinotechrd.Security/Pinotechrd.Security.csproj -getProperty:Version)
           echo "Directory.Build.props version: ${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
           if [[ "${TAG}" != "v${version}" ]]; then
             echo "::error::Tag ${TAG} does not match version v${version} in Directory.Build.props."
@@ -79,13 +84,72 @@ jobs:
           dotnet pack src/Pinotechrd.Security.Abstractions/Pinotechrd.Security.Abstractions.csproj --configuration Release --no-build --output "${{ runner.temp }}/packages"
           dotnet pack src/Pinotechrd.Security/Pinotechrd.Security.csproj --configuration Release --no-build --output "${{ runner.temp }}/packages"
 
-      - name: Upload packages
+      # One CycloneDX SBOM per published package: shipped dependencies only (build-only ones such as analyzers are left
+      # out), with the project reference to Abstractions listed by its NuGet identity. The tool version is pinned in
+      # .config/dotnet-tools.json, which Dependabot updates.
+      - name: Generate SBOMs
+        shell: bash
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          SBOM_DIR: ${{ runner.temp }}/packages
+        run: |
+          dotnet tool restore
+          for project in Pinotechrd.Security.Abstractions Pinotechrd.Security; do
+            dotnet CycloneDX "src/${project}/${project}.csproj" \
+              --output "$SBOM_DIR" --filename "${project}.${VERSION}.cdx.json" --output-format Json \
+              --exclude-dev --include-project-references --set-nuget-purl \
+              --set-name "$project" --set-version "$VERSION"
+          done
+
+      - name: Upload packages and SBOMs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nuget-packages-${{ github.ref_name }}
+          if-no-files-found: error
           path: |
             ${{ runner.temp }}/packages/*.nupkg
             ${{ runner.temp }}/packages/*.snupkg
+            ${{ runner.temp }}/packages/*.cdx.json
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Must match the environment configured in the nuget.org Trusted Publishing policy.
+    environment: nuget-production
+    permissions:
+      contents: read
+      # NuGet login (Trusted Publishing) and the Sigstore signing of the attestations.
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download packages and SBOMs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nuget-packages-${{ github.ref_name }}
+          path: ${{ runner.temp }}/packages
+
+      # Provenance of what the build job produced, before the push. nuget.org adds its repository signature to each
+      # .nupkg, which changes the file, so the `release` job attests the published files after checking their content.
+      - name: Attest build provenance (built packages)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/packages/*.nupkg
+            ${{ runner.temp }}/packages/*.snupkg
+
+      - name: Attest SBOM (Pinotechrd.Security.Abstractions, built)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: ${{ runner.temp }}/packages/Pinotechrd.Security.Abstractions.${{ needs.build.outputs.version }}.nupkg
+          sbom-path: ${{ runner.temp }}/packages/Pinotechrd.Security.Abstractions.${{ needs.build.outputs.version }}.cdx.json
+
+      - name: Attest SBOM (Pinotechrd.Security, built)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: ${{ runner.temp }}/packages/Pinotechrd.Security.${{ needs.build.outputs.version }}.nupkg
+          sbom-path: ${{ runner.temp }}/packages/Pinotechrd.Security.${{ needs.build.outputs.version }}.cdx.json
 
       # Requested right before the push: the temporary API key is valid for one hour.
       - name: NuGet login (OIDC → temporary API key)
@@ -104,3 +168,97 @@ jobs:
           for pkg in "${PKG_DIR}"/Pinotechrd.Security.Abstractions.*.nupkg "${PKG_DIR}"/Pinotechrd.Security.[0-9]*.nupkg; do
             dotnet nuget push "$pkg" --api-key "$NUGET_TEMP_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
+
+  release:
+    needs: [ build, publish ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      # contents: write only to create the GitHub Release of the tag; id-token and attestations to attest the
+      # packages as nuget.org serves them.
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download packages and SBOMs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nuget-packages-${{ github.ref_name }}
+          path: ${{ runner.temp }}/packages
+
+      # Download the packages nuget.org serves (with its repository signature) and check that their content is exactly
+      # what the build job produced: only .signature.p7s, which nuget.org adds, may differ.
+      - name: Fetch and compare the published packages
+        shell: bash
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          PKG_DIR: ${{ runner.temp }}/packages
+          PUB_DIR: ${{ runner.temp }}/published
+        run: |
+          mkdir -p "$PUB_DIR"
+          lower_version=$(echo "$VERSION" | tr '[:upper:]' '[:lower:]')
+          for id in Pinotechrd.Security.Abstractions Pinotechrd.Security; do
+            lower_id=$(echo "$id" | tr '[:upper:]' '[:lower:]')
+            url="https://api.nuget.org/v3-flatcontainer/${lower_id}/${lower_version}/${lower_id}.${lower_version}.nupkg"
+            file="$PUB_DIR/${id}.${VERSION}.nupkg"
+            # Validation and signing on nuget.org usually take a few minutes; wait up to 30.
+            for attempt in $(seq 1 60); do
+              if curl --fail --silent --show-error --location --max-time 120 --output "$file" "$url"; then break; fi
+              if [ "$attempt" -eq 60 ]; then echo "::error::${id} ${VERSION} is not available on nuget.org after 30 minutes."; exit 1; fi
+              sleep 30
+            done
+
+            built="$RUNNER_TEMP/compare/${id}/built"
+            published="$RUNNER_TEMP/compare/${id}/published"
+            mkdir -p "$built" "$published"
+            unzip -q "$PKG_DIR/${id}.${VERSION}.nupkg" -d "$built"
+            unzip -q "$file" -d "$published"
+            rm -f "$published/.signature.p7s"
+            if ! diff -r "$built" "$published"; then
+              echo "::error::The ${id} ${VERSION} package on nuget.org differs from the one the build job produced."
+              exit 1
+            fi
+          done
+
+          cd "$PUB_DIR"
+          cp "$PKG_DIR"/*.snupkg "$PKG_DIR"/*.cdx.json .
+          sha256sum *.nupkg *.snupkg *.cdx.json > SHA256SUMS
+          cat SHA256SUMS
+
+      # Issued for the nuget.org-signed files after the step above verified that their content, apart from nuget.org's
+      # .signature.p7s, is what the build job produced; so the package a consumer downloads verifies.
+      - name: Attest build provenance (published packages)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/published/*.nupkg
+
+      - name: Attest SBOM (Pinotechrd.Security.Abstractions, published)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: ${{ runner.temp }}/published/Pinotechrd.Security.Abstractions.${{ needs.build.outputs.version }}.nupkg
+          sbom-path: ${{ runner.temp }}/packages/Pinotechrd.Security.Abstractions.${{ needs.build.outputs.version }}.cdx.json
+
+      - name: Attest SBOM (Pinotechrd.Security, published)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: ${{ runner.temp }}/published/Pinotechrd.Security.${{ needs.build.outputs.version }}.nupkg
+          sbom-path: ${{ runner.temp }}/packages/Pinotechrd.Security.${{ needs.build.outputs.version }}.cdx.json
+
+      - name: GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PUB_DIR: ${{ runner.temp }}/published
+        run: |
+          prerelease=""
+          if [[ "$VERSION" == *-* ]]; then prerelease="--prerelease"; fi
+          notes="Packages as published on nuget.org, symbol packages, CycloneDX SBOMs and SHA256SUMS. Verify a package with: gh attestation verify <file>.nupkg --repo ${GITHUB_REPOSITORY} --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml --source-ref refs/tags/${TAG}. Changes: see CHANGELOG.md, section ${VERSION}."
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$PUB_DIR"/* --clobber
+          else
+            gh release create "$TAG" "$PUB_DIR"/* --verify-tag --title "$VERSION" --notes "$notes" $prerelease
+          fi
