@@ -593,12 +593,9 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         var byCode = new Dictionary<string, PermissionAccessType>(StringComparer.Ordinal);
         foreach (var item in overrides ?? [])
         {
-            if (string.IsNullOrWhiteSpace(item.Code))
-            {
-                continue;
-            }
-
-            if (!SecurityCodes.TryNormalize(item.Code, out var code))
+            // An empty code is invalid like any other: refusing it, instead of skipping it, keeps a Deny the caller meant
+            // to write from being reported as written.
+            if (item is null || !SecurityCodes.TryNormalize(item.Code, out var code))
             {
                 return false;
             }

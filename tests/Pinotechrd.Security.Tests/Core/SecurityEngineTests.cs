@@ -231,8 +231,8 @@ public class SecurityEngineTests
         // Act
         var result = await _engine.GetPermissionsAsync(userId);
 
-        // Assert
-        result.Should().BeEquivalentTo(expectedPermissions);
+        // Assert: codes are normalised (trimmed, upper case), as CanAccessAsync compares them.
+        result.Should().BeEquivalentTo(new[] { "PERM1", "PERM2" });
         await _provider.Received(1).GetUserPermissionsAsync(userId);
     }
 
@@ -325,6 +325,79 @@ public class SecurityEngineTests
         var result = await _engine.GetPermissionsAsync(userId);
 
         result.Should().BeEquivalentTo(new[] { "ORDERS.READ", "CORE.HOME", "BARE" });
+    }
+
+    [Theory]
+    [InlineData("SALES.VIEW", "sales.view")]
+    [InlineData("SALES.VIEW", " SALES.VIEW ")]
+    [InlineData(" sales.view ", "SALES.VIEW")]
+    [InlineData("Sales.View", " sales.VIEW")]
+    public async Task Deny_ShouldRemoveTheGrant_WhateverCaseOrSurroundingSpacesEitherCodeHas(string roleCode, string denyCode)
+    {
+        var userId = "user-1";
+        var tenantId = "tenant-A";
+        _provider.GetCurrentUserId().Returns(userId);
+        _provider.GetCurrentTenantId().Returns(tenantId);
+        _store.IsSubscriptionActiveAsync(tenantId).Returns(true);
+        _store.IsModuleActiveAsync(tenantId, "SALES").Returns(true);
+        _store.GetActiveModuleCodesAsync(tenantId).Returns(new List<string> { "SALES" });
+        _provider.GetUserPermissionsAsync(userId).Returns(new List<string> { roleCode });
+        _store.GetUserOverridesAsync(userId).Returns(new List<UserPermissionOverride> { new(denyCode, PermissionAccessType.Deny) });
+
+        (await _engine.CanAccessAsync("SALES", "VIEW")).Should().BeFalse();
+        (await _engine.GetPermissionsAsync(userId)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CodesThatCannotBeNormalised_ShouldGrantNothing()
+    {
+        var userId = "user-1";
+        var tenantId = "tenant-A";
+        _provider.GetCurrentUserId().Returns(userId);
+        _provider.GetCurrentTenantId().Returns(tenantId);
+        _store.IsSubscriptionActiveAsync(tenantId).Returns(true);
+        _store.IsModuleActiveAsync(tenantId, Arg.Any<string>()).Returns(true);
+        _store.GetActiveModuleCodesAsync(tenantId).Returns(new List<string> { "SALES" });
+        _provider.GetUserPermissionsAsync(userId).Returns(new List<string> { "SALES VIEW", "SALES.", ".VIEW", "  ", "SALES .VIEW", "SALES. VIEW" });
+        _store.GetUserOverridesAsync(userId).Returns(new List<UserPermissionOverride> { new("SALES.VIEW;", PermissionAccessType.Allow) });
+
+        (await _engine.CanAccessAsync("SALES", "VIEW")).Should().BeFalse();
+        (await _engine.GetPermissionsAsync(userId)).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("Sales.View")]
+    [InlineData(" Sales.View ")]
+    [InlineData("SALES.VIEW")]
+    public async Task Menu_ShouldMatchRequiredPermissions_Normalised(string required)
+    {
+        var userId = "user-1";
+        var tenantId = "tenant-A";
+        _provider.GetCurrentUserId().Returns(userId);
+        _provider.GetCurrentTenantId().Returns(tenantId);
+        _store.IsSubscriptionActiveAsync(tenantId).Returns(true);
+        _store.GetActiveModuleCodesAsync(tenantId).Returns(new List<string> { "SALES" });
+        _provider.GetUserPermissionsAsync(userId).Returns(new List<string> { "sales.view" });
+        _store.GetUserOverridesAsync(userId).Returns(new List<UserPermissionOverride>());
+        var menu = new List<SecurityMenuItem>
+        {
+            new() { TitleKey = "Sales", ModuleCode = "SALES", RequiredPermissions = new List<string> { required } },
+            new() { TitleKey = "Broken", ModuleCode = "SALES", RequiredPermissions = new List<string> { "SALES . VIEW" } }
+        };
+
+        (await _engine.GetAuthorizedMenuAsync(menu)).Select(i => i.TitleKey).Should().Equal("Sales");
+    }
+
+    [Fact]
+    public async Task GetPermissionsAsync_ShouldListACodeOnce_WhateverItsSpelling()
+    {
+        var userId = "user-1";
+        _provider.GetCurrentTenantId().Returns("tenant-A");
+        _provider.GetUserPermissionsAsync(userId).Returns(new List<string> { "sales.view", "SALES.VIEW", " Sales.View " });
+        _store.GetUserOverridesAsync(userId).Returns(new List<UserPermissionOverride>());
+        _store.GetActiveModuleCodesAsync("tenant-A").Returns(new List<string> { "SALES" });
+
+        (await _engine.GetPermissionsAsync(userId)).Should().Equal("SALES.VIEW");
     }
 
     private class TestSubscription : SystemSubscription { }

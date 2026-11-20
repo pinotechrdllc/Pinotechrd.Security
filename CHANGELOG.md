@@ -6,6 +6,11 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **Permission codes are normalised in the engine.** `SecurityEngine` now normalises the role permission codes from `ISecurityDataProvider.GetUserPermissionsAsync`, the override codes and the `RequiredPermissions` of menu items before comparing them: surrounding spaces are trimmed and letters upper-cased, and each part of `MODULE.PERMISSION` must be 1 to 100 characters from `A-Z a-z 0-9 _ . -`. So a Deny removes the grant it names whatever case or surrounding spaces either side has. A code that does not meet that rule (empty, spaces inside or around the dot, other characters) grants nothing. `GetPermissionsAsync`, `GetCurrentUserPermissionsAsync`, `GetAuthorizedMenuAsync` and the `permission` claims of issued tokens now use the normalised codes (for example `SALES.VIEW` instead of `Sales.View`); a host that checks the claim with `RequireClaim` must use the upper-case form.
+- `IPinotechrdSecurityManager.ReplaceUserOverridesAsync` returns `false`, with nothing changed, when an override is `null` or has an empty code. It used to skip an empty code and return `true`, and to throw on a `null` item.
+
 ## [1.2.0-preview.4] - 2026-11-19
 
 ### Added
