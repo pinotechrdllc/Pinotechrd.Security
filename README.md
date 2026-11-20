@@ -447,6 +447,8 @@ services.AddPinotechrdSecurity<AppDbContext, AppUser, AppRole>(o => o.AllowUnver
 
 ### Role permissions and user overrides
 
+A module code has no dot, and a permission code is `MODULE.PERMISSION` (for example `SALES.VIEW`): the part before the first dot names its module, and `CanAccessAsync("SALES", "VIEW")` looks for exactly that code. `SeedModuleAsync` requires each permission of a module to start with that module's code, `AssignPermissionsToRoleAsync` and `ReplaceUserOverridesAsync` refuse any other code, and the engine ignores one that reaches it anyway (for example from your `ISecurityDataProvider`). A permission is listed by `GetPermissionsAsync`, written to tokens, and satisfies a menu item's `RequiredPermissions` only while its module is in the tenant's plan, whether or not the menu item names a module; a menu item with no module and no required permissions is always shown. Without a tenant in the request, `GetPermissionsAsync` returns nothing.
+
 `AssignPermissionsToRoleAsync` and `ReplaceUserOverridesAsync` replace all of a role's or user's rows in one transaction that first locks the role or user row, so concurrent calls for the same role or user run one after the other and the last one wins. The requested permissions are checked under that lock. The model has a unique index on `role_permissions` (`RoleId`, `PermissionId`) and on `user_permissions` (`UserId`, `PermissionId`).
 
 - **Requirements.** A relational provider, and a context without pending changes: both methods throw `InvalidOperationException` otherwise, because the replace saves the context and may roll it back or retry it.

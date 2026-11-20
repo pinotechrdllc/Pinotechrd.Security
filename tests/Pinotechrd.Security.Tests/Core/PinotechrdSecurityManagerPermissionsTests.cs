@@ -107,6 +107,9 @@ public sealed class PinotechrdSecurityManagerPermissionsTests : IAsyncLifetime
     [InlineData("SALES VIEW")]
     [InlineData("SALES.VI/EW")]
     [InlineData("Saſes.View")]
+    [InlineData("SALESVIEW")]
+    [InlineData(".VIEW")]
+    [InlineData("SALES.")]
     public async Task AssignPermissionsToRoleAsync_ShouldReturnFalseAndKeepTheExistingAssignments_WhenACodeIsInvalid(string bad)
     {
         await _manager.AssignPermissionsToRoleAsync(_roleId.ToString(), ["SALES.VIEW", "SALES.EDIT"]);

@@ -89,7 +89,7 @@ public class SecurityEngine : ISecurityEngine
         if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(tenantId) || !TenantMatchesRequest(tenantId))
             return false;
 
-        if (!SecurityCodes.TryNormalize(moduleCode, out moduleCode) || !SecurityCodes.TryNormalize(permissionName, out permissionName))
+        if (!SecurityCodes.TryNormalizeModule(moduleCode, out moduleCode) || !SecurityCodes.TryNormalize(permissionName, out permissionName))
             return false;
 
         // 2. Validate Active Subscription (Business layer check)
@@ -136,8 +136,8 @@ public class SecurityEngine : ISecurityEngine
     /// Recursively filters the menu items based on the provided authorized sets.
     /// </summary>
     private List<SecurityMenuItem> FilterMenuItems(
-        IEnumerable<SecurityMenuItem> items, 
-        FrozenSet<string> activeModules, 
+        IEnumerable<SecurityMenuItem> items,
+        FrozenSet<string> activeModules,
         FrozenSet<string> userPermissions)
     {
         var authorizedItems = new List<SecurityMenuItem>();
@@ -151,10 +151,13 @@ public class SecurityEngine : ISecurityEngine
                 continue;
 
             // HIERARCHY CHECK 2: Permissions
-            // If the item requires specific permissions, the user must have AT LEAST ONE. Required codes are normalised
+            // If the item requires specific permissions, the user must have AT LEAST ONE whose module is active in the
+            // plan, as CanAccessAsync requires, whether or not the item names a module. Required codes are normalised
             // like the user's codes; one that cannot be normalised is never held.
             if (item.RequiredPermissions.Any()
-                && !item.RequiredPermissions.Any(p => TryNormalizePermission(p, out var required) && userPermissions.Contains(required)))
+                && !item.RequiredPermissions.Any(p => TryNormalizePermission(p, out var required)
+                    && userPermissions.Contains(required)
+                    && IsModuleActive(required, activeModules)))
                 continue;
 
             // RECURSION: Process children first
@@ -180,21 +183,18 @@ public class SecurityEngine : ISecurityEngine
     /// <inheritdoc />
     public async Task<IEnumerable<string>> GetPermissionsAsync(string userId, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(userId)) 
+        if (string.IsNullOrEmpty(userId))
             return [];
 
+        // No tenant, no permissions: without one there is no plan to check the modules against, and CanAccessAsync,
+        // the menu and GetCurrentUserPermissionsAsync grant nothing either. Nor for a tenant other than the request's.
         var tenantId = _dataProvider.GetCurrentTenantId();
-        if (!string.IsNullOrEmpty(tenantId) && !TenantMatchesRequest(tenantId))
+        if (string.IsNullOrEmpty(tenantId) || !TenantMatchesRequest(tenantId))
         {
             return [];
         }
 
         var permissions = await EffectivePermissionsAsync(userId, cancellationToken);
-        if (string.IsNullOrEmpty(tenantId))
-        {
-            return permissions;
-        }
-
         var activeModules = NormalizedModuleSet(await _securityStore.GetActiveModuleCodesAsync(tenantId, cancellationToken));
 
         return permissions.Where(code => IsModuleActive(code, activeModules)).ToList();
@@ -203,7 +203,7 @@ public class SecurityEngine : ISecurityEngine
     /// <inheritdoc />
     public Task<IEnumerable<string>> GetCurrentUserPermissionsAsync(CancellationToken cancellationToken = default)
     {
-        // FAIL-FAST: no user or no tenant, no permissions (unlike GetPermissionsAsync, which then skips the module filter).
+        // FAIL-FAST: no user or no tenant, no permissions.
         var userId = _dataProvider.GetCurrentUserId();
         var tenantId = _dataProvider.GetCurrentTenantId();
         return string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(tenantId)
@@ -249,40 +249,16 @@ public class SecurityEngine : ISecurityEngine
         return set;
     }
 
-    /// <summary>
-    /// Normalises a permission code the way <see cref="CanAccessAsync"/> builds the one it looks for: <c>MODULE.PERMISSION</c>
-    /// with each part normalised on its own (so a module code of up to the full code length is accepted), or a code
-    /// without a dot normalised as a whole.
-    /// </summary>
-    private static bool TryNormalizePermission(string? code, out string normalized)
-    {
-        normalized = string.Empty;
-        var trimmed = code?.Trim();
-        if (string.IsNullOrEmpty(trimmed)) return false;
+    private static bool TryNormalizePermission(string? code, out string normalized) =>
+        SecurityCodes.TryNormalizePermission(code, out normalized);
 
-        var separator = trimmed.IndexOf('.');
-        if (separator < 0) return SecurityCodes.TryNormalize(trimmed, out normalized);
-
-        // Only the whole code is trimmed, as the write paths do: spaces around the dot ("SALES . VIEW") make it invalid.
-        var modulePart = trimmed[..separator];
-        var permissionPart = trimmed[(separator + 1)..];
-        if (modulePart.Length != modulePart.Trim().Length || permissionPart.Length != permissionPart.Trim().Length
-            || !SecurityCodes.TryNormalize(modulePart, out var module)
-            || !SecurityCodes.TryNormalize(permissionPart, out var permission))
-        {
-            return false;
-        }
-
-        normalized = module + "." + permission;
-        return true;
-    }
-
+    /// <summary>Whether the module of a normalised permission code is active; a code without a module never is.</summary>
     private static bool IsModuleActive(string code, FrozenSet<string> activeModules)
     {
         var separator = code.IndexOf('.');
         if (separator <= 0)
         {
-            return true;
+            return false;
         }
 
         // No module code is exempt (CORE included): a permission is listed, and written to tokens, only when its module is
@@ -295,11 +271,11 @@ public class SecurityEngine : ISecurityEngine
     /// A stored code outside the code alphabet is left out.
     /// </summary>
     private static FrozenSet<string> NormalizedModuleSet(IEnumerable<string> codes) =>
-        codes.Select(code => SecurityCodes.TryNormalize(code, out var normalized) ? normalized : null)
+        codes.Select(code => SecurityCodes.TryNormalizeModule(code, out var normalized) ? normalized : null)
             .OfType<string>()
             .ToFrozenSet(StringComparer.Ordinal);
 
     /// <summary>Whether a module code, normalised the same way, is active; an invalid code never is.</summary>
     private static bool IsActiveModuleCode(string moduleCode, FrozenSet<string> activeModules) =>
-        SecurityCodes.TryNormalize(moduleCode, out var normalized) && activeModules.Contains(normalized);
+        SecurityCodes.TryNormalizeModule(moduleCode, out var normalized) && activeModules.Contains(normalized);
 }
