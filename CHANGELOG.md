@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ## [Unreleased]
 
+## [1.2.0-preview.5] - 2026-11-20
+
 ### Added
 
 - **A catalog-backed `ITenantStore`.** The new `AddPinotechrdCatalogTenantStore(o => o.UseNpgsql(catalogConnection), catalogSchema)` registers an `ITenantStore` that reads the catalog's `tenants` table through a context of its own (not registered in the container, so `dotnet ef` still finds only the application's context), counting only active tenants, with no cache. Its options must apply any naming convention the application's context applies to the catalog. The README uses it.

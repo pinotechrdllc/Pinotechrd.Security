@@ -673,7 +673,7 @@ curl -H "TenantId: tenant-a" http://localhost:5000/api/tenant
 
 Every pull request runs the build with warnings as errors, a vulnerability audit of dependencies, the test suite with a minimum line-coverage gate, CodeQL static analysis, a dependency review and package validation of the public API. Releases are tag-driven and published with nuget.org Trusted Publishing, so no API key is stored in the repository.
 
-From the release after 1.2.0-preview.4, each release also carries build provenance and an SBOM. To check that a package you downloaded from nuget.org came from this repository's release workflow for its tag:
+From 1.2.0-preview.5, each release also carries build provenance and an SBOM. To check that a package you downloaded from nuget.org came from this repository's release workflow for its tag:
 
 ```bash
 gh attestation verify pinotechrd.security.<version>.nupkg \

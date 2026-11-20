@@ -8,7 +8,7 @@ namespace Pinotechrd.Security.Tests.Core;
 
 public class PackageMetadataTests
 {
-    private const string ExpectedVersion = "1.2.0-preview.4";
+    private const string ExpectedVersion = "1.2.0-preview.5";
 
     [Theory]
     [InlineData(typeof(PinotechrdAuthManager<>))]
