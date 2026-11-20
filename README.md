@@ -43,8 +43,9 @@ dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL   # the database provid
 | --- | --- |
 | A user and a role type | Derive from `BaseSecurityUser` and `BaseSecurityRole`. |
 | An EF Core `DbContext` | Derive from `PinotechrdSecurityDbContext<TUser, TRole>`, with the constructor `(DbContextOptions<T> options, ISchemaProvider schemaProvider) : base(options, schemaProvider)`. |
-| `ITenantStore` | Tells the middleware whether a tenant id exists and is active. It runs before the tenant is resolved, so it must read the catalog directly, not through the tenant context. Not registered by default. |
-| `ISecurityDataProvider` | Supplies the permission engine with the current user id, the current tenant, and roles and permissions. The user id is the `id` claim that `LoginAsync` writes. The tenant is the one whose data the provider reads (`TenantContext.TenantId`). Permissions must be full `MODULE.PERMISSION` codes such as `SALES.VIEW`. Not registered by default. |
+| The catalog connection for `ITenantStore` | `AddPinotechrdCatalogTenantStore(o => o.UseNpgsql(catalogConnection))` registers the library's store: it tells the middleware whether a tenant id exists and is active, reading the catalog's `tenants` table through a context of its own (it runs before the tenant is resolved, so never through the tenant context). Give it a login that can only read the catalog. You can register your own `ITenantStore` instead. |
+
+The library also registers a default `ISecurityDataProvider` (the permission engine's view of the request): the user of the access token its bearer scheme validated (never an `id` claim another scheme or a claims transformation adds), the resolved tenant (`TenantContext`, never a header), and the user's roles and their `MODULE.PERMISSION` codes from the tenant's own tables. It names a user only from the library's own tokens (an `id` claim issued by `Jwt.Issuer`), only for an active user, and not outside a request (background work gets no user). Register your own `ISecurityDataProvider` with `AddScoped`, before or after `AddPinotechrdSecurity` (not `TryAdd` after it), if your users sign in with another scheme or your roles and permissions live elsewhere; it must keep the same rules. If your context renames the catalog's columns (a naming convention), apply it in the catalog store's options too, or every tenant is refused.
 
 ```csharp
 public sealed class AppSecurityDbContext : PinotechrdSecurityDbContext<AppUser, AppRole>
@@ -52,38 +53,6 @@ public sealed class AppSecurityDbContext : PinotechrdSecurityDbContext<AppUser, 
     public AppSecurityDbContext(DbContextOptions<AppSecurityDbContext> options, ISchemaProvider schemaProvider)
         : base(options, schemaProvider)
     {
-    }
-}
-
-public sealed class AppSecurityDataProvider(
-    IHttpContextAccessor http, TenantContext tenant, IPinotechrdSecurityManager<AppUser, AppRole> security) : ISecurityDataProvider
-{
-    public string? GetCurrentUserId() => http.HttpContext?.User.FindFirstValue("id");
-    public string? GetCurrentTenantId() => tenant.TenantId;
-    public Task<IEnumerable<string>> GetUserRolesAsync(string userId, CancellationToken cancellationToken = default)
-        => security.GetUserRolesAsync(userId, cancellationToken);
-
-    public async Task<IEnumerable<string>> GetUserPermissionsAsync(string userId, CancellationToken cancellationToken = default)
-    {
-        var codes = new List<string>();
-        foreach (var name in await security.GetUserRolesAsync(userId, cancellationToken))
-        {
-            if (await security.GetRoleByNameAsync(name, cancellationToken) is { } role)
-                codes.AddRange(await security.GetRolePermissionsAsync(role.Id.ToString(), cancellationToken));
-        }
-        return codes; // full MODULE.PERMISSION codes
-    }
-}
-
-public sealed class AppTenantStore(NpgsqlDataSource dataSource) : ITenantStore // register: AddSingleton(NpgsqlDataSource.Create(cs))
-{
-    public async Task<bool> TenantExistsAsync(string tenantId, CancellationToken cancellationToken = default)
-    {
-        await using var command = dataSource.CreateCommand(
-            "SELECT EXISTS (SELECT 1 FROM public.tenants WHERE \"Identifier\" = $1 AND \"Status\" = $2)");
-        command.Parameters.Add(new NpgsqlParameter { Value = tenantId });
-        command.Parameters.Add(new NpgsqlParameter { Value = (int)TenantStatus.Active });
-        return (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
 }
 ```
@@ -114,11 +83,12 @@ builder.Services.AddPinotechrdSecurity<AppSecurityDbContext, AppUser, AppRole>(o
     options.Tenancy.SkipPaths.Add("/health");
 });
 
-builder.Services.AddScoped<ITenantStore, AppTenantStore>();
-builder.Services.AddScoped<ISecurityDataProvider, AppSecurityDataProvider>();
+// The catalog-backed tenant store, on a login that can only read the catalog.
+builder.Services.AddPinotechrdCatalogTenantStore(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Catalog")));
 ```
 
-`AppSecurityDbContext`, `AppUser`, `AppRole`, `AppTenantStore` and `AppSecurityDataProvider` are your own types. The [sample API](https://github.com/pinotechrdllc/Pinotechrd.Security/tree/develop/samples/Pinotechrd.Security.SampleApi) contains a complete, runnable version of each.
+`AppSecurityDbContext`, `AppUser` and `AppRole` are your own types. The [sample API](https://github.com/pinotechrdllc/Pinotechrd.Security/tree/develop/samples/Pinotechrd.Security.SampleApi) contains a complete, runnable version of each.
 
 ### 3. Configure the middleware
 

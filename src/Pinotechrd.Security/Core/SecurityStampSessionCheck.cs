@@ -43,12 +43,18 @@ internal sealed record ValidatedAccessToken(IReadOnlyList<string> UserIds, IRead
 {
     private static readonly object Key = new();
 
+    public static ValidatedAccessToken? Capture(ClaimsPrincipal? principal) =>
+        principal == null
+            ? null
+            : new ValidatedAccessToken(
+                principal.FindAll(SecurityStampClaim.UserIdType).Select(c => c.Value).ToList(),
+                principal.FindAll(SecurityStampClaim.Type).Select(c => c.Value).ToList());
+
+    public static void Store(HttpContext context, ValidatedAccessToken token) => context.Items[Key] = token;
+
     public static void Record(HttpContext context, ClaimsPrincipal? principal)
     {
-        if (principal == null) return;
-        context.Items[Key] = new ValidatedAccessToken(
-            principal.FindAll(SecurityStampClaim.UserIdType).Select(c => c.Value).ToList(),
-            principal.FindAll(SecurityStampClaim.Type).Select(c => c.Value).ToList());
+        if (Capture(principal) is { } token) Store(context, token);
     }
 
     public static ValidatedAccessToken? Read(HttpContext context) =>

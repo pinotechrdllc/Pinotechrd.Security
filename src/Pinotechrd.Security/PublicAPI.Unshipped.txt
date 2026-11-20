@@ -295,3 +295,5 @@ static readonly Pinotechrd.Security.Core.SecurityEvents.TenantMismatch -> Micros
 static readonly Pinotechrd.Security.Core.SecurityEvents.TokensIssued -> Microsoft.Extensions.Logging.EventId
 static readonly Pinotechrd.Security.Core.SecurityEvents.TwoFactorChallengeExhausted -> Microsoft.Extensions.Logging.EventId
 static readonly Pinotechrd.Security.Core.SecurityEvents.TwoFactorCodeFailed -> Microsoft.Extensions.Logging.EventId
+Pinotechrd.Security.Extensions.CatalogTenantStoreExtensions
+static Pinotechrd.Security.Extensions.CatalogTenantStoreExtensions.AddPinotechrdCatalogTenantStore(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder!>! configureCatalog, string? catalogSchema = "public") -> Microsoft.Extensions.DependencyInjection.IServiceCollection!

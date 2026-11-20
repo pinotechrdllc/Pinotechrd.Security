@@ -1,3 +1,4 @@
+using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Headers;
@@ -56,42 +57,6 @@ public class PostgresReadmeFlowTests(PostgresFixture postgres) : IAsyncLifetime
     public static IEnumerable<object[]> Cases() =>
         PgProvisioning.Modes.SelectMany(mode => new[] { "tenant_id", "tenant_ref", "tid" }.Select(claim => new object[] { mode, claim }));
 
-    // The README's AppTenantStore.
-    private sealed class AppTenantStore(NpgsqlDataSource dataSource) : ITenantStore
-    {
-        public async Task<bool> TenantExistsAsync(string tenantId, CancellationToken cancellationToken = default)
-        {
-            await using var command = dataSource.CreateCommand(
-                "SELECT EXISTS (SELECT 1 FROM public.tenants WHERE \"Identifier\" = $1 AND \"Status\" = $2)");
-            command.Parameters.Add(new NpgsqlParameter { Value = tenantId });
-            command.Parameters.Add(new NpgsqlParameter { Value = (int)TenantStatus.Active });
-            return (bool)(await command.ExecuteScalarAsync())!;
-        }
-    }
-
-    // The README's AppSecurityDataProvider.
-    private sealed class AppSecurityDataProvider(
-        IHttpContextAccessor http, TenantContext tenant, IPinotechrdSecurityManager<HostUser, HostRole> security) : ISecurityDataProvider
-    {
-        public string? GetCurrentUserId() => http.HttpContext?.User.FindFirstValue("id");
-
-        public string? GetCurrentTenantId() => tenant.TenantId;
-
-        public Task<IEnumerable<string>> GetUserRolesAsync(string userId, CancellationToken cancellationToken = default) => security.GetUserRolesAsync(userId);
-
-        public async Task<IEnumerable<string>> GetUserPermissionsAsync(string userId, CancellationToken cancellationToken = default)
-        {
-            var codes = new List<string>();
-            foreach (var name in await security.GetUserRolesAsync(userId))
-            {
-                if (await security.GetRoleByNameAsync(name) is { } role)
-                    codes.AddRange(await security.GetRolePermissionsAsync(role.Id.ToString()));
-            }
-
-            return codes;
-        }
-    }
-
     /// <summary>The README's ProvisionTenantAsync, with AppSecurityDbContext, AppUser and AppRole replaced by the test types.</summary>
     private static async Task ProvisionTenantAsync(IServiceProvider services, string connectionString, TenantSchemaMode mode,
         string tenantId, string customerName, string adminEmail, string adminPassword, bool createCatalog)
@@ -146,7 +111,6 @@ public class PostgresReadmeFlowTests(PostgresFixture postgres) : IAsyncLifetime
             {
                 var services = builder.Services;
                 services.AddProblemDetails();
-                services.AddSingleton(NpgsqlDataSource.Create(cs));
                 services.AddScoped<ISchemaProvider, DbSchemaProvider>();
                 services.AddDbContext<SecDb>(options => options.UseNpgsql(cs).UsePinotechrdSecurity(model =>
                 {
@@ -161,9 +125,9 @@ public class PostgresReadmeFlowTests(PostgresFixture postgres) : IAsyncLifetime
                     options.Tenancy.ClaimType = claimType;
                     options.Tenancy.HeaderName = headerName;
                 });
-                services.AddHttpContextAccessor();
-                services.AddScoped<ITenantStore, AppTenantStore>();
-                services.AddScoped<ISecurityDataProvider, AppSecurityDataProvider>();
+                // The library's defaults, as the README registers them: the catalog-backed tenant store, and (registered by
+                // AddPinotechrdSecurity) the data provider.
+                services.AddPinotechrdCatalogTenantStore(o => o.UseNpgsql(cs));
             },
             app =>
             {
@@ -319,5 +283,97 @@ public class PostgresReadmeFlowTests(PostgresFixture postgres) : IAsyncLifetime
 
         response.StatusCode.Should().BeOneOf(HttpStatusCode.BadRequest, HttpStatusCode.Forbidden, HttpStatusCode.Unauthorized);
         response.StatusCode.Should().NotBe(HttpStatusCode.OK);
+    }
+
+    // ---- The library's default tenant store and data provider ------------------------------------
+
+    public static IEnumerable<object[]> Modes() => PgProvisioning.BothModes();
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task CatalogTenantStore_ShouldRefuseASuspendedTenant_AtOnce_AndAcceptItAgainWhenActive(TenantSchemaMode mode)
+    {
+        var s = await StartAsync(mode, "tenant_id");
+        var (_, access, _) = await LoginAsync(s, "admin@b.test", "b");
+        (await s.Host.Client.SendAsync(Request(s, HttpMethod.Get, "/api/whoami", "b", access))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await PgProvisioning.ExecuteAsync(s.ConnectionString, $"UPDATE public.tenants SET \"Status\" = {(int)TenantStatus.Suspended} WHERE \"Identifier\" = 'b'");
+        var suspended = await s.Host.Client.SendAsync(Request(s, HttpMethod.Get, "/api/whoami", "b", access));
+        var login = await s.Host.Client.SendAsync(Request(s, HttpMethod.Post, "/api/auth/login", "b", body: new LoginRequest("admin@b.test", Password)));
+        await PgProvisioning.ExecuteAsync(s.ConnectionString, $"UPDATE public.tenants SET \"Status\" = {(int)TenantStatus.Active} WHERE \"Identifier\" = 'b'");
+
+        suspended.StatusCode.Should().Be(HttpStatusCode.BadRequest, "a suspended tenant is not a tenant: tenant_invalid, with no cache");
+        login.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await s.Host.Client.SendAsync(Request(s, HttpMethod.Get, "/api/whoami", "b", access))).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await s.Host.Client.SendAsync(Request(s, HttpMethod.Get, "/api/whoami", "zzz", null))).StatusCode.Should().Be(HttpStatusCode.BadRequest, "an unknown tenant");
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task DefaultDataProvider_ShouldReadRolesAndPermissionsFromTheTenantsTables(TenantSchemaMode mode)
+    {
+        var s = await StartAsync(mode, "tenant_id");
+        var (_, access, _) = await LoginAsync(s, "admin@a.test", "a");
+
+        // Removing the role's permission in tenant a takes the endpoint away at once: the engine reads it per request.
+        (await s.Host.Client.SendAsync(Request(s, HttpMethod.Get, "/api/sales", "a", access))).StatusCode.Should().Be(HttpStatusCode.OK);
+        string userA;
+        using (var scope = s.Host.Services.CreateScope())
+        {
+            scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant("a");
+            var security = scope.ServiceProvider.GetRequiredService<IPinotechrdSecurityManager<HostUser, HostRole>>();
+            var role = await security.GetRoleByNameAsync("seller");
+            (await security.AssignPermissionsToRoleAsync(role!.Id.ToString(), [])).Should().BeTrue();
+            var provider = scope.ServiceProvider.GetRequiredService<ISecurityDataProvider>();
+            provider.GetType().Name.Should().StartWith("DefaultSecurityDataProvider");
+            var user = await scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<HostUser>>().FindByEmailAsync("admin@a.test");
+            (await provider.GetUserRolesAsync(user!.Id.ToString())).Should().Equal("seller");
+            (await provider.GetUserPermissionsAsync(user.Id.ToString())).Should().BeEmpty();
+            userA = user.Id.ToString();
+        }
+
+        // Tenant a's user id read in tenant b's scope: b's tables do not hold it.
+        using (var scope = s.Host.Services.CreateScope())
+        {
+            scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant("b");
+            var provider = scope.ServiceProvider.GetRequiredService<ISecurityDataProvider>();
+            (await provider.GetUserRolesAsync(userA)).Should().BeEmpty();
+            (await provider.GetUserPermissionsAsync(userA)).Should().BeEmpty();
+        }
+
+        (await s.Host.Client.SendAsync(Request(s, HttpMethod.Get, "/api/sales", "a", access))).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        // Tenant b's identical role is untouched.
+        var (_, other, _) = await LoginAsync(s, "admin@b.test", "b");
+        (await s.Host.Client.SendAsync(Request(s, HttpMethod.Get, "/api/sales", "b", other))).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task SignOutThroughTheDefaultProvider_ShouldEndTheCallersSession(TenantSchemaMode mode)
+    {
+        var s = await StartAsync(mode, "tenant_id");
+        var (_, access, refresh) = await LoginAsync(s, "admin@a.test", "a");
+        using (var scope = s.Host.Services.CreateScope())
+        {
+            // A request scope: the default provider reads the user from the request's library token.
+            var http = new DefaultHttpContext { RequestServices = scope.ServiceProvider };
+            var principal = new JwtSecurityTokenHandler { MapInboundClaims = false }.ValidateToken(access, new TokenValidationParameters
+            {
+                ValidIssuer = TenantDatabaseApi.Issuer,
+                ValidAudience = TenantDatabaseApi.Audience,
+                IssuerSigningKey = new SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(TenantDatabaseApi.Secret)),
+            }, out _);
+            http.User = principal;
+            Pinotechrd.Security.Core.ValidatedAccessToken.Record(http, principal);
+            scope.ServiceProvider.GetRequiredService<IHttpContextAccessor>().HttpContext = http;
+            scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant("a");
+
+            (await scope.ServiceProvider.GetRequiredService<IPinotechrdAuthManager<HostUser>>().SignOutCurrentUserAsync()).Should().BeTrue();
+            scope.ServiceProvider.GetRequiredService<IHttpContextAccessor>().HttpContext = null;
+        }
+
+        (await s.Host.Client.SendAsync(Request(s, HttpMethod.Get, "/api/whoami", "a", access))).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await s.Host.Client.SendAsync(Request(s, HttpMethod.Post, "/api/auth/refresh", "a", body: new RefreshRequest(refresh!))))
+            .StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 }
