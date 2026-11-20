@@ -3,6 +3,10 @@
 *.sh text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+# Mounted into Linux containers (PostgreSQL, PgBouncer): a CR would end up in names and passwords.
+*.sql text eol=lf
+*.ini text eol=lf
+tests/MultiNode/infra/userlist.txt text eol=lf
 
 *.png binary
 *.snk binary
