@@ -4,7 +4,7 @@ using System.Security.Claims;
 namespace Pinotechrd.Security.Interfaces;
 
 /// <summary>
-/// Defines the contract for generating and validating security tokens.
+/// Issues access tokens and opaque refresh token values.
 /// </summary>
 public interface ITokenProvider
 {
@@ -17,9 +17,4 @@ public interface ITokenProvider
     /// Generates a secure random refresh token.
     /// </summary>
     string GenerateRefreshToken();
-
-    /// <summary>
-    /// Resolves the principal from an expired token for refresh flows.
-    /// </summary>
-    ClaimsPrincipal GetPrincipalFromExpiredToken(string token);
 }

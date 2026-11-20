@@ -25,7 +25,7 @@ namespace Pinotechrd.Security.Tests.Postgres;
 [Collection(PostgresCollection.Name)]
 public class PostgresSessionRevocationTests(PostgresFixture postgres) : IAsyncLifetime
 {
-    private static readonly string[] TenantAUsers = ["out@a.test", "revoke@a.test", "reset@a.test", "off@a.test", "keep@a.test", "cross@a.test"];
+    private static readonly string[] TenantAUsers = ["out@a.test", "revoke@a.test", "reset@a.test", "off@a.test", "keep@a.test", "cross@a.test", "update@a.test"];
     private static readonly string[] TenantBUsers = ["bob@b.test"];
 
     private readonly Dictionary<TenantSchemaMode, TenantDatabaseApi> _hosts = [];
@@ -149,6 +149,38 @@ public class PostgresSessionRevocationTests(PostgresFixture postgres) : IAsyncLi
         (await AsAdminAsync(api, "a", m => m.SetUserActiveStatusAsync(id, false))).Should().BeTrue();
 
         await ShouldBeRevokedAsync(await MeAsync(api, access, "a"));
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task DeactivationThroughUpdateUser_ShouldEndTheAccessAndRefreshTokens(TenantSchemaMode mode)
+    {
+        var api = _hosts[mode];
+        var (access, refresh) = await api.LoginAsync("update@a.test", "a");
+        (await MeAsync(api, access, "a")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var (updated, before, after, afterSecondEdit) = await api.InTenantAsync("a", async sp =>
+        {
+            var users = sp.GetRequiredService<UserManager<HostUser>>();
+            var manager = sp.GetRequiredService<IPinotechrdSecurityManager<HostUser, HostRole>>();
+            var user = (await users.FindByEmailAsync("update@a.test"))!;
+            var stampBefore = await users.GetSecurityStampAsync(user);
+            user.IsActive = false;
+            var ok = await manager.UpdateUserAsync(user);
+            var stampAfter = await users.GetSecurityStampAsync(user);
+            // Editing the now inactive user again is not a deactivation: its stamp, and so its pending links, stay.
+            user.PhoneNumber = "555-0100";
+            (await manager.UpdateUserAsync(user)).Should().BeTrue();
+            return (ok, stampBefore, stampAfter, await users.GetSecurityStampAsync(user));
+        });
+
+        updated.Should().BeTrue();
+        after.Should().NotBe(before, "the deactivation renews the stamp");
+        afterSecondEdit.Should().Be(after);
+        await ShouldBeRevokedAsync(await MeAsync(api, access, "a"));
+        (await api.PostAsync("/api/auth/refresh", new RefreshRequest(refresh), "a")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await api.InTenantAsync("a", async sp =>
+            (await sp.GetRequiredService<IRefreshTokenStore>().ValidateAsync(refresh)).IsValid)).Should().BeFalse("the refresh token is revoked, not only refused");
     }
 
     [Theory]

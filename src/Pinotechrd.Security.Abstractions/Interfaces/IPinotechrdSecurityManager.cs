@@ -56,8 +56,13 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     Task<bool> CreateUserAsync(TUser user, string password, IEnumerable<string>? roles = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Persists updates for an existing user.
+    /// Persists updates for an existing user. When the update deactivates the user (<c>IsActive</c> set to
+    /// <see langword="false"/>), its sessions are ended as by <see cref="SetUserActiveStatusAsync"/>: its refresh tokens
+    /// are revoked and its security stamp renewed.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    /// <returns><see langword="false"/> when the update failed, or when it deactivated the user but renewing the security
+    /// stamp failed: the user is then stored inactive and its refresh tokens are revoked.</returns>
     Task<bool> UpdateUserAsync(TUser user, CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -105,89 +105,20 @@ public class JwtKeyRotationTests
 
         var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
         jwt.Header.Kid.Should().NotBe(ExpectedKid(Previous)).And.NotBe(ExpectedKid(Previous2));
-        // The current secret alone validates it.
-        Provider().GetPrincipalFromExpiredToken(token).FindFirst("id")!.Value.Should().Be("u");
-        // A provider whose current secret is the old one does not.
-        var options = new PinotechrdSecurityOptions();
-        Configure(options);
-        options.Jwt.Secret = Previous;
-        var act = () => new JwtTokenProvider(Microsoft.Extensions.Options.Options.Create(options))
-            .GetPrincipalFromExpiredToken(token);
-        act.Should().Throw<SecurityTokenException>().Where(e => IsSignatureFailure(e));
+        // The current secret alone validates it; the previous ones do not.
+        ValidateWith(Current, token).FindFirst("id")!.Value.Should().Be("u");
+        ((Action)(() => ValidateWith(Previous, token))).Should().Throw<SecurityTokenException>().Where(e => IsSignatureFailure(e));
+        ((Action)(() => ValidateWith(Previous2, token))).Should().Throw<SecurityTokenException>().Where(e => IsSignatureFailure(e));
     }
 
-    // ---- GetPrincipalFromExpiredToken --------------------------------------------------------
-
-    [Fact]
-    public void GetPrincipalFromExpiredToken_ShouldAcceptATokenSignedWithAPreviousSecret()
-    {
-        var token = Sign(Previous2, withKid: true, expires: DateTime.UtcNow.AddMinutes(-30));
-
-        var principal = Provider(Previous, Previous2).GetPrincipalFromExpiredToken(token);
-
-        principal.FindFirst("id")!.Value.Should().Be("user-1");
-    }
-
-    [Fact]
-    public void GetPrincipalFromExpiredToken_ShouldRejectATokenSignedWithAnUnknownSecret()
-    {
-        var token = Sign(Unknown, withKid: true);
-
-        var act = () => Provider(Previous).GetPrincipalFromExpiredToken(token);
-
-        act.Should().Throw<SecurityTokenException>().Where(e => IsSignatureFailure(e));
-    }
-
-    [Fact]
-    public void GetPrincipalFromExpiredToken_ShouldRejectAPreviousSecretToken_WhenItIsNotInTheList()
-    {
-        var token = Sign(Previous, withKid: true);
-
-        var act = () => Provider().GetPrincipalFromExpiredToken(token);
-
-        act.Should().Throw<SecurityTokenException>().Where(e => IsSignatureFailure(e));
-    }
-
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void GetPrincipalFromExpiredToken_ShouldAcceptACurrentSecretToken_WithOrWithoutKid(bool withKid)
-    {
-        var token = Sign(Current, withKid);
-        new JwtSecurityTokenHandler().ReadJwtToken(token).Header.Kid.Should().Be(withKid ? ExpectedKid(Current) : null);
-
-        var principal = Provider(Previous).GetPrincipalFromExpiredToken(token);
-
-        principal.FindFirst("id")!.Value.Should().Be("user-1");
-    }
-
-    [Fact]
-    public void GetPrincipalFromExpiredToken_ShouldRejectAnUnknownSecret_EvenWhenItsKidClaimsTheCurrentKey()
-    {
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Unknown)) { KeyId = ExpectedKid(Current) };
-        var token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
-            Issuer, Audience, [new Claim("id", "x")], expires: DateTime.UtcNow.AddMinutes(5),
-            signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
-
-        var act = () => Provider(Previous).GetPrincipalFromExpiredToken(token);
-
-        act.Should().Throw<SecurityTokenException>().Where(e => IsSignatureFailure(e));
-    }
-
-    [Theory]
-    [InlineData("other-issuer", Audience)]
-    [InlineData(Issuer, "other-audience")]
-    public void GetPrincipalFromExpiredToken_ShouldRejectAPreviousSecretToken_WithTheWrongIssuerOrAudience(string issuer, string audience)
-    {
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Previous)) { KeyId = ExpectedKid(Previous) };
-        var token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
-            issuer, audience, [new Claim("id", "x")], expires: DateTime.UtcNow.AddMinutes(5),
-            signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
-
-        var act = () => Provider(Previous).GetPrincipalFromExpiredToken(token);
-
-        act.Should().Throw<SecurityTokenException>();
-    }
+    private static ClaimsPrincipal ValidateWith(string secret, string token) =>
+        new JwtSecurityTokenHandler().ValidateToken(token, new TokenValidationParameters
+        {
+            ValidIssuer = Issuer,
+            ValidAudience = Audience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret)),
+            ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
+        }, out _);
 
     // ---- The real JwtBearer handler ----------------------------------------------------------
 

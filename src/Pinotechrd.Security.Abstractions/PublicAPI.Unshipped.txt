@@ -143,7 +143,6 @@ Pinotechrd.Security.Interfaces.ITenantStore.TenantExistsAsync(string! tenantId, 
 Pinotechrd.Security.Interfaces.ITokenProvider
 Pinotechrd.Security.Interfaces.ITokenProvider.GenerateAccessToken(System.Collections.Generic.IEnumerable<System.Security.Claims.Claim!>! claims) -> string!
 Pinotechrd.Security.Interfaces.ITokenProvider.GenerateRefreshToken() -> string!
-Pinotechrd.Security.Interfaces.ITokenProvider.GetPrincipalFromExpiredToken(string! token) -> System.Security.Claims.ClaimsPrincipal!
 Pinotechrd.Security.Interfaces.RefreshTokenValidationResult
 Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.<Clone>$() -> Pinotechrd.Security.Interfaces.RefreshTokenValidationResult!
 Pinotechrd.Security.Interfaces.RefreshTokenValidationResult.Deconstruct(out bool IsValid, out string? UserId, out string? TenantId, out string? Reason) -> void

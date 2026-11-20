@@ -31,8 +31,13 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 - `SecurityModule.Create` is obsolete (diagnostic `PTRDSEC001`): it gives the module a random id, which differs per tenant schema, while plans in the shared catalog refer to modules by `SecurityModuleId.FromCode(code)`. Use `SecuritySeeder.SeedModuleAsync`, or set `Id = SecurityModuleId.FromCode(code)`. Projects that treat warnings as errors fail to build where they still call it; suppress `PTRDSEC001` where the random id is intended.
 
+### Removed (breaking)
+
+- `ITokenProvider.GetPrincipalFromExpiredToken` and `JwtTokenProvider.GetPrincipalFromExpiredToken`. They validated a signed access token without checking its lifetime, so they accepted tokens of any age, and a session renewed through them bypassed refresh-token revocation and rotation. The library never used them: sessions are renewed with opaque refresh tokens (`IPinotechrdAuthManager.RefreshAsync`). Migration: renew with `RefreshAsync`; an implementation of `ITokenProvider` can drop the method.
+
 ### Fixed
 
+- `IPinotechrdSecurityManager.UpdateUserAsync` now ends the sessions of a user it stores inactive (`IsActive = false`): it revokes the user's refresh tokens and renews its security stamp, as `SetUserActiveStatusAsync(id, false)` does. Before, deactivating through `UpdateUserAsync` left every session alive. Once the update is stored, the revocation runs to the end even if the request is cancelled. Only a deactivation does this: editing a user that was already inactive (as tracked by the security context) leaves its stamp and pending links alone; a detached entity stored inactive always has its sessions ended.
 - The cache of checked connection strings in `SearchPath` mode is keyed by a SHA-256 of the string, so it no longer keeps connection strings (which may hold passwords) in memory.
 - **SearchPath scanner.** Escape string constants (`E'...'`) are now decoded with PostgreSQL's escape rules: octal (`\o`, `\oo`, `\ooo`), hexadecimal (`\xh`, `\xhh`, with consecutive bytes decoded as UTF-8) and Unicode (`\uXXXX`, `\UXXXXXXXX`, surrogate pairs). Before, only `\b \f \n \r \t` were decoded, so the scanned text of such constants could differ from the text PostgreSQL runs. Now refused, as text the scanner cannot read the way PostgreSQL does: an `E''` string with an escape PostgreSQL rejects (a zero byte, an incomplete `\u` or `\U`, a code point above U+10FFFF, an unpaired surrogate; PostgreSQL rejects these too); a string constant continued after a line break (`'a'` line break `'b'`); and `E''` written directly after a number (`1E'..'`). EF Core generates none of these.
 

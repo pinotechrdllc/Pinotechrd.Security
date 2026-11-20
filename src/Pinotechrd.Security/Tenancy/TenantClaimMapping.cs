@@ -37,12 +37,4 @@ internal static class TenantClaimMapping
         }
 #pragma warning restore CS0618
     }
-
-    /// <summary>A legacy handler whose inbound map does not rename <paramref name="claimType"/>.</summary>
-    public static JwtSecurityTokenHandler LegacyHandler(string claimType)
-    {
-        var handler = new JwtSecurityTokenHandler();
-        handler.InboundClaimTypeMap.Remove(claimType);
-        return handler;
-    }
 }
