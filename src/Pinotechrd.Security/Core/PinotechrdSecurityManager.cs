@@ -38,7 +38,8 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// Without <paramref name="refreshTokenStore"/>, deactivating a user cannot revoke its refresh tokens;
     /// refresh still fails for an inactive user. <c>AddPinotechrdSecurity</c> registers the store. Without
     /// <paramref name="loggerFactory"/> no security events are logged; <paramref name="tenantContext"/> names the tenant
-    /// in them.
+    /// in them. With <paramref name="userStore"/> (the store <paramref name="userManager"/> uses), the security stamp
+    /// renewal and the deletion that end a session cannot be cancelled by the request once the revocation started.
     /// </remarks>
     public PinotechrdSecurityManager(
         UserManager<TUser> userManager,
@@ -46,9 +47,11 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         ISecurityDbContext securityDb,
         IRefreshTokenStore? refreshTokenStore = null,
         ILoggerFactory? loggerFactory = null,
-        TenantContext? tenantContext = null)
+        TenantContext? tenantContext = null,
+        IUserStore<TUser>? userStore = null)
     {
         _userManager = userManager;
+        _userStore = userStore;
         _roleManager = roleManager;
         _securityDb = securityDb;
         _refreshTokenStore = refreshTokenStore;
@@ -58,6 +61,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
 
     private readonly ILogger? _events;
     private readonly TenantContext? _tenantContext;
+    private readonly IUserStore<TUser>? _userStore;
 
     #region User Management
 
@@ -308,7 +312,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         }
 
         if (!_userManager.SupportsUserSecurityStamp) return true;
-        var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user);
         return stampResult.Succeeded;
     }
 
@@ -337,7 +341,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
             SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, storedId, "Deleted");
         }
 
-        var result = await _userManager.DeleteAsync(user);
+        var result = await UncancellableUserWrites.DeleteAsync(_userManager, _userStore, user);
         return result.Succeeded;
     }
 
@@ -390,7 +394,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, revokedId, "Revoked");
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
-        var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user);
         return stampResult.Succeeded;
     }
 

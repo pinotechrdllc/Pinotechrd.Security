@@ -97,6 +97,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     private readonly string _tenantClaimType;
     private readonly ISecurityDataProvider? _dataProvider;
     private readonly ILogger? _events;
+    private readonly IUserStore<TUser>? _userStore;
     private const int MaxFailedCountRetries = 10;
     private const string ByPassword = "Password";
     private const string ByTwoFactor = "TwoFactor";
@@ -112,7 +113,9 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// cannot log in and every two-factor method fails. <c>AddPinotechrdSecurity</c> registers all three.
     /// Without <paramref name="dataProvider"/> (the application registers it) the self-service methods
     /// <see cref="SignOutCurrentUserAsync"/> and <see cref="ChangeOwnPasswordAsync"/> find no authenticated user.
-    /// Without <paramref name="loggerFactory"/> no security events (<see cref="SecurityEvents"/>) are logged.
+    /// Without <paramref name="loggerFactory"/> no security events (<see cref="SecurityEvents"/>) are logged. With
+    /// <paramref name="userStore"/> (the store <paramref name="userManager"/> uses), the security stamp renewal of
+    /// <see cref="SignOutCurrentUserAsync"/> cannot be cancelled by the request once the revocation started.
     /// </remarks>
     public PinotechrdAuthManager(
         UserManager<TUser> userManager,
@@ -130,9 +133,11 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         ISecurityDbContext? securityDbContext = null,
         TenantResolutionOptions? tenantOptions = null,
         ISecurityDataProvider? dataProvider = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        IUserStore<TUser>? userStore = null)
     {
         _userManager = userManager;
+        _userStore = userStore;
         _signInManager = signInManager;
         _events = SecurityLog.Create(loggerFactory);
         _securityEngine = securityEngine;
@@ -647,7 +652,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, signedOutId, "SignOut");
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
-        var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user);
         return stampResult.Succeeded;
     }
 
