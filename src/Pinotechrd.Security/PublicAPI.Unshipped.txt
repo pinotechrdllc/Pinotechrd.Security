@@ -107,6 +107,10 @@ Pinotechrd.Security.Options.JwtSettings.RefreshTokenExpiryDays.get -> int
 Pinotechrd.Security.Options.JwtSettings.RefreshTokenExpiryDays.set -> void
 Pinotechrd.Security.Options.JwtSettings.Secret.get -> string!
 Pinotechrd.Security.Options.JwtSettings.Secret.set -> void
+Pinotechrd.Security.Options.JwtSettings.SecurityStampValidationInterval.get -> System.TimeSpan
+Pinotechrd.Security.Options.JwtSettings.SecurityStampValidationInterval.set -> void
+Pinotechrd.Security.Options.JwtSettings.ValidateSecurityStamp.get -> bool
+Pinotechrd.Security.Options.JwtSettings.ValidateSecurityStamp.set -> void
 Pinotechrd.Security.Options.PinotechrdSecurityOptions
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.Jwt.get -> Pinotechrd.Security.Options.JwtSettings!
 Pinotechrd.Security.Options.PinotechrdSecurityOptions.Jwt.set -> void
@@ -169,6 +173,7 @@ Pinotechrd.Security.Core.TenantCacheStore.GetUserOverridesAsync(string! userId, 
 Pinotechrd.Security.Interfaces.ISecurityDbContext.UserModulePermissions.get -> System.Linq.IQueryable<Pinotechrd.Security.Entities.UserModulePermission!>!
 Pinotechrd.Security.Interfaces.ISecurityStore.GetActiveCatalogAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule!>!>!
 Pinotechrd.Security.Interfaces.ISecurityStore.GetUserOverridesAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Pinotechrd.Security.Models.UserPermissionOverride!>!>!
+const Pinotechrd.Security.Tenancy.TenantResolutionErrorCodes.SessionRevoked = "session_revoked" -> string!
 const Pinotechrd.Security.Tenancy.TenantResolutionErrorCodes.TenantInvalid = "tenant_invalid" -> string!
 const Pinotechrd.Security.Tenancy.TenantResolutionErrorCodes.TenantRequired = "tenant_required" -> string!
 Pinotechrd.Security.Tenancy.MissingTenantBehavior

@@ -10,8 +10,8 @@ namespace Pinotechrd.Security.Interfaces;
 /// </summary>
 /// <typeparam name="TUser">The identity user type.</typeparam>
 /// <typeparam name="TRole">The identity role type.</typeparam>
-public interface IPinotechrdSecurityManager<TUser, TRole> 
-    where TUser : class 
+public interface IPinotechrdSecurityManager<TUser, TRole>
+    where TUser : class
     where TRole : class
 {
     /// <summary>
@@ -80,7 +80,7 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
 
     /// <summary>
     /// Signs a user out of every session: revokes all of its refresh tokens and renews its security stamp.
-    /// Access tokens already issued stay valid until they expire.
+    /// Access tokens already issued stop working at once with <c>JwtSettings.ValidateSecurityStamp</c> on (the default) and a user store that keeps security stamps; otherwise when they expire.
     /// </summary>
     /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
     /// <returns><see langword="false"/>, with nothing changed, when the user is not found or no refresh token store is

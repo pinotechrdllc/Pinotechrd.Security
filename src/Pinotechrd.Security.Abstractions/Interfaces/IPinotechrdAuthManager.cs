@@ -22,8 +22,8 @@ public interface IPinotechrdAuthManager<TUser> where TUser : class
     Task<AuthResult> RefreshAsync(string refreshToken, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Signs the authenticated user out of every session: revokes all of its refresh tokens.
-    /// Access tokens already issued stay valid until they expire.
+    /// Signs the authenticated user out of every session: revokes all of its refresh tokens and renews its security
+    /// stamp. Access tokens already issued stop working at once with <c>JwtSettings.ValidateSecurityStamp</c> on (the default) and a user store that keeps security stamps; otherwise when they expire.
     /// </summary>
     /// <remarks>
     /// Self-service: the user is the authenticated user of the request (<see cref="ISecurityDataProvider.GetCurrentUserId"/>),

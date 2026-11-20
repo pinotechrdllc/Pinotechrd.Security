@@ -171,6 +171,25 @@ public class JwtSettingsTests
             .Which.Message.Should().NotContain("JwtBearerOptions", "the bearer policy check skips while the security options are invalid");
     }
 
+    [Theory]
+    [MemberData(nameof(SkewBounds))]
+    public async Task HostStart_ShouldAcceptSecurityStampValidationIntervalOnlyFromZeroToFiveMinutes(TimeSpan interval, bool accepted)
+    {
+        var act = () => StartGenericHostAsync(o => { ConfigureValid(o); o.Jwt.SecurityStampValidationInterval = interval; });
+
+        if (accepted) await act.Should().NotThrowAsync();
+        else await act.Should().ThrowAsync<OptionsValidationException>().WithMessage("*Jwt.SecurityStampValidationInterval must be between zero and 5 minutes*");
+    }
+
+    [Fact]
+    public void StampCheckDefaults_ShouldBeOn_AndReadTheStoreOnEveryRequest()
+    {
+        var settings = new JwtSettings();
+
+        settings.ValidateSecurityStamp.Should().BeTrue();
+        settings.SecurityStampValidationInterval.Should().Be(TimeSpan.Zero);
+    }
+
     [Fact]
     public void JwtTokenProvider_ShouldRefuseAnOutOfRangeLifetime()
     {

@@ -138,9 +138,10 @@ public class JwtSettings
     /// Access token lifetime in minutes. Default 15; accepted range 1 to 60.
     /// </summary>
     /// <remarks>
-    /// An access token is accepted until it expires, plus at most <see cref="MaximumClockSkew"/>: signing out, changing
-    /// the password or deactivating the user does not reach a token already issued. This lifetime is therefore the
-    /// longest time such a change takes to apply to access tokens. Clients renew with the refresh token.
+    /// An access token is accepted until it expires, plus at most <see cref="MaximumClockSkew"/>. With
+    /// <see cref="ValidateSecurityStamp"/> off, signing out, changing the password or deactivating the user does not
+    /// reach a token already issued, and this lifetime is the longest time such a change takes to apply. Clients renew
+    /// with the refresh token.
     /// </remarks>
     public int ExpiryMinutes { get; set; } = 15;
 
@@ -159,4 +160,51 @@ public class JwtSettings
     /// options must not exceed it, or the host fails to start.
     /// </remarks>
     public TimeSpan MaximumClockSkew { get; set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Refuses an access token whose user signed out, had its sessions revoked, changed or reset its password, or was
+    /// deactivated after the token was issued. Default <see langword="true"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Access tokens carry a hash of the user's security stamp (claim <c>sstamp</c>; the stamp itself is not in the
+    /// token). Right before each endpoint, <c>UseTenantResolution</c> checks every identity whose claims were issued by
+    /// <see cref="Issuer"/>: its user must exist in the resolved tenant, be active, and have the same stamp, or the
+    /// request gets <c>401</c> with the code <c>session_revoked</c>. This costs a user lookup per request unless
+    /// <see cref="SecurityStampValidationInterval"/> is above zero.
+    /// </para>
+    /// <para>
+    /// A token without the claim is refused when the user store keeps security stamps, so tokens issued with
+    /// <c>ITokenProvider.GenerateAccessToken</c> outside the library's sign-in must be issued through the library's sign-in instead, or this check turned off.
+    /// With a user store that keeps no security stamps, only deactivation and deletion are detected.
+    /// </para>
+    /// <para>
+    /// The check runs right before the endpoint, after authorization: a revoked token that lacks a required permission
+    /// gets <c>403</c> from authorization first. An endpoint that allows anonymous access runs as anonymous instead of
+    /// being refused, so a client that still sends its ended token can sign in again. Not checked: skip paths of the
+    /// tenant middleware, requests that run no endpoint (terminal middleware, output-cache hits), long-lived
+    /// connections after they connect, and hosts that do not call <c>UseTenantResolution</c>.
+    /// </para>
+    /// <para>
+    /// The checked token is recorded by the bearer scheme's <c>OnTokenValidated</c> event, before claims
+    /// transformations. An application that replaces <c>JwtBearerOptions.Events</c> after the library or sets
+    /// <c>EventsType</c> loses that record; the check then falls back to identities whose claims keep the issuer
+    /// <see cref="Issuer"/>, which a claims transformation that re-creates claims does not.
+    /// </para>
+    /// <para>
+    /// With it off, a change reaches access tokens only when they expire (<see cref="ExpiryMinutes"/>).
+    /// </para>
+    /// </remarks>
+    public bool ValidateSecurityStamp { get; set; } = true;
+
+    /// <summary>
+    /// How long the result of the security-stamp check is reused for a tenant and user. Default zero: the user store is
+    /// read on every request. Accepted range zero to 5 minutes.
+    /// </summary>
+    /// <remarks>
+    /// Above zero, the result is kept in <c>IDistributedCache</c>, so a sign-out, revocation, password change or
+    /// deactivation takes up to this long to reach access tokens already issued. The default distributed cache is in
+    /// memory and per instance; register a shared one (for example Redis) when several instances serve the API.
+    /// </remarks>
+    public TimeSpan SecurityStampValidationInterval { get; set; } = TimeSpan.Zero;
 }

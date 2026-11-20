@@ -14,6 +14,7 @@ using Microsoft.IdentityModel.Tokens;
 using Pinotechrd.Security.Data;
 using Pinotechrd.Security.Extensions;
 using Pinotechrd.Security.Interfaces;
+using Pinotechrd.Security.Options;
 using Pinotechrd.Security.Tenancy;
 using Pinotechrd.Security.Tests.Data;
 
@@ -54,7 +55,8 @@ internal sealed class TenantDatabaseApi : IAsyncDisposable
         Action<DbContextOptionsBuilder, string>? useDatabase = null,
         bool provision = true,
         Action<WebApplicationBuilder>? configureBuilder = null,
-        Action<WebApplication>? mapExtra = null)
+        Action<WebApplication>? mapExtra = null,
+        Action<PinotechrdSecurityOptions>? configureSecurity = null)
     {
         var directory = Path.Combine(Path.GetTempPath(), "pinotechrd-security-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -78,6 +80,7 @@ internal sealed class TenantDatabaseApi : IAsyncDisposable
                     o.Jwt.Secret = Secret;
                     o.Jwt.Issuer = Issuer;
                     o.Jwt.Audience = Audience;
+                    configureSecurity?.Invoke(o);
                 });
                 services.AddHostStubs(new FixedTenantStore(usersPerTenant.Keys.ToArray()));
                 configureBuilder?.Invoke(builder);
