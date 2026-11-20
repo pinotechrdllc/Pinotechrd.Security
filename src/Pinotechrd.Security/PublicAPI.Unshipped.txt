@@ -225,6 +225,8 @@ static readonly Pinotechrd.Security.Core.SecurityModuleId.Namespace -> System.Gu
 Pinotechrd.Security.Core.SecurityEngine.SecurityEngine(Pinotechrd.Security.Interfaces.ISecurityStore! securityStore, Pinotechrd.Security.Interfaces.ISecurityDataProvider! dataProvider, Pinotechrd.Security.Tenancy.TenantContext? tenantContext = null, Microsoft.AspNetCore.Http.IHttpContextAccessor? httpContextAccessor = null, Pinotechrd.Security.Tenancy.TenantResolutionOptions? tenantOptions = null) -> void
 Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.ApplicationTakesResponsibilityForSearchPath.get -> bool
 Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.ApplicationTakesResponsibilityForSearchPath.set -> void
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.ConnectionPoolerUsesSessionMode.get -> bool
+Pinotechrd.Security.Data.PinotechrdSecurityModelOptions.ConnectionPoolerUsesSessionMode.set -> void
 Pinotechrd.Security.Tenancy.TenantOutputCacheExtensions
 Pinotechrd.Security.Tenancy.TenantOutputCachePolicy
 Pinotechrd.Security.Tenancy.TenantOutputCachePolicy.CacheRequestAsync(Microsoft.AspNetCore.OutputCaching.OutputCacheContext! context, System.Threading.CancellationToken cancellation) -> System.Threading.Tasks.ValueTask
