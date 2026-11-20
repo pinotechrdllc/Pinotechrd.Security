@@ -335,12 +335,14 @@ options.UseNpgsql(connectionString).UsePinotechrdSecurity(model =>
   - you opened the connection yourself;
   - you closed and reopened it yourself (the binding is dropped as soon as the connection reports `Closed` or `Broken`, and Npgsql's server process id is compared with the one recorded at binding);
   - the tenant changed after the connection opened.
-- Each command's text is also scanned, statement by statement, the way PostgreSQL tokenises it (strings, `E''` and dollar-quoted strings, quoted identifiers, nested comments). A command is **refused before it is sent**, whether it is alone or in a batch, when a statement:
+- Each command's text is also scanned, statement by statement, the way PostgreSQL tokenises it (strings, `E''` strings decoded with PostgreSQL's escape rules, including octal, hexadecimal and Unicode escapes, dollar-quoted strings, quoted identifiers, nested comments). A command is **refused before it is sent**, whether it is alone or in a batch, when a statement:
   - is `SET`, `SET SESSION`, `SET LOCAL` or `RESET` of `search_path`, `schema`, `role`, `session_authorization` or `standard_conforming_strings`; `SET ROLE`; `SET SESSION AUTHORIZATION`; `RESET ALL`; or `DISCARD ALL`;
   - is `ALTER ROLE|USER|DATABASE|SYSTEM ... SET|RESET` of those settings;
   - calls `set_config` (also schema-qualified or quoted) with a first argument that is not one plain string literal naming another setting;
   - writes to `pg_settings` (`UPDATE`, `INSERT INTO`, `DELETE FROM`, `MERGE INTO`, plain, `pg_catalog.`-qualified or quoted), which is equivalent to `SET`;
-  - uses a `U&"..."` identifier.
+  - uses a `U&"..."` identifier;
+  - holds an `E''` string with an escape PostgreSQL rejects (a zero byte, an incomplete `\u` or `\U`, a code point above U+10FFFF, an unpaired surrogate), which cannot be decoded;
+  - continues a string constant on the next line (`'a'` line break `'b'`, which PostgreSQL joins), or puts `E''` right after a number (`1E'..'`, an escape string on PostgreSQL 14 and older). EF Core writes neither.
 
   The bodies of `DO` blocks and `CREATE FUNCTION|PROCEDURE`, and the text of `PREPARE ... AS`, are scanned the same way. Inside a body, `EXECUTE` of exactly one string literal (optionally in parentheses) is scanned; any other `EXECUTE` (a concatenation, `format(...)`, a variable) cannot be checked and is refused, so a migration that creates such a function must run outside `SearchPath` mode. Column and table names are not matched: `UPDATE t SET search_path = @p0`, `WHERE role = @p`, `ON CONFLICT ... DO UPDATE SET role = ...`, `set_config_log`, `SELECT ... FROM pg_settings`, `current_setting('search_path')`, `SHOW search_path` and string literals all pass.
 - Binding is refused when the session has `standard_conforming_strings` off (for example through `ALTER DATABASE ... SET`): the scanner reads strings as PostgreSQL does with it on, its default. This is checked in the same round trip that verifies the path.

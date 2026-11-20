@@ -13,6 +13,10 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
   - Several issuers or audiences, or a custom `IssuerValidator` (for example for per-tenant issuers): register them as a separate authentication scheme with its own `AddJwtBearer("name", ...)`, and select it with a policy scheme (`AddPolicyScheme` with `ForwardDefaultSelector`) set as the default instead of the library's scheme. That scheme is not covered by the library's policy: the application is responsible for its validation, for a membership-verified tenant claim and for exempting that claim from inbound claim mapping, as for any other scheme (see `SetDefaultAuthenticationSchemes`).
   - Validation logic in a `PostConfigure<JwtBearerOptions>` for the library's scheme: move it to a separate scheme as above.
 
+### Fixed
+
+- **SearchPath scanner.** Escape string constants (`E'...'`) are now decoded with PostgreSQL's escape rules: octal (`\o`, `\oo`, `\ooo`), hexadecimal (`\xh`, `\xhh`, with consecutive bytes decoded as UTF-8) and Unicode (`\uXXXX`, `\UXXXXXXXX`, surrogate pairs). Before, only `\b \f \n \r \t` were decoded, so the scanned text of such constants could differ from the text PostgreSQL runs. Now refused, as text the scanner cannot read the way PostgreSQL does: an `E''` string with an escape PostgreSQL rejects (a zero byte, an incomplete `\u` or `\U`, a code point above U+10FFFF, an unpaired surrogate; PostgreSQL rejects these too); a string constant continued after a line break (`'a'` line break `'b'`); and `E''` written directly after a number (`1E'..'`). EF Core generates none of these.
+
 ## [1.2.0-preview.4] - 2026-11-19
 
 ### Added

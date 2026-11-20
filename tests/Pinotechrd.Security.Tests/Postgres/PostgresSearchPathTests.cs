@@ -211,6 +211,12 @@ public class PostgresSearchPathTests(PostgresFixture postgres) : IAsyncLifetime
     [InlineData("DO $$ BEGIN EXECUTE ('SET search_path TO tenant_b'); END $$")]
     [InlineData("DO $$ BEGIN EXECUTE format('SET %I TO %L', 'search_path', 'tenant_b'); END $$")]
     [InlineData("DO $$ BEGIN EXECUTE 'SET search_' || 'path TO tenant_b'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'\\x53ET search_path TO tenant_b'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'\\123ET search_path TO tenant_b'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'\\u0053ET search_path TO tenant_b'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'SET search\\x5fpath TO tenant_b'; END $$")]
+    [InlineData("DO $$ BEGIN EXECUTE E'\\U00000053ET search_path TO tenant_b'; END $$")]
+    [InlineData("SELECT E'x'\n'\\'', set_config('search_path','tenant_b',false) --'")]
     public async Task ControlSql_ShouldReallyChangeThePathWhenSentOutsideTheLibrary(string sql)
     {
         // Control for the test above: these spellings are real session changes on PostgreSQL, so refusing them matters.
