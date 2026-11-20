@@ -612,6 +612,17 @@ curl -H "TenantId: tenant-a" http://localhost:5000/api/tenant
 
 Every pull request runs the build with warnings as errors, a vulnerability audit of dependencies, the test suite with a minimum line-coverage gate, CodeQL static analysis, a dependency review and package validation of the public API. Releases are tag-driven and published with nuget.org Trusted Publishing, so no API key is stored in the repository.
 
+From the release after 1.2.0-preview.4, each release also carries build provenance and an SBOM. To check that a package you downloaded from nuget.org came from this repository's release workflow for its tag:
+
+```bash
+gh attestation verify pinotechrd.security.<version>.nupkg \
+  --repo pinotechrdllc/Pinotechrd.Security \
+  --signer-workflow pinotechrdllc/Pinotechrd.Security/.github/workflows/release.yml \
+  --source-ref refs/tags/v<version>
+```
+
+nuget.org adds its own repository signature (`.signature.p7s`) to each package after upload, which changes the file. The attestation for the file nuget.org serves is issued by the release workflow after it checks that the package's content, apart from that signature, is exactly what the workflow built. The GitHub Release of each tag holds the packages as published, the symbol packages, a CycloneDX SBOM per package and `SHA256SUMS`; the SBOM is also attached as an attestation to each package (`--predicate-type https://cyclonedx.org/bom`).
+
 ## Project Links
 
 - [Changelog](https://github.com/pinotechrdllc/Pinotechrd.Security/blob/develop/CHANGELOG.md)

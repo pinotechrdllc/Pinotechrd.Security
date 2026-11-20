@@ -20,8 +20,15 @@ The `Release` workflow starts only when a tag matching `v*` is pushed. It:
 1. Fails unless the tag equals `v` + `<Version>` from [Directory.Build.props](../Directory.Build.props).
 2. Fails unless [CHANGELOG.md](../CHANGELOG.md) has a `## [<Version>]` section.
 3. Fails unless the tagged commit is on `main`.
-4. Restores, audits vulnerable packages (High/Critical blocks), builds with warnings as errors, runs tests with the coverage gate and packs.
-5. Requests a temporary API key with `NuGet/login@v1` and pushes Abstractions first, then the main package. Each `.snupkg` is pushed with its `.nupkg`.
+4. Job `build` (read-only): restores, audits vulnerable packages (High/Critical blocks), builds with warnings as errors, runs tests with the coverage gate, packs, and generates a CycloneDX SBOM per package (shipped dependencies only; the tool version is in `.config/dotnet-tools.json`). It uploads the packages and SBOMs as the run's artifact.
+5. Job `publish` (environment `nuget-production`; `id-token` and `attestations` write): attests the build provenance of the built `.nupkg`/`.snupkg` files and each SBOM against its `.nupkg` (GitHub artifact attestations, signed with Sigstore), requests a temporary API key with `NuGet/login@v1` and pushes Abstractions first, then the main package. Each `.snupkg` is pushed with its `.nupkg`.
+6. Job `release` (`contents`, `id-token` and `attestations` write): downloads the packages nuget.org serves, which carry its repository signature, and fails unless their content equals what `build` produced (only `.signature.p7s`, which nuget.org adds, may differ). It then attests the provenance and the SBOM of those signed files, so the packages consumers download verify, and creates the GitHub Release of the tag with the published packages, the symbol packages, the SBOMs and `SHA256SUMS`. It waits up to 30 minutes for nuget.org to validate and sign a package.
+
+No code from the repository's dependencies runs in a job that holds a write permission.
+
+### If a release fails after the push
+
+The packages are then public, but may lack the attestations of the published files or the GitHub Release. Do not push a new tag: open the failed run and use **Re-run failed jobs**. Only the failed job and the ones after it run again, on the same run's artifacts; `publish` skips packages that are already on nuget.org (`--skip-duplicate`), and `release` uploads to an existing GitHub Release instead of failing.
 
 ---
 

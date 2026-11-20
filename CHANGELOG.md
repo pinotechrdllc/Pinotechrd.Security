@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ## [Unreleased]
 
+### Added
+
+- **Release provenance.** Each release publishes a CycloneDX SBOM per package; GitHub artifact attestations of the build provenance and of the SBOM, both for the built packages and for the packages as nuget.org serves them (issued after checking that their content, apart from nuget.org's `.signature.p7s`, equals the build); and a GitHub Release with the packages, SBOMs and `SHA256SUMS`. The release workflow now runs as three jobs, so no dependency code runs while a write permission is held. Verify a package with `gh attestation verify <file>.nupkg --repo pinotechrdllc/Pinotechrd.Security --signer-workflow pinotechrdllc/Pinotechrd.Security/.github/workflows/release.yml --source-ref refs/tags/v<version>`.
+
 ## [1.2.0-preview.4] - 2026-11-19
 
 ### Added
