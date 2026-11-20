@@ -1,3 +1,5 @@
+// PTRDSEC001 (SecurityModule.Create gives a random id): these fixtures link their plans to the ids it gives.
+#pragma warning disable PTRDSEC001
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -90,6 +92,7 @@ public class SecurityCodesTests
         await using var db = NewDb(connection);
         var plan = SubscriptionPlan.Create("Basic", "BASIC", null, null);
         var module = SecurityModule.Create("Sales", "SALES");
+        module.Id = SecurityModuleId.FromCode(module.Code); // plans refer to modules by their deterministic id
         db.SubscriptionPlans.Add(plan);
         db.SecurityModules.Add(module);
         db.SystemSubscriptions.Add(new SystemSubscription

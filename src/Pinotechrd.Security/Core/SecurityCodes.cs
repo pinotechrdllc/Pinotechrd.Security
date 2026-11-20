@@ -96,4 +96,12 @@ public static class SecurityModuleId
         bytes[8] = (byte)((bytes[8] & 0x3F) | 0x80); // RFC variant
         return new Guid(bytes, bigEndian: true);
     }
+
+    /// <summary>
+    /// Whether <paramref name="id"/> is the id of <paramref name="code"/>. A plan names its modules by id, so a module row
+    /// counts for a plan only when its id and its code agree; a row whose code was changed after it was created, or one
+    /// with a random id from before deterministic ids, does not. Never throws: an invalid code matches no id.
+    /// </summary>
+    internal static bool IsIdOf(Guid id, string? code) =>
+        SecurityCodes.TryNormalize(code, out var normalized) && FromCode(normalized) == id;
 }

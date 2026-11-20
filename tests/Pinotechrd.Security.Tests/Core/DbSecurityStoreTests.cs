@@ -45,7 +45,7 @@ public class DbSecurityStoreTests
         var tenantId = "tenant-1";
         var moduleCode = "MOD_X";
         var planId = Guid.NewGuid();
-        var moduleId = Guid.NewGuid();
+        var moduleId = SecurityModuleId.FromCode(moduleCode);
 
         _db.SystemSubscriptions.Returns(new List<TestSubscription> 
         { 
@@ -70,12 +70,43 @@ public class DbSecurityStoreTests
     }
 
     [Fact]
+    public async Task ModuleRowWhoseCodeDoesNotBelongToItsId_ShouldNotCountForThePlan()
+    {
+        // The plan maps SALES by id. The tenant's row has that id but another code (changed after creation), and a
+        // second row has a random id from before deterministic ids. Neither is the module the plan names.
+        var tenantId = "tenant-1";
+        var planId = Guid.NewGuid();
+        var salesId = SecurityModuleId.FromCode("SALES");
+        var legacyId = Guid.NewGuid();
+
+        _db.SystemSubscriptions.Returns(new List<TestSubscription>
+        {
+            new() { TenantName = tenantId, PlanId = planId, IsActive = true, StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)) }
+        }.BuildMock());
+        _db.SubscriptionPlanModules.Returns(new List<TestSubscriptionPlanModule>
+        {
+            new() { PlanId = planId, ModuleId = salesId },
+            new() { PlanId = planId, ModuleId = legacyId }
+        }.BuildMock());
+        _db.Modules.Returns(new List<TestModule>
+        {
+            new() { Id = salesId, Code = "PREMIUM", IsActive = true },
+            new() { Id = legacyId, Code = "LEGACY", IsActive = true }
+        }.BuildMock());
+
+        (await _store.IsModuleActiveAsync(tenantId, "PREMIUM")).Should().BeFalse();
+        (await _store.IsModuleActiveAsync(tenantId, "LEGACY")).Should().BeFalse();
+        (await _store.GetActiveModuleCodesAsync(tenantId)).Should().BeEmpty();
+        (await _store.GetActiveCatalogAsync(tenantId)).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GetActiveModuleCodesAsync_ShouldReturnCodes_WhenSubscriptionIsActive()
     {
         // Arrange
         var tenantId = "tenant-2";
         var planId = Guid.NewGuid();
-        var moduleId = Guid.NewGuid();
+        var moduleId = SecurityModuleId.FromCode("MOD_ABC");
 
         _db.SystemSubscriptions.Returns(new List<TestSubscription> 
         { 
@@ -104,9 +135,9 @@ public class DbSecurityStoreTests
     {
         var tenantId = "tenant-1";
         var planId = Guid.NewGuid();
-        var activeModuleId = Guid.NewGuid();
-        var offPlanModuleId = Guid.NewGuid();
-        var dormantModuleId = Guid.NewGuid();
+        var activeModuleId = SecurityModuleId.FromCode("MOD_ON");
+        var offPlanModuleId = SecurityModuleId.FromCode("MOD_OFF");
+        var dormantModuleId = SecurityModuleId.FromCode("MOD_DORMANT");
 
         _db.SystemSubscriptions.Returns(new List<TestSubscription>
         {

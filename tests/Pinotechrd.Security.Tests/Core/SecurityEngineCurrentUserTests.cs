@@ -43,7 +43,7 @@ public class SecurityEngineCurrentUserTests
         var current = await _engine.GetCurrentUserPermissionsAsync();
 
         current.Should().BeEquivalentTo(await _engine.GetPermissionsAsync("user-1"));
-        current.Should().BeEquivalentTo(["MOD_A.READ", "CORE.HOME"], "permissions of inactive modules are filtered like GetPermissionsAsync");
+        current.Should().BeEquivalentTo(["MOD_A.READ"], "permissions of modules outside the plan (CORE included) are filtered like GetPermissionsAsync");
         current.Should().NotContain("MOD_A.ADMIN", "another user's permissions are never reported");
     }
 

@@ -1,3 +1,5 @@
+// PTRDSEC001 (SecurityModule.Create gives a random id): these tests recreate such pre-FromCode data on purpose.
+#pragma warning disable PTRDSEC001
 using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
