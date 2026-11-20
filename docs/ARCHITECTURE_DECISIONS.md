@@ -56,3 +56,16 @@ This document captures the key architecture choices behind Pinotechrd.Security a
   Membership is only as strong as the setup: outside these two, the application must check it in `IIdentityValidator`. In the `search_path` setup the library binds every connection EF Core opens and checks every command, refuses connections opened inside an ambient transaction, and is PostgreSQL-only. The schema-in-model setup keeps one model per tenant, and EF Core holds only a bounded number of models; above about 40 active tenants the `search_path` setup is recommended.
 - Where:
   [Data/PinotechrdSecurityDbContext.cs](../src/Pinotechrd.Security/Data/PinotechrdSecurityDbContext.cs), [Data/PinotechrdSecurityModelOptions.cs](../src/Pinotechrd.Security/Data/PinotechrdSecurityModelOptions.cs), [Core/SecurityCodes.cs](../src/Pinotechrd.Security/Core/SecurityCodes.cs)
+
+## ADR-006: Release governance with a single maintainer
+
+- Decision:
+  `develop` and `main` require a pull request, an approving review from a code owner, the five CI checks (`validate`, CodeQL for C# and Actions, `dependency-review`, `issue-link`) up to date with the base, and forbid force pushes and deletion. `v*` tags can only be created by the admin role, and publishing runs only from a `v*` tag, in the `nuget-production` environment, after a required reviewer approves the deployment. The package is built once, attested (build provenance and SBOM) and pushed with Trusted Publishing, without stored credentials.
+- Why:
+  The repository has one maintainer, who is also the only code owner and the only reviewer of the environment. A rule that requires a second person (`prevent_self_review`, removing the admin bypass of the review) cannot be met and would block every release, so it is not configured: the admin role can merge a pull request without an approving review, and approves its own deployments. A setting that looks stricter but is always bypassed would only hide that fact.
+- Tradeoff:
+  One person can change and publish the package. The compensating controls are the ones that do not depend on a second person: required CI on every merge, CodeQL and dependency review, artifact attestations and SBOMs that let a consumer check that a package came from this repository's workflow and tag, and an independent review of security-relevant changes before a stable release. Every merge that bypasses review is visible in the pull request history.
+- When this changes:
+  With a second maintainer, add them to `CODEOWNERS`, turn on `prevent_self_review` for `nuget-production`, remove the admin bypass from the branch ruleset (keep it, if at all, only for emergencies with a documented reason), and require their approval for changes to tenancy, authentication, tokens, data access and the release workflow.
+- Where:
+  Repository rulesets "Protect develop and main" and "Protect release tags", environment `nuget-production`, [.github/CODEOWNERS](../.github/CODEOWNERS), [.github/workflows/release.yml](../.github/workflows/release.yml)

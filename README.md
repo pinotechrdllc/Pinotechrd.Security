@@ -246,6 +246,11 @@ With EF Core migrations instead of `GenerateCreateScript`, run `MigrateAsync()` 
 
 The JWT settings are checked when the host starts, not inside `AddPinotechrdSecurity`, so tools that build the host without configuration (such as OpenAPI generation at build time) still work. A missing or weak setting makes the host fail to start with an `OptionsValidationException` that names the setting, for example `PinotechrdSecurityOptions.Jwt.Secret`. Tokens are signed with HMAC-SHA256, and only that algorithm is accepted when they are validated. The bearer handler's validation settings that the library guarantees (issuer, audience, lifetime and signing-key validation, signed tokens with an expiry, the configured issuer, audience and keys, the algorithm, a `ClockSkew` no larger than `MaximumClockSkew`) are applied after all your `Configure<JwtBearerOptions>` calls, even if you replace `TokenValidationParameters` entirely; your other settings are kept. Only the configured secrets are accepted: a signing key, key resolver or signature validator you set on `TokenValidationParameters`, and keys from OpenID Connect metadata (`Authority`, `MetadataAddress`, `Configuration`, `ConfigurationManager`), are cleared. So is anything that would widen the issuer, audience, lifetime or algorithm checks: `ValidIssuers`, `ValidAudiences`, and the `IssuerValidator`, `IssuerValidatorUsingConfiguration`, `AudienceValidator`, `LifetimeValidator` and `AlgorithmValidator` delegates. The final bearer options are then validated, after every `Configure` and `PostConfigure`: a `PostConfigure<JwtBearerOptions>` registered after `AddPinotechrdSecurity` that changes any of these settings, or sets a `ClockSkew` above `MaximumClockSkew`, makes the host fail to start with an `OptionsValidationException` that names the setting; so do custom token handlers, a `TokenValidationParameters` subclass, a `TokenReader` or `TransformBeforeSignatureValidation`, and `ForwardDefault`, `ForwardAuthenticate` or `ForwardDefaultSelector` on the bearer scheme. The check covers the options as configured. Code your application runs during authentication (for example `JwtBearerEvents` handlers that set a result), other authentication schemes you add, and replacing the options infrastructure are your responsibility. If you bind `JwtBearerOptions` from configuration with reload, a reloaded value that breaks the policy makes requests fail until it is fixed.
 
+#### Choosing the JWT secret, and who can issue tokens
+
+- **Generate the secret; do not choose it.** Every signed token, and its `kid` header (derived from the secret), lets anyone who holds one test guesses of the secret offline, as fast as they can compute HMAC-SHA256. The 32-byte minimum counts bytes, not entropy: a passphrase of 32 characters can be guessed. Use at least 32 random bytes, for example `openssl rand -base64 48` or `Convert.ToBase64String(RandomNumberGenerator.GetBytes(48))`, kept in a secret store.
+- **HMAC means every validator can also issue.** The same secret signs and validates, so any service you give it to can mint tokens for any user and tenant. Share it only among services inside one trust boundary that may all issue tokens. A service that should only *validate* (another team's API, a partner) must not get the secret; the library has no asymmetric (RS256/ES256, JWKS) option. Give such a service its own scheme and tokens, or put it behind an API that validates for it.
+
 #### Rotating the JWT secret
 
 Tokens carry a `kid` header: the first 16 lowercase hex characters of SHA-256 over the signing secret's UTF-8 bytes. With several instances, rotate in three deployments:
@@ -513,6 +518,8 @@ Protect the keys at rest as well (`ProtectKeysWith*`). Outside Development, the 
 
 - Refresh tokens are opaque values kept through `IRefreshTokenStore`. `RefreshAsync` consumes the presented token atomically: of two concurrent refreshes with one token, exactly one succeeds.
 - Tokens issued by rotating one another form a family. Presenting a token that was already used revokes the whole family (RFC 9700, section 4.14.2), so a client that sends two refreshes at once loses that session.
+  - Browser apps with several tabs, and mobile apps that refresh from more than one place, must refresh one at a time: keep one in-flight refresh and make every caller await it (single-flight), and in a browser coordinate tabs (for example with the Web Locks API or a `BroadcastChannel`) so only one tab refreshes and the others take the new tokens. Retrying a refresh after a network error with the same token counts as a reuse if the first attempt reached the server.
+  - The library offers no grace window for a just-used token: accepting it again would let a stolen token race the legitimate one. Event 4204 (`RefreshTokenReused`) shows when clients get this wrong.
 - A token of another tenant is refused without being consumed. The user must still exist, be active, not be locked out, be allowed to sign in, have the security stamp it had when the token was issued, and pass your `IIdentityValidator<TUser>` if you have one. Every failure returns `Invalid token`.
 - `SignOutCurrentUserAsync` revokes all refresh tokens of the authenticated user, in every session, and renews the security stamp. `RevokeUserSessionsAsync(userId)` on `IPinotechrdSecurityManager` does the same for any user, and so does deactivating a user with `SetUserActiveStatusAsync(userId, false)` or with `UpdateUserAsync` on a user whose `IsActive` you set to `false`.
 - Access tokens carry a hash of the user's security stamp (claim `sstamp`; never the stamp itself). Sign-out, `RevokeUserSessionsAsync`, deactivation and every password change or reset renew the stamp. With `ValidateSecurityStamp` on (the default), `UseTenantResolution` checks, right before each endpoint and in the resolved tenant's own user tables, that the user of every access token issued by `Jwt.Issuer` still exists, is active and has the same stamp; otherwise the request gets `401` with `WWW-Authenticate: Bearer error="invalid_token"` and the problem code `session_revoked`, and the client must sign in again.
@@ -622,6 +629,18 @@ The library logs security events under the category `Pinotechrd.Security.Events`
 
 Startup warnings `4101` (Data Protection keys not persisted, allowed) and `4102` (in-memory stores in use, allowed) are logged under their own categories.
 
+#### Rate limiting is the host's
+
+The library limits two-factor codes per challenge (five) and relies on Identity's lockout for passwords, but it does not rate limit requests. Limit, in the host, every endpoint that calls:
+
+- `LoginAsync` (per user name and per client address, for credential stuffing),
+- `SendTwoFactorCodeAsync` (it sends a message on every success: per challenge, per user and per address),
+- `VerifyTwoFactorCodeAsync` and `GetTwoFactorProvidersAsync`,
+- `RefreshAsync`,
+- password changes, resets and account recovery.
+
+With several instances, use a limiter whose counters are shared (for example a Redis-backed limiter, or the gateway in front); ASP.NET Core's built-in `AddRateLimiter` counts per instance, so the limit multiplies by the number of instances. Partition by tenant as well as by address, so one tenant cannot exhaust another's budget. Answer limited requests with `429` and `Retry-After`, without saying whether the account exists.
+
 The events are logged by the library's own classes when they get an `ILoggerFactory`, which `AddPinotechrdSecurity` provides. A refresh token store of your own should return the user, tenant and family with `Reused`, as the library's stores do, or event 4204 has no user. Failures inside your stores and validators surface as exceptions; log them in the host.
 
 ## Caching
@@ -652,6 +671,8 @@ A response cache keyed only by path and query serves one tenant's response to an
 - **Keys.** Entries are stored under `pinotechrd:security:tenant:{tenantId}:...`. Invalidation writes a new per-tenant generation token instead of enumerating keys, so the old entries become unreachable and expire. If the cache is shared with other applications, keep that prefix free.
 
 ## Before a stable release: known limits
+
+- **One maintainer.** Releases are protected by required CI, signed and attested packages, and SBOMs, but one person can approve and publish (see ADR-006 in `docs/ARCHITECTURE_DECISIONS.md`). Verify the attestation of what you install (`gh attestation verify`, see "Quality and Security Checks").
 
 - **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. Outside Development (any other environment name, including `Testing`) the host fails to start while either is the registered store, unless `AllowInMemoryStores = true` (a single instance whose sessions may be lost; warning event `4102` is logged). The check reads the service registrations: a factory, decorator or keyed registration, or a store registered in another container (Autofac), is trusted as yours. The key check and this one report together, before any hosted service starts. Use `AddPinotechrdEfRefreshTokenStore` (see "Persistent refresh token store") and `AddPinotechrdEfTwoFactorAttemptStore` (see "Persistent two-factor attempt store").
 - **In-memory distributed cache.** The default `IDistributedCache` is per instance, so a cache invalidation does not reach other instances. With more than one instance, register a shared cache (see "Subscription and module cache").
