@@ -160,6 +160,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// <inheritdoc />
     public async Task<AuthResult> LoginAsync(string emailOrUsername, string password, string tenantId, CancellationToken cancellationToken = default)
     {
+        EnsureTenantMembershipIsProven();
         // 0. The token can only be issued for the tenant this request was resolved for.
         if (!IsCurrentTenant(tenantId))
         {
@@ -219,9 +220,43 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         return await BuildAuthenticatedResultAsync(user, tenantId, null, ByPassword, cancellationToken);
     }
 
+    /// <summary>
+    /// Refuses to start a sign-in, two-factor completion or refresh when the setup does not prove that the user found
+    /// belongs to the request's tenant, unless the application checks membership itself (an
+    /// <see cref="IIdentityValidator{TUser}"/>) or allows it unverified. The host start makes the same check, but cannot
+    /// when the context's options depend on the request's tenant; this one also covers options that differ per tenant.
+    /// It runs before anything is read or changed, so a refused call consumes no refresh token and renews no stamp.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The setup does not prove membership: a configuration error, not a
+    /// failed sign-in.</exception>
+    private void EnsureTenantMembershipIsProven()
+    {
+        if (_options.AllowUnverifiedTenantMembership || _customValidator != null) return;
+
+        // The context that matters is the one the users are read from: the user store's, not ISecurityDbContext, which
+        // the application can replace. A manager built by hand, with neither, is not checked.
+        var context = UserStoreContext(_userStore) ?? _securityDbContext as DbContext;
+        if (context != null)
+        {
+            Options.TenantMembership.ThrowIfNotProven(context, typeof(TUser).Name);
+        }
+        else if (_userStore != null || _securityDbContext != null)
+        {
+            throw new InvalidOperationException(
+                $"Tenant membership cannot be verified: neither the user store nor ISecurityDbContext is an EF Core context. " +
+                $"Register an IIdentityValidator<{typeof(TUser).Name}> that checks membership, or set " +
+                "PinotechrdSecurityOptions.AllowUnverifiedTenantMembership to true if the application checks it elsewhere.");
+        }
+    }
+
+    /// <summary>The EF Core context behind an Identity EF store (its public <c>Context</c> property), if it is one.</summary>
+    private static DbContext? UserStoreContext(IUserStore<TUser>? store) =>
+        store?.GetType().GetProperty("Context")?.GetValue(store) as DbContext;
+
     private async Task<AuthResult> BuildAuthenticatedResultAsync(TUser user, string tenantId, string? familyId, string method, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
         // Fetch user basic info
         var userId = await _userManager.GetUserIdAsync(user);
         var email = await _userManager.GetEmailAsync(user) ?? string.Empty;
@@ -351,6 +386,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// <inheritdoc />
     public async Task<AuthResult> VerifyTwoFactorCodeAsync(string twoFactorToken, string provider, string code, string tenantId, CancellationToken cancellationToken = default)
     {
+        EnsureTenantMembershipIsProven();
         var ticket = await ReadTwoFactorTokenAsync(twoFactorToken, cancellationToken);
         if (ticket == null || !string.Equals(ticket.TenantId, tenantId, StringComparison.Ordinal))
             return AuthResult.Failure(InvalidSession);
@@ -572,6 +608,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// <inheritdoc />
     public async Task<AuthResult> RefreshAsync(string refreshToken, CancellationToken cancellationToken = default)
     {
+        EnsureTenantMembershipIsProven();
         var tenantId = _tenantContext?.TenantId;
         if (string.IsNullOrEmpty(tenantId) || string.IsNullOrEmpty(refreshToken))
             return AuthResult.Failure(InvalidRefreshToken);
