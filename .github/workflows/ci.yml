@@ -55,3 +55,31 @@ jobs:
             ${{ runner.temp }}/packages/*.nupkg
             ${{ runner.temp }}/packages/*.snupkg
             ${{ runner.temp }}/audit/nuget-vulnerability-report.json
+
+  multinode:
+    # The library on two nodes (separate processes in Production) sharing PostgreSQL behind PgBouncer with a role per
+    # tenant, Redis and the Data Protection keys: eleven cross-node scenarios in both schema modes (tests/MultiNode).
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Multi-node validation
+        shell: pwsh
+        run: ./tests/MultiNode/run.ps1 -Mode Both -LogDirectory "${{ runner.temp }}/multinode"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: multinode-logs
+          path: ${{ runner.temp }}/multinode
