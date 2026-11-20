@@ -43,8 +43,9 @@ dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL   # the database provid
 | --- | --- |
 | A user and a role type | Derive from `BaseSecurityUser` and `BaseSecurityRole`. |
 | An EF Core `DbContext` | Derive from `PinotechrdSecurityDbContext<TUser, TRole>`, with the constructor `(DbContextOptions<T> options, ISchemaProvider schemaProvider) : base(options, schemaProvider)`. |
-| `ITenantStore` | Tells the middleware whether a tenant id exists and is active. It runs before the tenant is resolved, so it must read the catalog directly, not through the tenant context. Not registered by default. |
-| `ISecurityDataProvider` | Supplies the permission engine with the current user id, the current tenant, and roles and permissions. The user id is the `id` claim that `LoginAsync` writes. The tenant is the one whose data the provider reads (`TenantContext.TenantId`). Permissions must be full `MODULE.PERMISSION` codes such as `SALES.VIEW`. Not registered by default. |
+| The catalog connection for `ITenantStore` | `AddPinotechrdCatalogTenantStore(o => o.UseNpgsql(catalogConnection))` registers the library's store: it tells the middleware whether a tenant id exists and is active, reading the catalog's `tenants` table through a context of its own (it runs before the tenant is resolved, so never through the tenant context). Give it a login that can only read the catalog. You can register your own `ITenantStore` instead. |
+
+The library also registers a default `ISecurityDataProvider` (the permission engine's view of the request): the user of the access token its bearer scheme validated (never an `id` claim another scheme or a claims transformation adds), the resolved tenant (`TenantContext`, never a header), and the user's roles and their `MODULE.PERMISSION` codes from the tenant's own tables. It names a user only from the library's own tokens (an `id` claim issued by `Jwt.Issuer`), only for an active user, and not outside a request (background work gets no user). Register your own `ISecurityDataProvider` with `AddScoped`, before or after `AddPinotechrdSecurity` (not `TryAdd` after it), if your users sign in with another scheme or your roles and permissions live elsewhere; it must keep the same rules. If your context renames the catalog's columns (a naming convention), apply it in the catalog store's options too, or every tenant is refused.
 
 ```csharp
 public sealed class AppSecurityDbContext : PinotechrdSecurityDbContext<AppUser, AppRole>
@@ -52,38 +53,6 @@ public sealed class AppSecurityDbContext : PinotechrdSecurityDbContext<AppUser, 
     public AppSecurityDbContext(DbContextOptions<AppSecurityDbContext> options, ISchemaProvider schemaProvider)
         : base(options, schemaProvider)
     {
-    }
-}
-
-public sealed class AppSecurityDataProvider(
-    IHttpContextAccessor http, TenantContext tenant, IPinotechrdSecurityManager<AppUser, AppRole> security) : ISecurityDataProvider
-{
-    public string? GetCurrentUserId() => http.HttpContext?.User.FindFirstValue("id");
-    public string? GetCurrentTenantId() => tenant.TenantId;
-    public Task<IEnumerable<string>> GetUserRolesAsync(string userId, CancellationToken cancellationToken = default)
-        => security.GetUserRolesAsync(userId, cancellationToken);
-
-    public async Task<IEnumerable<string>> GetUserPermissionsAsync(string userId, CancellationToken cancellationToken = default)
-    {
-        var codes = new List<string>();
-        foreach (var name in await security.GetUserRolesAsync(userId, cancellationToken))
-        {
-            if (await security.GetRoleByNameAsync(name, cancellationToken) is { } role)
-                codes.AddRange(await security.GetRolePermissionsAsync(role.Id.ToString(), cancellationToken));
-        }
-        return codes; // full MODULE.PERMISSION codes
-    }
-}
-
-public sealed class AppTenantStore(NpgsqlDataSource dataSource) : ITenantStore // register: AddSingleton(NpgsqlDataSource.Create(cs))
-{
-    public async Task<bool> TenantExistsAsync(string tenantId, CancellationToken cancellationToken = default)
-    {
-        await using var command = dataSource.CreateCommand(
-            "SELECT EXISTS (SELECT 1 FROM public.tenants WHERE \"Identifier\" = $1 AND \"Status\" = $2)");
-        command.Parameters.Add(new NpgsqlParameter { Value = tenantId });
-        command.Parameters.Add(new NpgsqlParameter { Value = (int)TenantStatus.Active });
-        return (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
 }
 ```
@@ -114,11 +83,12 @@ builder.Services.AddPinotechrdSecurity<AppSecurityDbContext, AppUser, AppRole>(o
     options.Tenancy.SkipPaths.Add("/health");
 });
 
-builder.Services.AddScoped<ITenantStore, AppTenantStore>();
-builder.Services.AddScoped<ISecurityDataProvider, AppSecurityDataProvider>();
+// The catalog-backed tenant store, on a login that can only read the catalog.
+builder.Services.AddPinotechrdCatalogTenantStore(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Catalog")));
 ```
 
-`AppSecurityDbContext`, `AppUser`, `AppRole`, `AppTenantStore` and `AppSecurityDataProvider` are your own types. The [sample API](https://github.com/pinotechrdllc/Pinotechrd.Security/tree/develop/samples/Pinotechrd.Security.SampleApi) contains a complete, runnable version of each.
+`AppSecurityDbContext`, `AppUser` and `AppRole` are your own types. The [sample API](https://github.com/pinotechrdllc/Pinotechrd.Security/tree/develop/samples/Pinotechrd.Security.SampleApi) contains a complete, runnable version of each.
 
 ### 3. Configure the middleware
 
@@ -225,7 +195,7 @@ public static async Task ProvisionTenantAsync(IServiceProvider services, string 
 }
 ```
 
-With EF Core migrations instead of `GenerateCreateScript`, run `MigrateAsync()` once per tenant in the same scope, and once with the catalog included.
+With EF Core migrations instead of `GenerateCreateScript`, run `MigrateAsync()` once per tenant in the same scope, and once with the catalog included. **This works in `SearchPath` mode only**; see "Migrations and the schema mode" below.
 
 ## Configuration Reference
 
@@ -238,10 +208,18 @@ With EF Core migrations instead of `GenerateCreateScript`, run `MigrateAsync()` 
 | `PreviousSecrets` | empty | Secrets accepted only to validate tokens, never to sign. Each must meet the `Secret` length rule and must not be empty, equal to `Secret`, or repeated. See "Rotating the JWT secret" below. |
 | `Issuer` | not set | Required. Always validated. |
 | `Audience` | not set | Required. Always validated. |
-| `ExpiryMinutes` | `60` | Access token lifetime. |
-| `RefreshTokenExpiryDays` | `7` | Refresh token lifetime. |
+| `ExpiryMinutes` | `15` | Access token lifetime, 1 to 60. It bounds how long a sign-out, password change or deactivation takes to reach an access token already issued. |
+| `RefreshTokenExpiryDays` | `7` | Refresh token lifetime, 1 to 90. |
+| `MaximumClockSkew` | 1 minute | Largest clock skew accepted on token lifetime, zero to 5 minutes. A larger `ClockSkew` on the bearer scheme, including the framework default of 5 minutes, is lowered to it; a smaller one you set is kept. From configuration use the `TimeSpan` format, for example `"00:01:00"` (a bare `"1"` is one day). |
+| `ValidateSecurityStamp` | `true` | Refuses an access token, before each endpoint, once its user signed out, had its sessions revoked, changed or reset its password, or was deactivated. See "Refresh tokens and sign-out". |
+| `SecurityStampValidationInterval` | zero | How long the result of that check is reused per tenant and user, zero to 5 minutes. Zero reads the user store on every request. |
 
-The JWT settings are checked when the host starts, not inside `AddPinotechrdSecurity`, so tools that build the host without configuration (such as OpenAPI generation at build time) still work. A missing or weak setting makes the host fail to start with an `OptionsValidationException` that names the setting, for example `PinotechrdSecurityOptions.Jwt.Secret`. Tokens are signed with HMAC-SHA256, and only that algorithm is accepted when they are validated. The bearer handler's validation settings that the library guarantees (issuer, audience, lifetime and signing-key validation, signed tokens with an expiry, the configured issuer, audience and keys, the algorithm) are applied after all your `Configure<JwtBearerOptions>` calls, even if you replace `TokenValidationParameters` entirely; your other settings are kept. Only the configured secrets are accepted: a signing key, key resolver or signature validator you set on `TokenValidationParameters`, and keys from OpenID Connect metadata (`Authority`, `MetadataAddress`, `Configuration`, `ConfigurationManager`), are cleared.
+The JWT settings are checked when the host starts, not inside `AddPinotechrdSecurity`, so tools that build the host without configuration (such as OpenAPI generation at build time) still work. A missing or weak setting makes the host fail to start with an `OptionsValidationException` that names the setting, for example `PinotechrdSecurityOptions.Jwt.Secret`. Tokens are signed with HMAC-SHA256, and only that algorithm is accepted when they are validated. The bearer handler's validation settings that the library guarantees (issuer, audience, lifetime and signing-key validation, signed tokens with an expiry, the configured issuer, audience and keys, the algorithm, a `ClockSkew` no larger than `MaximumClockSkew`) are applied after all your `Configure<JwtBearerOptions>` calls, even if you replace `TokenValidationParameters` entirely; your other settings are kept. Only the configured secrets are accepted: a signing key, key resolver or signature validator you set on `TokenValidationParameters`, and keys from OpenID Connect metadata (`Authority`, `MetadataAddress`, `Configuration`, `ConfigurationManager`), are cleared. So is anything that would widen the issuer, audience, lifetime or algorithm checks: `ValidIssuers`, `ValidAudiences`, and the `IssuerValidator`, `IssuerValidatorUsingConfiguration`, `AudienceValidator`, `LifetimeValidator` and `AlgorithmValidator` delegates. The final bearer options are then validated, after every `Configure` and `PostConfigure`: a `PostConfigure<JwtBearerOptions>` registered after `AddPinotechrdSecurity` that changes any of these settings, or sets a `ClockSkew` above `MaximumClockSkew`, makes the host fail to start with an `OptionsValidationException` that names the setting; so do custom token handlers, a `TokenValidationParameters` subclass, a `TokenReader` or `TransformBeforeSignatureValidation`, and `ForwardDefault`, `ForwardAuthenticate` or `ForwardDefaultSelector` on the bearer scheme. The check covers the options as configured. Code your application runs during authentication (for example `JwtBearerEvents` handlers that set a result), other authentication schemes you add, and replacing the options infrastructure are your responsibility. If you bind `JwtBearerOptions` from configuration with reload, a reloaded value that breaks the policy makes requests fail until it is fixed.
+
+#### Choosing the JWT secret, and who can issue tokens
+
+- **Generate the secret; do not choose it.** Every signed token, and its `kid` header (derived from the secret), lets anyone who holds one test guesses of the secret offline, as fast as they can compute HMAC-SHA256. The 32-byte minimum counts bytes, not entropy: a passphrase of 32 characters can be guessed. Use at least 32 random bytes, for example `openssl rand -base64 48` or `Convert.ToBase64String(RandomNumberGenerator.GetBytes(48))`, kept in a secret store.
+- **HMAC means every validator can also issue.** The same secret signs and validates, so any service you give it to can mint tokens for any user and tenant. Share it only among services inside one trust boundary that may all issue tokens. A service that should only *validate* (another team's API, a partner) must not get the secret; the library has no asymmetric (RS256/ES256, JWKS) option. Give such a service its own scheme and tokens, or put it behind an API that validates for it.
 
 #### Rotating the JWT secret
 
@@ -251,7 +229,7 @@ Tokens carry a `kid` header: the first 16 lowercase hex characters of SHA-256 ov
 2. Make it `Secret` and move the old secret to `PreviousSecrets`, on every instance.
 3. Once the old secret's tokens are no longer needed (access tokens expired and the refresh window over), remove it from `PreviousSecrets`.
 
-The library enforces no time limit: a secret in `PreviousSecrets` is accepted until you remove it. Never keep a leaked secret there: whoever holds it can forge tokens, and `GetPrincipalFromExpiredToken` accepts them at any age; remove it and rotate at once. Keys are read once, when the host starts, so each step takes effect only after a restart.
+The library enforces no time limit: a secret in `PreviousSecrets` is accepted until you remove it. Never keep a leaked secret there: whoever holds it can forge tokens; remove it and rotate at once. Keys are read once, when the host starts, so each step takes effect only after a restart.
 
 ### Authentication schemes
 
@@ -275,7 +253,7 @@ Where the tenant id comes from depends on whether the request is authenticated:
 | Authenticated | Claim of the user, and nothing else | `ClaimType` | `tenant_id` |
 | Anonymous | Request header | `HeaderName` | `TenantId` |
 
-`ClaimType` is the single name used everywhere: `LoginAsync` writes the claim under it, and the middleware, the permission handler, the engine and the consistency check read it. It is exempt from the JWT bearer handler's inbound claim mapping, so a name such as `tid` (which the handler would otherwise rename to `http://schemas.microsoft.com/identity/claims/tenantid`) arrives as `tid`. Only that claim type is exempted, on the bearer scheme's own handler, in a `PostConfigure` step that later configuration cannot undo. Every other claim keeps the default mapping; for example `sub` still becomes `ClaimTypes.NameIdentifier`. `GetPrincipalFromExpiredToken` reads the claim the same way.
+`ClaimType` is the single name used everywhere: `LoginAsync` writes the claim under it, and the middleware, the permission handler, the engine and the consistency check read it. It is exempt from the JWT bearer handler's inbound claim mapping, so a name such as `tid` (which the handler would otherwise rename to `http://schemas.microsoft.com/identity/claims/tenantid`) arrives as `tid`. Only that claim type is exempted, on the bearer scheme's own handler, in a `PostConfigure` step that later configuration cannot undo. Every other claim keeps the default mapping; for example `sub` still becomes `ClaimTypes.NameIdentifier`.
 
 For an authenticated user the header is never read, so a header naming another tenant is ignored and does not cause a rejection. An authenticated user without the claim is rejected with `400 tenant_invalid`, whatever `OnMissingTenant` says: by the middleware on a path that requires a tenant, and by the consistency check before any endpoint on other paths (skip paths excepted). The JSON body and the query string are not read.
 
@@ -322,7 +300,7 @@ options.UseNpgsql(connectionString).UsePinotechrdSecurity(model =>
 });
 ```
 
-- The catalog table that maps plans to modules has no foreign key to a tenant table: modules live in every tenant schema and are matched by id (see `SecurityModuleId`).
+- The catalog table that maps plans to modules has no foreign key to a tenant table: modules live in every tenant schema and are matched by id (see `SecurityModuleId`). A module row counts for a plan only when its id is `SecurityModuleId.FromCode` of its code, so create modules with `SecuritySeeder` (`SecurityModule.Create` gives a random id) and do not change the code of an existing module row. Writing to `security_modules` is a provisioning task: do not let tenant users or tenant administrators edit those rows.
 - Keep these settings the same for every instance of one context type.
 
 **`SearchPath` mode in detail.** The interceptors do the following:
@@ -335,12 +313,14 @@ options.UseNpgsql(connectionString).UsePinotechrdSecurity(model =>
   - you opened the connection yourself;
   - you closed and reopened it yourself (the binding is dropped as soon as the connection reports `Closed` or `Broken`, and Npgsql's server process id is compared with the one recorded at binding);
   - the tenant changed after the connection opened.
-- Each command's text is also scanned, statement by statement, the way PostgreSQL tokenises it (strings, `E''` and dollar-quoted strings, quoted identifiers, nested comments). A command is **refused before it is sent**, whether it is alone or in a batch, when a statement:
+- Each command's text is also scanned, statement by statement, the way PostgreSQL tokenises it (strings, `E''` strings decoded with PostgreSQL's escape rules, including octal, hexadecimal and Unicode escapes, dollar-quoted strings, quoted identifiers, nested comments). A command is **refused before it is sent**, whether it is alone or in a batch, when a statement:
   - is `SET`, `SET SESSION`, `SET LOCAL` or `RESET` of `search_path`, `schema`, `role`, `session_authorization` or `standard_conforming_strings`; `SET ROLE`; `SET SESSION AUTHORIZATION`; `RESET ALL`; or `DISCARD ALL`;
   - is `ALTER ROLE|USER|DATABASE|SYSTEM ... SET|RESET` of those settings;
   - calls `set_config` (also schema-qualified or quoted) with a first argument that is not one plain string literal naming another setting;
   - writes to `pg_settings` (`UPDATE`, `INSERT INTO`, `DELETE FROM`, `MERGE INTO`, plain, `pg_catalog.`-qualified or quoted), which is equivalent to `SET`;
-  - uses a `U&"..."` identifier.
+  - uses a `U&"..."` identifier;
+  - holds an `E''` string with an escape PostgreSQL rejects (a zero byte, an incomplete `\u` or `\U`, a code point above U+10FFFF, an unpaired surrogate), which cannot be decoded;
+  - continues a string constant on the next line (`'a'` line break `'b'`, which PostgreSQL joins), or puts `E''` right after a number (`1E'..'`, an escape string on PostgreSQL 14 and older). EF Core writes neither.
 
   The bodies of `DO` blocks and `CREATE FUNCTION|PROCEDURE`, and the text of `PREPARE ... AS`, are scanned the same way. Inside a body, `EXECUTE` of exactly one string literal (optionally in parentheses) is scanned; any other `EXECUTE` (a concatenation, `format(...)`, a variable) cannot be checked and is refused, so a migration that creates such a function must run outside `SearchPath` mode. Column and table names are not matched: `UPDATE t SET search_path = @p0`, `WHERE role = @p`, `ON CONFLICT ... DO UPDATE SET role = ...`, `set_config_log`, `SELECT ... FROM pg_settings`, `current_setting('search_path')`, `SHOW search_path` and string literals all pass.
 - Binding is refused when the session has `standard_conforming_strings` off (for example through `ALTER DATABASE ... SET`): the scanner reads strings as PostgreSQL does with it on, its default. This is checked in the same round trip that verifies the path.
@@ -359,7 +339,43 @@ options.UseNpgsql(connectionString).UsePinotechrdSecurity(model =>
   - `Search Path`;
   - `Options` that set `search_path` in any spelling.
 
-  A pooler between the application and PostgreSQL breaks the mode in the same way unless it pools whole sessions: PgBouncer in transaction or statement mode can run the next command on a server session bound to another tenant. Use session pooling only.
+  A pooler between the application and PostgreSQL breaks the mode in the same way unless it pools whole sessions: PgBouncer in transaction or statement mode can run the next command on a server session bound to another tenant. When a connection is bound, the library compares the server's `pg_backend_pid()` with the process id the client was given (a pooler gives its own) and refuses to bind through a pooler unless you set `model.ConnectionPoolerUsesSessionMode = true`. Set it only for a pooler in session mode; with transaction or statement pooling, use `SchemaPerTenantInModel`.
+
+  The detection is best effort. PgBouncer, Odyssey and PgCat give the client a process id of their own and are detected; a pooler that forwards the server's id, or a provider that exposes no process id, is not. `ConnectionPoolerUsesSessionMode` is your declaration and is not verified: if the pooler (or a per-database or per-user `pool_mode` override in PgBouncer) actually runs in transaction mode, tenants' sessions are shared without an error. Never declare it for poolers that have no session mode, such as AWS RDS Proxy, or for a transaction-mode port (for example Supavisor's 6543; its session port is 5432).
+
+#### Database roles and poolers
+
+The schema binding decides where unqualified names resolve; it does not limit what the session may read. With one database role for every tenant, SQL that names another schema, a server-side function that changes the path, or a raw ADO.NET command can reach every tenant. The boundary against hostile SQL is the database's privileges:
+
+| Role | Login | Privileges |
+|---|---|---|
+| Owner of the schemas and tables (runs migrations and provisioning) | only from the deployment pipeline | owns `public` and every `tenant_*` schema |
+| One application role per tenant | yes, used by the application | `USAGE` on its own `tenant_*` schema and `SELECT, INSERT, UPDATE, DELETE` on its tables; `USAGE` on `public` and `SELECT` on the catalog tables. Not superuser, no `CREATEDB`, `CREATEROLE` or `BYPASSRLS`, no `CREATE` on any schema |
+| `PUBLIC` | — | `REVOKE ALL ON SCHEMA tenant_x FROM PUBLIC` and `REVOKE CREATE ON SCHEMA public FROM PUBLIC` |
+
+Also keep `SECURITY DEFINER` functions, and functions that call `set_config` or `SET` on `search_path` or the role, out of the database, or review each one.
+
+Select the tenant's role per request with EF Core's scoped options; both schema modes work this way:
+
+```csharp
+builder.Services.AddDbContext<AppDbContext>((sp, options) =>
+{
+    var tenant = sp.GetRequiredService<TenantContext>().TenantId
+        ?? throw new InvalidOperationException("No tenant is resolved.");
+    options.UseNpgsql(tenantConnectionStrings.For(tenant)); // the tenant role's login, from your secret store
+    options.UsePinotechrdSecurity(o => o.TenantSchemaMode = TenantSchemaMode.SearchPath);
+}, contextLifetime: ServiceLifetime.Scoped, optionsLifetime: ServiceLifetime.Scoped);
+```
+
+With options that depend on the tenant like these, the tenant membership check cannot read them when the host starts (there is no tenant yet), so the start goes on and logs the deferral (event `4103`). The same check also runs at the start of every sign-in, two-factor completion and refresh, against the context the users are read from: if the setup does not prove membership it throws `InvalidOperationException` (an error response, not a failed sign-in) before reading or changing anything. The tenant roles only read the catalog, so run provisioning (the `ProvisionTenantAsync` example above writes catalog rows) with the owner's connection string, from the deployment pipeline.
+
+With per-tenant roles, a query that names another tenant's schema fails with `permission denied`, and so does a session whose path was moved to another tenant by something the scanner cannot see. The connection strings differ per tenant, so Npgsql and the pooler keep one pool per tenant role. This pattern needs `AddDbContext` with scoped options; it does not work with `AddDbContextPool`, whose options are fixed.
+
+| Pooler between the application and PostgreSQL | `SchemaPerTenantInModel` | `SearchPath`, one role for all tenants | `SearchPath`, one role per tenant |
+|---|---|---|---|
+| None | yes | yes | yes |
+| Session mode | yes | yes, with `ConnectionPoolerUsesSessionMode = true` | yes, with `ConnectionPoolerUsesSessionMode = true` |
+| Transaction or statement mode | yes | **no**: refused when binding | **no**: refused when binding. Per-role pools keep tenants' sessions apart, but a client's next transaction can still run on a server session that was never bound, with the default path; use session mode or `SchemaPerTenantInModel` |
 
 To bind connections yourself instead, set `model.ApplicationTakesResponsibilityForSearchPath = true`; you then own every case above. Your binding must refuse when there is no tenant, for example:
 
@@ -382,12 +398,16 @@ await db.Database.ExecuteSqlRawAsync(db.Database.GenerateCreateScript()); // tab
 
 With migrations, run `db.Database.MigrateAsync()` in the same way, once per tenant. Each tenant schema then gets its own `__EFMigrationsHistory`. The example above was tested on PostgreSQL 17.7: the generated script holds only the tenant tables, and a user created afterwards is visible in the new tenant only.
 
+**Migrations and the schema mode.** EF Core migrations work per tenant in `SearchPath` mode only, where the model names no tenant schema: run `MigrateAsync()` with each tenant's context, and each tenant schema gets its own tables and its own `__EFMigrationsHistory` (verified on PostgreSQL 17.7). In `SchemaPerTenantInModel` mode, `dotnet ef migrations add` builds the model for the one tenant its design-time context resolves, so every operation of the migration names that tenant's schema, and the history table is created outside the tenant schemas, shared by all of them. Running `MigrateAsync()` per tenant then creates the tables in the design-time schema for the first tenant and does nothing for the others, without an error. In that mode, provision each tenant with `GenerateCreateScript` (as above) and apply later schema changes with a script per tenant, or move to `SearchPath` mode.
+
 **`ITenantStore` and the model cache.**
 
 - The middleware asks `ITenantStore` before the tenant is set and before any tenant-scoped context or model exists, so an unknown tenant is rejected without building a model.
 - Implement `ITenantStore` against the catalog (a catalog-only context, a cache or a direct query), never through the tenant-scoped context.
 - In `SchemaPerTenantInModel` mode EF Core builds one model per tenant schema and keeps a bounded number of them, measured at roughly 40 to 50. Beyond that, models are evicted and rebuilt (tens of milliseconds of CPU each), and requests that rotate through many valid tenants force rebuilds.
 - Above about 40 active tenants, use `SearchPath` mode, which has one model for all tenants. The library does not offer a larger model cache.
+
+**Context pooling.** `AddDbContextPool` and `AddPooledDbContextFactory` are not supported: the context takes the tenant's `ISchemaProvider` in its constructor, so EF Core cannot create it with options alone, and a pooled instance would keep one tenant's schema across requests. Register it with `AddDbContext` (scoped).
 
 **Pre-built and compiled models.** `UseModel(...)`, including compiled models, is not supported in `SchemaPerTenantInModel` mode: such a model holds one schema, so the context throws in its constructor. It works in `SearchPath` mode, where the model has no tenant schema.
 
@@ -402,6 +422,8 @@ services.AddPinotechrdSecurity<AppDbContext, AppUser, AppRole>(o => o.AllowUnver
 `AllowUnverifiedTenantMembership` is one value shared by every `AddPinotechrdSecurity` call in the container, and if you bind `PinotechrdSecurityOptions` from configuration, configuration can turn the check off. The check cannot see the database provider: a provider that ignores schemas (SQLite, InMemory) on one shared database puts every tenant's users in the same tables; that setup is only safe when each tenant has its own database.
 
 ### Role permissions and user overrides
+
+A module code has no dot, and a permission code is `MODULE.PERMISSION` (for example `SALES.VIEW`): the part before the first dot names its module, and `CanAccessAsync("SALES", "VIEW")` looks for exactly that code. `SeedModuleAsync` requires each permission of a module to start with that module's code, `AssignPermissionsToRoleAsync` and `ReplaceUserOverridesAsync` refuse any other code, and the engine ignores one that reaches it anyway (for example from your `ISecurityDataProvider`). A permission is listed by `GetPermissionsAsync`, written to tokens, and satisfies a menu item's `RequiredPermissions` only while its module is in the tenant's plan, whether or not the menu item names a module; a menu item with no module and no required permissions is always shown. Without a tenant in the request, `GetPermissionsAsync` returns nothing.
 
 `AssignPermissionsToRoleAsync` and `ReplaceUserOverridesAsync` replace all of a role's or user's rows in one transaction that first locks the role or user row, so concurrent calls for the same role or user run one after the other and the last one wins. The requested permissions are checked under that lock. The model has a unique index on `role_permissions` (`RoleId`, `PermissionId`) and on `user_permissions` (`UserId`, `PermissionId`).
 
@@ -423,7 +445,7 @@ services.AddPinotechrdSecurity<AppDbContext, AppUser, AppRole>(o => o.AllowUnver
     WHERE a."UserId" = b."UserId" AND a."PermissionId" = b."PermissionId" AND a."Id" > b."Id";
    ```
 
-2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add UniquePermissionAssignments`. For tenants provisioned with `GenerateCreateScript` instead of migrations, create the indexes in each tenant schema with the names EF Core gives them:
+2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add UniquePermissionAssignments` (`SearchPath` mode; in `SchemaPerTenantInModel` mode use a script per tenant, see "Migrations and the schema mode"). For tenants provisioned with `GenerateCreateScript` instead of migrations, create the indexes in each tenant schema with the names EF Core gives them:
 
    ```sql
    CREATE UNIQUE INDEX "IX_role_permissions_RoleId_PermissionId" ON role_permissions ("RoleId", "PermissionId");
@@ -453,7 +475,7 @@ With several instances, the in-memory store lets a two-factor token try five cod
    ```
 
    This adds `two_factor_attempts` (`challenge_hash` primary key, the SHA-256 of the token's random challenge id; `count`, `exhausted`, `expires_at`; index on `expires_at`) in the tenant schema, never the catalog schema. With the flag off the model does not change.
-2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddTwoFactorAttempts`.
+2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddTwoFactorAttempts` (`SearchPath` mode; in `SchemaPerTenantInModel` mode use a script per tenant, see "Migrations and the schema mode").
 3. Register the store (before or after `AddPinotechrdSecurity`): `builder.Services.AddPinotechrdEfTwoFactorAttemptStore<AppSecurityDbContext>();`
 
 Each attempt is one atomic `UPDATE ... SET count = count + 1` (the first one inserts the row), so concurrent attempts on any instance add up to five in total; a database error refuses the attempt rather than allowing one more. The store throws inside a database transaction or `TransactionScope`, because a rollback would erase the counted attempts: call `VerifyTwoFactorCodeAsync` outside any transaction. The store shares the request's context without using its change tracker. Expired rows are deleted by `IPinotechrdSessionPurger` (see "Purging expired sessions" below). If the flag is off, every call of the store throws `InvalidOperationException`.
@@ -468,15 +490,25 @@ builder.Services.AddDataProtection()
     .SetApplicationName("my-app");
 ```
 
-Protect the keys at rest as well (`ProtectKeysWith*`). Outside Development, `AddPinotechrdSecurity` logs a warning at startup (event id `4101`, `DataProtectionKeysNotPersisted`) when no key repository is configured. Startup continues. The check only sees whether a repository is set: it cannot tell whether that storage is shared (a local container path is not), and it also warns on Azure App Service, whose default key folder is already shared.
+Protect the keys at rest as well (`ProtectKeysWith*`). Outside Development, the host fails to start when no key repository is configured, with an `InvalidOperationException` that says how to fix it. Set `AllowUnpersistedDataProtectionKeys = true` when the default key folder is already shared (Azure App Service) or for a single instance whose key folder survives restarts; startup then continues with a warning (event id `4101`, `DataProtectionKeysNotPersisted`). Every environment other than Development is checked, including names such as `Testing` that integration tests use: allow it there, or persist the keys. The check only sees whether a repository is set: it cannot tell whether that storage is shared (a local container path is not).
 
 ### Refresh tokens and sign-out
 
 - Refresh tokens are opaque values kept through `IRefreshTokenStore`. `RefreshAsync` consumes the presented token atomically: of two concurrent refreshes with one token, exactly one succeeds.
 - Tokens issued by rotating one another form a family. Presenting a token that was already used revokes the whole family (RFC 9700, section 4.14.2), so a client that sends two refreshes at once loses that session.
+  - Browser apps with several tabs, and mobile apps that refresh from more than one place, must refresh one at a time: keep one in-flight refresh and make every caller await it (single-flight), and in a browser coordinate tabs (for example with the Web Locks API or a `BroadcastChannel`) so only one tab refreshes and the others take the new tokens. Retrying a refresh after a network error with the same token counts as a reuse if the first attempt reached the server.
+  - The library offers no grace window for a just-used token: accepting it again would let a stolen token race the legitimate one. Event 4204 (`RefreshTokenReused`) shows when clients get this wrong.
 - A token of another tenant is refused without being consumed. The user must still exist, be active, not be locked out, be allowed to sign in, have the security stamp it had when the token was issued, and pass your `IIdentityValidator<TUser>` if you have one. Every failure returns `Invalid token`.
-- `SignOutCurrentUserAsync` revokes all refresh tokens of the authenticated user, in every session, and renews the security stamp. `RevokeUserSessionsAsync(userId)` on `IPinotechrdSecurityManager` does the same for any user, and so does deactivating a user with `SetUserActiveStatusAsync(userId, false)`.
-- Access tokens already issued stay valid until they expire (`ExpiryMinutes`, 60 by default): JWT validation does not ask the server. Keep `ExpiryMinutes` short if that window matters.
+- `SignOutCurrentUserAsync` revokes all refresh tokens of the authenticated user, in every session, and renews the security stamp. `RevokeUserSessionsAsync(userId)` on `IPinotechrdSecurityManager` does the same for any user, and so does deactivating a user with `SetUserActiveStatusAsync(userId, false)` or with `UpdateUserAsync` on a user whose `IsActive` you set to `false`.
+- Access tokens carry a hash of the user's security stamp (claim `sstamp`; never the stamp itself). Sign-out, `RevokeUserSessionsAsync`, deactivation and every password change or reset renew the stamp. With `ValidateSecurityStamp` on (the default), `UseTenantResolution` checks, right before each endpoint and in the resolved tenant's own user tables, that the user of every access token issued by `Jwt.Issuer` still exists, is active and has the same stamp; otherwise the request gets `401` with `WWW-Authenticate: Bearer error="invalid_token"` and the problem code `session_revoked`, and the client must sign in again.
+  - Identity renews the stamp on more than these: a successful two-factor sign-in (so signing in with two-factor on one device ends the access tokens of the others), and changes to the email, user name, phone number, two-factor setting, authenticator key, external logins or password. Each of them ends every access token of the user at once. `ChangeOwnPasswordAsync` returns no new tokens, so the caller signs in again afterwards.
+  - With a user store that keeps no security stamps, only deactivation and deletion are detected.
+  - Cost: one user lookup per authenticated request; in `SearchPath` mode that also opens a connection and binds and verifies the path, even for endpoints that otherwise use no database. `SecurityStampValidationInterval` reuses the answer for a tenant and user through `IDistributedCache`, and a change then takes up to that long to apply, also for the library's own sign-out and revocation (the cached answer is not cleared). The default distributed cache is in memory and per instance: with several instances, register a shared one. A cache or database error gives `500`, never an accepted token.
+  - Order: the check runs right before the endpoint, after authorization, so a revoked token without a required permission gets `403` first. An endpoint that allows anonymous access (`[AllowAnonymous]`, such as sign-in and refresh) runs as anonymous instead of being refused, so a client that still sends its ended token can sign in again.
+  - The token checked is the one the bearer scheme recorded in its `OnTokenValidated` event, before claims transformations; your own `OnTokenValidated` still runs. If you replace `JwtBearerOptions.Events` after `AddPinotechrdSecurity` or set `EventsType`, the record is lost and the check falls back to identities whose claims keep the issuer `Jwt.Issuer`, which a claims transformation that re-creates claims does not.
+  - Not covered: skip paths of the tenant middleware, requests that run no endpoint (terminal middleware such as `app.Run`, output-cache hits), long-lived connections after they connect (for example SignalR), identities of other authentication schemes, and hosts that do not call `UseTenantResolution`.
+  - A token without the `sstamp` claim is refused while the user store keeps security stamps. Access tokens you issue yourself with `ITokenProvider.GenerateAccessToken` lack it: issue them through `IPinotechrdAuthManager` instead, or turn the check off.
+  - With `ValidateSecurityStamp` off, an access token already issued stays valid until it expires (`ExpiryMinutes`, 15 by default, plus at most `MaximumClockSkew`): JWT validation alone does not ask the server.
 - The default `InMemoryRefreshTokenStore` loses tokens on restart and does not share them between instances. It refuses a token value that is already stored. Above 10,000 entries it drops the tokens of families whose tokens have all expired, and expired revoked families. A used token is kept while its family has a live token, so replaying it is still detected; memory therefore grows with the number of refreshes per session lifetime, which is one more reason to rate limit refresh. For production use `AddPinotechrdEfRefreshTokenStore` (below), or register your own `IRefreshTokenStore` before or after `AddPinotechrdSecurity`; the default is only added when none is registered.
 
 ### Self-service vs administrative APIs
@@ -503,7 +535,7 @@ For production, or more than one instance, keep refresh tokens in the database. 
    ```
 
    This adds `refresh_tokens` (`token_hash` primary key, the SHA-256 of the token; `tenant_id`, `user_id`, `family_id`, `security_stamp`, `expires_at`, `consumed_at`, `revoked_at`; indexes on `user_id` and `family_id`) and `refresh_token_families` (`family_id`, `revoked_at`) in the tenant schema, never the catalog schema. There is no foreign key to `users`. With the flag off the model does not change.
-2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddRefreshTokens`.
+2. Add a migration in your application and apply it to every tenant schema: `dotnet ef migrations add AddRefreshTokens` (`SearchPath` mode; in `SchemaPerTenantInModel` mode use a script per tenant, see "Migrations and the schema mode").
 3. Register the store (before or after `AddPinotechrdSecurity`):
 
    ```csharp
@@ -556,10 +588,38 @@ RETURNING t.user_id, t.tenant_id, t.family_id, t.security_stamp;
 
 ### For operators: what to log and alert on
 
-- **Refresh token reuse.** When a stolen, already-used refresh token is replayed, the whole family is revoked: the attacker gets nothing, and the real user is signed out of that session and must log in again. That sign-out is the intended signal. `RefreshAsync` returns the generic `Invalid token` and the library does not log, so record it where the result is visible: in your `IRefreshTokenStore` or a decorator around it. Log every `ConsumeAsync` result of `Reused` (user id, tenant, family id, client address, user agent; never the token) and alert when it happens, more so when it repeats for one user or comes from many addresses.
-- **Tenant mismatches.** `ConsumeAsync` returning `TenantMismatch`, and permission checks failing because the tenant claim differs from the resolved tenant, mean a client is sending one tenant's credentials to another. Log and alert.
-- **Two-factor.** Track failed codes and lockouts per user and per client address; a spent challenge (all attempts used) is a guessing signal.
-- **Login.** Track `Invalid credentials` per user and per address for credential stuffing. The library logs no tenant ids, header values or tokens; keep it that way in your own logs.
+The library logs security events under the category `Pinotechrd.Security.Events` (`SecurityEvents.Category`), with stable event ids (`SecurityEvents`). Route that category to your log store and alert on the warnings. Events carry the resolved tenant id and the user id; never an email, user name, password, token, token hash, security stamp or code. The user id is the user store's key (a `Guid` for `BaseSecurityUser`): do not key users by an email or other personal data, and treat the ids as pseudonymous personal data in your retention policy. Outside a request (a background job) the tenant id is empty. Responses to clients stay generic: the reason is only in the log. The client address and user agent are not in the events: add them with a logging scope or enricher in your host.
+
+| Id | Name | Level | Properties | Meaning |
+| --- | --- | --- | --- | --- |
+| 4201 | `SignInFailed` | Information | `TenantId`, `UserId` (empty when unknown), `Reason` | A password sign-in failed. `Reason`: `TenantMismatch`, `UnknownUser`, `Inactive`, `WrongPassword`, `LockedOut`, `NotAllowed`, `NoPassword`, `ValidatorRefused`. Count per user and per address for credential stuffing. |
+| 4202 | `TokensIssued` | Information | `TenantId`, `UserId`, `Method` | Tokens issued by `Password`, `TwoFactor` or `Refresh`. |
+| 4203 | `AccountLockedOut` | Warning | `TenantId`, `UserId` | A wrong password or two-factor code locked the account (logged by the failure that locks it). |
+| 4204 | `RefreshTokenReused` | Warning | `TenantId`, `UserId`, `FamilyId` | A used refresh token was presented again and its family was revoked: a stolen token, or a client that refreshes twice in parallel. Alert, more so when it repeats for one user. |
+| 4205 | `RefreshTokenTenantMismatch` | Warning | `TenantId` | A refresh token of another tenant was presented. Only a store that sees every tenant's tokens can tell this; with `AddPinotechrdEfRefreshTokenStore`, whose tables are per tenant, it shows as 4206 `NotFound`. |
+| 4206 | `RefreshRefused` | Information | `TenantId`, `UserId` (when known), `Reason` | `NotFound`, `Expired`, `Revoked`, `UnknownUser`, `Inactive`, `LockedOut`, `NotAllowed`, `StampChanged`, `ValidatorRefused`, `InvalidStoreResult` (a store reported a consumed token without a user). |
+| 4207 | `TwoFactorCodeFailed` | Warning | `TenantId`, `UserId` | A wrong two-factor code. |
+| 4208 | `TwoFactorChallengeExhausted` | Warning | `TenantId`, `UserId` | A challenge ran out: the wrong code that used its last attempt, each attempt past the limit, or a failure that could not be recorded. At least once per exhausted challenge: a guessing signal. |
+| 4209 | `SessionsEnded` | Information | `TenantId`, `UserId`, `Trigger` | Every session of a user ended: `SignOut`, `Revoked`, `Deactivated` or `Deleted`. |
+| 4210 | `AccessTokenSessionEnded` | Information | `TenantId` | An access token whose session ended was refused (`ValidateSecurityStamp`). |
+| 4211 | `TenantMismatch` | Warning | `Code` | `tenant_invalid`: an authenticated request's tenant claim differs from the resolved tenant. `conflicting_tenant_claims`: its identities name different tenants. The tenant values are not logged. |
+| 4212 | `TenantCacheInvalidated` | Information | `TenantId` | `InvalidateTenantAsync` ran. |
+
+Startup warnings `4101` (Data Protection keys not persisted, allowed) and `4102` (in-memory stores in use, allowed) are logged under their own categories.
+
+#### Rate limiting is the host's
+
+The library limits two-factor codes per challenge (five) and relies on Identity's lockout for passwords, but it does not rate limit requests. Limit, in the host, every endpoint that calls:
+
+- `LoginAsync` (per user name and per client address, for credential stuffing),
+- `SendTwoFactorCodeAsync` (it sends a message on every success: per challenge, per user and per address),
+- `VerifyTwoFactorCodeAsync` and `GetTwoFactorProvidersAsync`,
+- `RefreshAsync`,
+- password changes, resets and account recovery.
+
+With several instances, use a limiter whose counters are shared (for example a Redis-backed limiter, or the gateway in front); ASP.NET Core's built-in `AddRateLimiter` counts per instance, so the limit multiplies by the number of instances. Partition by tenant as well as by address, so one tenant cannot exhaust another's budget. Answer limited requests with `429` and `Retry-After`, without saying whether the account exists.
+
+The events are logged by the library's own classes when they get an `ILoggerFactory`, which `AddPinotechrdSecurity` provides. A refresh token store of your own should return the user, tenant and family with `Reused`, as the library's stores do, or event 4204 has no user. Failures inside your stores and validators surface as exceptions; log them in the host.
 
 ## Caching
 
@@ -590,14 +650,15 @@ A response cache keyed only by path and query serves one tenant's response to an
 
 ## Before a stable release: known limits
 
-- **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. With more than one instance, use `AddPinotechrdEfRefreshTokenStore` (see "Persistent refresh token store") and `AddPinotechrdEfTwoFactorAttemptStore` (see "Persistent two-factor attempt store").
+- **One maintainer.** Releases are protected by required CI, signed and attested packages, and SBOMs, but one person can approve and publish (see ADR-006 in `docs/ARCHITECTURE_DECISIONS.md`). Verify the attestation of what you install (`gh attestation verify`, see "Quality and Security Checks").
+
+- **In-memory stores.** `InMemoryRefreshTokenStore` and `InMemoryTwoFactorAttemptStore` are per instance and lost on restart. Outside Development (any other environment name, including `Testing`) the host fails to start while either is the registered store, unless `AllowInMemoryStores = true` (a single instance whose sessions may be lost; warning event `4102` is logged). The check reads the service registrations: a factory, decorator or keyed registration, or a store registered in another container (Autofac), is trusted as yours. The key check and this one report together, before any hosted service starts. Use `AddPinotechrdEfRefreshTokenStore` (see "Persistent refresh token store") and `AddPinotechrdEfTwoFactorAttemptStore` (see "Persistent two-factor attempt store").
 - **In-memory distributed cache.** The default `IDistributedCache` is per instance, so a cache invalidation does not reach other instances. With more than one instance, register a shared cache (see "Subscription and module cache").
-- **No logging of refresh-token reuse.** The library does not log `Reused`; log it in your store (see "For operators").
 - **`SearchPath` mode is PostgreSQL-only**, and needs session-level pooling (see above).
 - **`SearchPath` binding is not re-checked per command.** A server-side function or procedure that changes `search_path` when called is invisible to the scanner, and the change then holds for every later command on that connection until it closes. Keep such functions out of the database, or give each tenant its own database role or login.
 - **Long-lived connections.** SignalR and other long-lived connections are checked once, when they connect. Each hub method call gets a new DI scope, so `TenantContext` is empty in hub methods. Set it in every hub method (or in a hub filter) from the connection's authenticated tenant claim, after checking the claim is still valid, before touching tenant data.
 - **`AuthenticateAsync` inside endpoints** is not covered by the consistency check; compare the claim with `TenantContext` yourself.
-- **One database role for every tenant.** If one database role owns every tenant schema, any SQL that names a schema explicitly (`SELECT * FROM tenant_other.users`) can reach any tenant; the schema binding only governs unqualified names. For stronger isolation, use a role per tenant with grants on its own schema only, or PostgreSQL row-level security.
+- **One database role for every tenant.** If one database role owns every tenant schema, any SQL that names a schema explicitly (`SELECT * FROM tenant_other.users`) can reach any tenant; the schema binding only governs unqualified names. For stronger isolation, use a role per tenant with grants on its own schema only (see "Database roles and poolers"), or PostgreSQL row-level security.
 
 ## Sample API
 
@@ -611,6 +672,17 @@ curl -H "TenantId: tenant-a" http://localhost:5000/api/tenant
 ## Quality and Security Checks
 
 Every pull request runs the build with warnings as errors, a vulnerability audit of dependencies, the test suite with a minimum line-coverage gate, CodeQL static analysis, a dependency review and package validation of the public API. Releases are tag-driven and published with nuget.org Trusted Publishing, so no API key is stored in the repository.
+
+From 1.2.0-preview.5, each release also carries build provenance and an SBOM. To check that a package you downloaded from nuget.org came from this repository's release workflow for its tag:
+
+```bash
+gh attestation verify pinotechrd.security.<version>.nupkg \
+  --repo pinotechrdllc/Pinotechrd.Security \
+  --signer-workflow pinotechrdllc/Pinotechrd.Security/.github/workflows/release.yml \
+  --source-ref refs/tags/v<version>
+```
+
+nuget.org adds its own repository signature (`.signature.p7s`) to each package after upload, which changes the file. The attestation for the file nuget.org serves is issued by the release workflow after it checks that the package's content, apart from that signature, is exactly what the workflow built. The GitHub Release of each tag holds the packages as published, the symbol packages, a CycloneDX SBOM per package and `SHA256SUMS`; the SBOM is also attached as an attestation to each package (`--predicate-type https://cyclonedx.org/bom`).
 
 ## Project Links
 

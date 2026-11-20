@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Pinotechrd.Security.Entities;
 using Pinotechrd.Security.Enums;
@@ -95,7 +96,12 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     private readonly ISecurityDbContext? _securityDbContext;
     private readonly string _tenantClaimType;
     private readonly ISecurityDataProvider? _dataProvider;
+    private readonly ILogger? _events;
+    private readonly IUserStore<TUser>? _userStore;
     private const int MaxFailedCountRetries = 10;
+    private const string ByPassword = "Password";
+    private const string ByTwoFactor = "TwoFactor";
+    private const string ByRefresh = "Refresh";
 
     /// <summary>
     /// Initializes the authentication manager.
@@ -107,6 +113,9 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// cannot log in and every two-factor method fails. <c>AddPinotechrdSecurity</c> registers all three.
     /// Without <paramref name="dataProvider"/> (the application registers it) the self-service methods
     /// <see cref="SignOutCurrentUserAsync"/> and <see cref="ChangeOwnPasswordAsync"/> find no authenticated user.
+    /// Without <paramref name="loggerFactory"/> no security events (<see cref="SecurityEvents"/>) are logged. With
+    /// <paramref name="userStore"/> (the store <paramref name="userManager"/> uses), the security stamp renewal of
+    /// <see cref="SignOutCurrentUserAsync"/> cannot be cancelled by the request once the revocation started.
     /// </remarks>
     public PinotechrdAuthManager(
         UserManager<TUser> userManager,
@@ -123,10 +132,14 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         TimeProvider? timeProvider = null,
         ISecurityDbContext? securityDbContext = null,
         TenantResolutionOptions? tenantOptions = null,
-        ISecurityDataProvider? dataProvider = null)
+        ISecurityDataProvider? dataProvider = null,
+        ILoggerFactory? loggerFactory = null,
+        IUserStore<TUser>? userStore = null)
     {
         _userManager = userManager;
+        _userStore = userStore;
         _signInManager = signInManager;
+        _events = SecurityLog.Create(loggerFactory);
         _securityEngine = securityEngine;
         _tokenProvider = tokenProvider;
         _refreshTokenStore = refreshTokenStore;
@@ -147,10 +160,12 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// <inheritdoc />
     public async Task<AuthResult> LoginAsync(string emailOrUsername, string password, string tenantId, CancellationToken cancellationToken = default)
     {
+        EnsureTenantMembershipIsProven();
         // 0. The token can only be issued for the tenant this request was resolved for.
         if (!IsCurrentTenant(tenantId))
         {
             VerifyAgainstDummyHash(password);
+            SecurityLog.SignInFailed(_events, _tenantContext?.TenantId, null, "TenantMismatch");
             return AuthResult.Failure(InvalidCredentials);
         }
 
@@ -162,10 +177,13 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         if (user == null || IsInactive(user))
         {
             VerifyAgainstDummyHash(password);
+            SecurityLog.SignInFailed(_events, tenantId, user == null ? null : await _userManager.GetUserIdAsync(user), user == null ? "UnknownUser" : "Inactive");
             return AuthResult.Failure(InvalidCredentials);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        // Read from the loaded entity (no query), so the lockout this attempt causes can be told from an earlier one.
+        var wasLockedOut = _userManager.SupportsUserLockout && await _userManager.IsLockedOutAsync(user);
         // 2. Check password (lockout semantics are Identity's: lockoutOnFailure stays on)
         var result = await _signInManager.CheckPasswordSignInAsync(user, password, lockoutOnFailure: true);
 
@@ -173,8 +191,17 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         {
             // Identity refuses locked-out and not-allowed accounts, and users without a password,
             // before it hashes anything.
-            if (result.IsLockedOut || result.IsNotAllowed || !await _userManager.HasPasswordAsync(user))
+            var hasPassword = await _userManager.HasPasswordAsync(user);
+            if (result.IsLockedOut || result.IsNotAllowed || !hasPassword)
                 VerifyAgainstDummyHash(password);
+
+            var userId = await _userManager.GetUserIdAsync(user);
+            var reason = result.IsLockedOut ? (wasLockedOut ? "LockedOut" : "WrongPassword")
+                : result.IsNotAllowed ? "NotAllowed"
+                : !hasPassword ? "NoPassword"
+                : "WrongPassword";
+            SecurityLog.SignInFailed(_events, tenantId, userId, reason);
+            if (result.IsLockedOut && !wasLockedOut) SecurityLog.AccountLockedOut(_events, tenantId, userId);
             return AuthResult.Failure(InvalidCredentials);
         }
 
@@ -190,12 +217,46 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             return AuthResult.TwoFactorRequired(providers.ToList(), twoFactorToken);
         }
 
-        return await BuildAuthenticatedResultAsync(user, tenantId, null, cancellationToken);
+        return await BuildAuthenticatedResultAsync(user, tenantId, null, ByPassword, cancellationToken);
     }
 
-    private async Task<AuthResult> BuildAuthenticatedResultAsync(TUser user, string tenantId, string? familyId, CancellationToken cancellationToken)
+    /// <summary>
+    /// Refuses to start a sign-in, two-factor completion or refresh when the setup does not prove that the user found
+    /// belongs to the request's tenant, unless the application checks membership itself (an
+    /// <see cref="IIdentityValidator{TUser}"/>) or allows it unverified. The host start makes the same check, but cannot
+    /// when the context's options depend on the request's tenant; this one also covers options that differ per tenant.
+    /// It runs before anything is read or changed, so a refused call consumes no refresh token and renews no stamp.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The setup does not prove membership: a configuration error, not a
+    /// failed sign-in.</exception>
+    private void EnsureTenantMembershipIsProven()
+    {
+        if (_options.AllowUnverifiedTenantMembership || _customValidator != null) return;
+
+        // The context that matters is the one the users are read from: the user store's, not ISecurityDbContext, which
+        // the application can replace. A manager built by hand, with neither, is not checked.
+        var context = UserStoreContext(_userStore) ?? _securityDbContext as DbContext;
+        if (context != null)
+        {
+            Options.TenantMembership.ThrowIfNotProven(context, typeof(TUser).Name);
+        }
+        else if (_userStore != null || _securityDbContext != null)
+        {
+            throw new InvalidOperationException(
+                $"Tenant membership cannot be verified: neither the user store nor ISecurityDbContext is an EF Core context. " +
+                $"Register an IIdentityValidator<{typeof(TUser).Name}> that checks membership, or set " +
+                "PinotechrdSecurityOptions.AllowUnverifiedTenantMembership to true if the application checks it elsewhere.");
+        }
+    }
+
+    /// <summary>The EF Core context behind an Identity EF store (its public <c>Context</c> property), if it is one.</summary>
+    private static DbContext? UserStoreContext(IUserStore<TUser>? store) =>
+        store?.GetType().GetProperty("Context")?.GetValue(store) as DbContext;
+
+    private async Task<AuthResult> BuildAuthenticatedResultAsync(TUser user, string tenantId, string? familyId, string method, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
         // Fetch user basic info
         var userId = await _userManager.GetUserIdAsync(user);
         var email = await _userManager.GetEmailAsync(user) ?? string.Empty;
@@ -208,7 +269,11 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         {
             var validationResult = await _customValidator.ValidateAsync(user, tenantId, cancellationToken);
             if (!validationResult.Succeeded)
+            {
+                if (method == ByRefresh) SecurityLog.RefreshRefused(_events, tenantId, userId, "ValidatorRefused");
+                else SecurityLog.SignInFailed(_events, tenantId, userId, "ValidatorRefused");
                 return AuthResult.Failure(validationResult.ErrorMessage ?? "Validation failed");
+            }
 
             fullName = validationResult.FullName ?? fullName;
             if (validationResult.AdditionalClaims != null)
@@ -227,10 +292,24 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             new Claim(ClaimTypes.Email, email)
         };
 
-        claims.AddRange(additionalClaims);
+        // The user id and stamp claims are the library's: a validator cannot supply or duplicate them.
+        claims.AddRange(additionalClaims.Where(c =>
+            !string.Equals(c.Type, SecurityStampClaim.Type, StringComparison.Ordinal)
+            && !string.Equals(c.Type, SecurityStampClaim.UserIdType, StringComparison.Ordinal)));
         foreach (var p in permissions)
         {
             claims.Add(new Claim("permission", p));
+        }
+
+        var securityStamp = _userManager.SupportsUserSecurityStamp
+            ? await _userManager.GetSecurityStampAsync(user)
+            : null;
+        // Binds the access token to this stamp, so renewing it (sign-out, revocation, password change, deactivation)
+        // reaches the token before it expires (JwtSettings.ValidateSecurityStamp).
+        var stampHash = SecurityStampClaim.Hash(securityStamp);
+        if (stampHash.Length > 0)
+        {
+            claims.Add(new Claim(SecurityStampClaim.Type, stampHash));
         }
 
         // 4. Generate Tokens
@@ -239,9 +318,6 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         var refreshToken = _tokenProvider.GenerateRefreshToken();
         var expiresAt = now.AddMinutes(_options.Jwt.ExpiryMinutes);
         var refreshTokenExpiresAt = now.AddDays(_options.Jwt.RefreshTokenExpiryDays);
-        var securityStamp = _userManager.SupportsUserSecurityStamp
-            ? await _userManager.GetSecurityStampAsync(user)
-            : null;
 
         await _refreshTokenStore.SaveAsync(
             userId,
@@ -252,6 +328,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             securityStamp,
             cancellationToken);
 
+        SecurityLog.TokensIssued(_events, tenantId, userId, method);
         return AuthResult.Success(
             new AuthToken(accessToken, refreshToken, expiresAt),
             userId,
@@ -309,6 +386,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// <inheritdoc />
     public async Task<AuthResult> VerifyTwoFactorCodeAsync(string twoFactorToken, string provider, string code, string tenantId, CancellationToken cancellationToken = default)
     {
+        EnsureTenantMembershipIsProven();
         var ticket = await ReadTwoFactorTokenAsync(twoFactorToken, cancellationToken);
         if (ticket == null || !string.Equals(ticket.TenantId, tenantId, StringComparison.Ordinal))
             return AuthResult.Failure(InvalidSession);
@@ -323,7 +401,12 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         // Count the attempt before checking the code, so concurrent guesses cannot all slip under the limit.
         var attempts = await _twoFactorAttempts!.RegisterAttemptAsync(ticket.ChallengeId, ticket.ExpiresAt, cancellationToken);
         if (attempts > MaxTwoFactorAttemptsPerToken)
+        {
+            // Every attempt past the limit is logged: with concurrent attempts no single one is sure to see the exact
+            // count at which the challenge ran out.
+            SecurityLog.TwoFactorChallengeExhausted(_events, ticket.TenantId, await _userManager.GetUserIdAsync(user));
             return AuthResult.Failure(InvalidCode);
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         var valid = await _userManager.VerifyTwoFactorTokenAsync(user, provider, code);
@@ -332,8 +415,25 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             // The per-token count above already holds this failure, even if this update fails.
             // If the failure cannot be recorded (for example a concurrency conflict that survives the retries),
             // the challenge is spent: no further code is accepted for this token.
-            if (_userManager.SupportsUserLockout && !await RecordFailedAttemptAsync(user))
-                await _twoFactorAttempts!.ExhaustAsync(ticket.ChallengeId, ticket.ExpiresAt, CancellationToken.None);
+            var userId = await _userManager.GetUserIdAsync(user);
+            SecurityLog.TwoFactorCodeFailed(_events, ticket.TenantId, userId);
+            var exhausted = attempts >= MaxTwoFactorAttemptsPerToken;
+            if (_userManager.SupportsUserLockout)
+            {
+                var recorded = await RecordFailedAttemptAsync(user);
+                if (recorded == null)
+                {
+                    await _twoFactorAttempts!.ExhaustAsync(ticket.ChallengeId, ticket.ExpiresAt, CancellationToken.None);
+                    exhausted = true;
+                }
+                else if (await _userManager.IsLockedOutAsync(recorded))
+                {
+                    // Wrong codes count toward the Identity lockout too.
+                    SecurityLog.AccountLockedOut(_events, ticket.TenantId, userId);
+                }
+            }
+
+            if (exhausted) SecurityLog.TwoFactorChallengeExhausted(_events, ticket.TenantId, userId);
             return AuthResult.Failure(InvalidCode);
         }
 
@@ -361,7 +461,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             user = reset;
         }
 
-        return await BuildAuthenticatedResultAsync(user, ticket.TenantId, null, cancellationToken);
+        return await BuildAuthenticatedResultAsync(user, ticket.TenantId, null, ByTwoFactor, cancellationToken);
     }
 
     private sealed record TwoFactorTicket(TUser User, string TenantId, string ChallengeId, DateTimeOffset ExpiresAt, string Stamp);
@@ -427,8 +527,9 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// stamp; the user is then reloaded and the increment retried, a bounded number of times.
     /// </summary>
     /// <returns><see langword="true"/> when the failure was recorded.</returns>
-    private async Task<bool> RecordFailedAttemptAsync(TUser user)
-        => await RetryOnConcurrencyAsync(user, u => _userManager.AccessFailedAsync(u)) != null;
+    /// <returns>The (possibly reloaded) user once the failure is recorded; <see langword="null"/> when it could not be.</returns>
+    private Task<TUser?> RecordFailedAttemptAsync(TUser user)
+        => RetryOnConcurrencyAsync(user, u => _userManager.AccessFailedAsync(u));
 
     /// <summary>
     /// Runs a user update; on a concurrency conflict, reloads the user and, if <paramref name="stillValid"/>
@@ -507,6 +608,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// <inheritdoc />
     public async Task<AuthResult> RefreshAsync(string refreshToken, CancellationToken cancellationToken = default)
     {
+        EnsureTenantMembershipIsProven();
         var tenantId = _tenantContext?.TenantId;
         if (string.IsNullOrEmpty(tenantId) || string.IsNullOrEmpty(refreshToken))
             return AuthResult.Failure(InvalidRefreshToken);
@@ -514,35 +616,63 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         // Atomic: of two concurrent refreshes with one token, only one gets past this line.
         var consumed = await _refreshTokenStore.ConsumeAsync(refreshToken, tenantId, cancellationToken);
         if (consumed is not { Succeeded: true } || string.IsNullOrEmpty(consumed.UserId))
+        {
+            switch (consumed?.Status)
+            {
+                case RefreshTokenConsumeStatus.Reused:
+                    SecurityLog.RefreshTokenReused(_events, tenantId, consumed.UserId, consumed.FamilyId);
+                    break;
+                case RefreshTokenConsumeStatus.TenantMismatch:
+                    SecurityLog.RefreshTokenTenantMismatch(_events, tenantId);
+                    break;
+                case RefreshTokenConsumeStatus.Consumed:
+                    // A store that consumed the token but reported no user: the token is spent and nothing is issued.
+                    SecurityLog.RefreshRefused(_events, tenantId, null, "InvalidStoreResult");
+                    break;
+                default:
+                    SecurityLog.RefreshRefused(_events, tenantId, null, consumed?.Status.ToString() ?? "NotFound");
+                    break;
+            }
+
             return AuthResult.Failure(InvalidRefreshToken);
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         var user = await _userManager.FindByIdAsync(consumed.UserId);
-        if (user == null || IsInactive(user)) return AuthResult.Failure(InvalidRefreshToken);
+        if (user == null || IsInactive(user))
+            return RefreshRefused(consumed.UserId, user == null ? "UnknownUser" : "Inactive");
 
         if (_userManager.SupportsUserLockout && await _userManager.IsLockedOutAsync(user))
-            return AuthResult.Failure(InvalidRefreshToken);
+            return RefreshRefused(consumed.UserId, "LockedOut");
 
         if (!await _signInManager.CanSignInAsync(user))
-            return AuthResult.Failure(InvalidRefreshToken);
+            return RefreshRefused(consumed.UserId, "NotAllowed");
 
         if (_userManager.SupportsUserSecurityStamp)
         {
             var stamp = await _userManager.GetSecurityStampAsync(user);
             if (consumed.SecurityStamp == null || !string.Equals(stamp, consumed.SecurityStamp, StringComparison.Ordinal))
-                return AuthResult.Failure(InvalidRefreshToken);
+                return RefreshRefused(consumed.UserId, "StampChanged");
         }
 
-        var refreshed = await BuildAuthenticatedResultAsync(user, tenantId, consumed.FamilyId, cancellationToken);
+        var refreshed = await BuildAuthenticatedResultAsync(user, tenantId, consumed.FamilyId, ByRefresh, cancellationToken);
         // A failing IIdentityValidator is reported like every other refresh failure.
         return refreshed.Succeeded ? refreshed : AuthResult.Failure(InvalidRefreshToken);
+
+        AuthResult RefreshRefused(string userId, string reason)
+        {
+            SecurityLog.RefreshRefused(_events, tenantId, userId, reason);
+            return AuthResult.Failure(InvalidRefreshToken);
+        }
     }
 
     /// <inheritdoc />
     /// <remarks>
     /// Revokes every refresh token of the authenticated user, in every session, and renews the security stamp.
-    /// Access tokens already issued stay valid until they expire (<see cref="JwtSettings.ExpiryMinutes"/>,
-    /// 60 minutes by default), because JWT validation does not consult the server. Returns <see langword="false"/>
+    /// Access tokens already issued, including the one of this request, stop working at once with
+    /// <see cref="JwtSettings.ValidateSecurityStamp"/> on (the default) and a user store that keeps security stamps;
+    /// otherwise they stay valid until they expire (<see cref="JwtSettings.ExpiryMinutes"/>, plus at most
+    /// <see cref="JwtSettings.MaximumClockSkew"/>). Returns <see langword="false"/>
     /// when no <see cref="ISecurityDataProvider"/> was supplied to the constructor, and, with the tokens already
     /// revoked, when renewing the security stamp fails. A user store without security stamps only has its tokens revoked.
     /// </remarks>
@@ -554,10 +684,12 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         // Revoke under the stored id: tokens are saved under GetUserIdAsync.
         // Last cancellation point: the revocation and the stamp renewal then run to the end.
         cancellationToken.ThrowIfCancellationRequested();
-        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), CancellationToken.None);
+        var signedOutId = await _userManager.GetUserIdAsync(user);
+        await _refreshTokenStore.RevokeAllForUserAsync(signedOutId, CancellationToken.None);
+        SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, signedOutId, "SignOut");
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
-        var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user, _securityDbContext as DbContext);
         return stampResult.Succeeded;
     }
 

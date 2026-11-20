@@ -144,6 +144,8 @@ public class CredentialHeaderPipelineTests
                 builder.Services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>(o =>
                 {
                     o.Jwt.Secret = "credential-pipeline-signing-key-32-bytes!!";
+                    // The token is hand-signed for a user the store does not hold; this test is about the tenant, not the session.
+                    o.Jwt.ValidateSecurityStamp = false;
                     o.Jwt.Issuer = "iss";
                     o.Jwt.Audience = "aud";
                     o.AllowUnverifiedTenantMembership = true;

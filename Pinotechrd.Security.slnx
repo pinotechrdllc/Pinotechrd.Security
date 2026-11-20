@@ -5,6 +5,8 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Pinotechrd.Security.Tests/Pinotechrd.Security.Tests.csproj" />
+    <Project Path="tests/MultiNode/MultiNodeHost/MultiNodeHost.csproj" />
+    <Project Path="tests/MultiNode/MultiNodeTests/MultiNodeTests.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Pinotechrd.Security.SampleApi/Pinotechrd.Security.SampleApi.csproj" />

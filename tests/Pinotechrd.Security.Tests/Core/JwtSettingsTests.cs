@@ -40,9 +40,10 @@ public class JwtSettingsTests
     private static async Task StartGenericHostAsync(Action<PinotechrdSecurityOptions>? configure)
     {
         var builder = Host.CreateApplicationBuilder();
+        builder.Services.AllowEphemeralSecurityState();
         builder.Logging.ClearProviders();
         var databaseName = Guid.NewGuid().ToString();
-                builder.Services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(databaseName));
+        builder.Services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(databaseName));
         builder.Services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>(o =>
         {
             configure?.Invoke(o);
@@ -107,6 +108,99 @@ public class JwtSettingsTests
         var act = () => StartGenericHostAsync(ConfigureValid);
 
         await act.Should().NotThrowAsync();
+    }
+
+    // ---- Lifetimes and clock skew ----------------------------------------------------------------
+
+    [Fact]
+    public void Defaults_ShouldBeAFifteenMinuteAccessToken_SevenDayRefreshToken_AndOneMinuteSkew()
+    {
+        var settings = new JwtSettings();
+
+        settings.ExpiryMinutes.Should().Be(15);
+        settings.RefreshTokenExpiryDays.Should().Be(7);
+        settings.MaximumClockSkew.Should().Be(TimeSpan.FromMinutes(1));
+    }
+
+    [Theory]
+    [InlineData(int.MinValue, false)]
+    [InlineData(-1, false)]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    [InlineData(60, true)]
+    [InlineData(61, false)]
+    [InlineData(int.MaxValue, false)]
+    public async Task HostStart_ShouldAcceptExpiryMinutesOnlyFromOneToSixty(int minutes, bool accepted)
+    {
+        var act = () => StartGenericHostAsync(o => { ConfigureValid(o); o.Jwt.ExpiryMinutes = minutes; });
+
+        if (accepted) await act.Should().NotThrowAsync();
+        else await act.Should().ThrowAsync<OptionsValidationException>().WithMessage("*Jwt.ExpiryMinutes must be between 1 and 60*");
+    }
+
+    [Theory]
+    [InlineData(-1, false)]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    [InlineData(90, true)]
+    [InlineData(91, false)]
+    public async Task HostStart_ShouldAcceptRefreshTokenExpiryDaysOnlyFromOneToNinety(int days, bool accepted)
+    {
+        var act = () => StartGenericHostAsync(o => { ConfigureValid(o); o.Jwt.RefreshTokenExpiryDays = days; });
+
+        if (accepted) await act.Should().NotThrowAsync();
+        else await act.Should().ThrowAsync<OptionsValidationException>().WithMessage("*Jwt.RefreshTokenExpiryDays must be between 1 and 90*");
+    }
+
+    public static TheoryData<TimeSpan, bool> SkewBounds => new()
+    {
+        { TimeSpan.FromTicks(-1), false },
+        { TimeSpan.Zero, true },
+        { TimeSpan.FromMinutes(5), true },
+        { TimeSpan.FromMinutes(5) + TimeSpan.FromTicks(1), false },
+        { TimeSpan.MaxValue, false },
+    };
+
+    [Theory]
+    [MemberData(nameof(SkewBounds))]
+    public async Task HostStart_ShouldAcceptMaximumClockSkewOnlyFromZeroToFiveMinutes(TimeSpan skew, bool accepted)
+    {
+        var act = () => StartGenericHostAsync(o => { ConfigureValid(o); o.Jwt.MaximumClockSkew = skew; });
+
+        if (accepted) await act.Should().NotThrowAsync();
+        else (await act.Should().ThrowAsync<OptionsValidationException>().WithMessage("*Jwt.MaximumClockSkew must be between zero and 5 minutes*"))
+            .Which.Message.Should().NotContain("JwtBearerOptions", "the bearer policy check skips while the security options are invalid");
+    }
+
+    [Theory]
+    [MemberData(nameof(SkewBounds))]
+    public async Task HostStart_ShouldAcceptSecurityStampValidationIntervalOnlyFromZeroToFiveMinutes(TimeSpan interval, bool accepted)
+    {
+        var act = () => StartGenericHostAsync(o => { ConfigureValid(o); o.Jwt.SecurityStampValidationInterval = interval; });
+
+        if (accepted) await act.Should().NotThrowAsync();
+        else await act.Should().ThrowAsync<OptionsValidationException>().WithMessage("*Jwt.SecurityStampValidationInterval must be between zero and 5 minutes*");
+    }
+
+    [Fact]
+    public void StampCheckDefaults_ShouldBeOn_AndReadTheStoreOnEveryRequest()
+    {
+        var settings = new JwtSettings();
+
+        settings.ValidateSecurityStamp.Should().BeTrue();
+        settings.SecurityStampValidationInterval.Should().Be(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public void JwtTokenProvider_ShouldRefuseAnOutOfRangeLifetime()
+    {
+        var options = new PinotechrdSecurityOptions();
+        ConfigureValid(options);
+        options.Jwt.ExpiryMinutes = 0;
+
+        var act = () => new JwtTokenProvider(Microsoft.Extensions.Options.Options.Create(options));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Jwt.ExpiryMinutes*");
     }
 
     [Fact]
@@ -238,12 +332,6 @@ public class JwtSettingsTests
         + Base64Url($"{{\"id\":\"user-1\",\"tenant_id\":\"tenant-a\",\"iss\":\"{Issuer}\",\"aud\":\"{Audience}\",\"exp\":{DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds()}}}")
         + ".";
 
-    private static JwtTokenProvider Provider() =>
-        new(Microsoft.Extensions.Options.Options.Create(new PinotechrdSecurityOptions
-        {
-            Jwt = new JwtSettings { Secret = Secret, Issuer = Issuer, Audience = Audience }
-        }));
-
     public static TheoryData<string, string> RejectedTokens() => new()
     {
         { "HS512 with the same key", Sign(SecurityAlgorithms.HmacSha512) },
@@ -252,25 +340,6 @@ public class JwtSettingsTests
         { "wrong issuer", Sign(SecurityAlgorithms.HmacSha256, issuer: "someone-else") },
         { "wrong audience", Sign(SecurityAlgorithms.HmacSha256, audience: "someone-else") }
     };
-
-    [Theory]
-    [MemberData(nameof(RejectedTokens))]
-    public void GetPrincipalFromExpiredToken_ShouldReject(string name, string token)
-    {
-        var act = () => Provider().GetPrincipalFromExpiredToken(token);
-
-        act.Should().Throw<Exception>(name);
-    }
-
-    [Fact]
-    public void GetPrincipalFromExpiredToken_ShouldAcceptAnExpiredHs256Token_ForTheRightIssuerAndAudience()
-    {
-        var token = Sign(SecurityAlgorithms.HmacSha256, expires: DateTime.UtcNow.AddMinutes(-30));
-
-        var principal = Provider().GetPrincipalFromExpiredToken(token);
-
-        principal.FindFirst("id")?.Value.Should().Be("user-1");
-    }
 
     [Theory]
     [MemberData(nameof(RejectedTokens))]
@@ -295,6 +364,28 @@ public class JwtSettingsTests
         expired.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    [Fact]
+    public async Task BearerHandler_ShouldApplyTheOneMinuteDefaultSkew_NotTheFrameworksFiveMinutes()
+    {
+        await using var host = await StartSecuredHostAsync();
+
+        var withinSkew = await host.Client.SendAsync(Secured(Sign(SecurityAlgorithms.HmacSha256, expires: DateTime.UtcNow.AddSeconds(-20))));
+        var beyondSkew = await host.Client.SendAsync(Secured(Sign(SecurityAlgorithms.HmacSha256, expires: DateTime.UtcNow.AddMinutes(-2))));
+
+        withinSkew.StatusCode.Should().Be(HttpStatusCode.OK);
+        beyondSkew.StatusCode.Should().Be(HttpStatusCode.Unauthorized, "two minutes past expiry is inside the framework's 5-minute default");
+    }
+
+    [Fact]
+    public async Task BearerHandler_ShouldApplyAConfiguredZeroSkew()
+    {
+        await using var host = await StartSecuredHostAsync(o => o.Jwt.MaximumClockSkew = TimeSpan.Zero);
+
+        var expired = await host.Client.SendAsync(Secured(Sign(SecurityAlgorithms.HmacSha256, expires: DateTime.UtcNow.AddSeconds(-20))));
+
+        expired.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
     private static HttpRequestMessage Secured(string token)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, "/secured");
@@ -302,13 +393,17 @@ public class JwtSettingsTests
         return request;
     }
 
-    private static Task<InProcessHost> StartSecuredHostAsync() =>
+    private static Task<InProcessHost> StartSecuredHostAsync(Action<PinotechrdSecurityOptions>? adjust = null) =>
         InProcessHost.StartAsync(
             builder =>
             {
                 var databaseName = Guid.NewGuid().ToString();
                 builder.Services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(databaseName));
-                builder.Services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>(ConfigureValid);
+                builder.Services.AddPinotechrdSecurity<HostSecurityDbContext, HostUser, HostRole>(o =>
+                {
+                    ConfigureValid(o);
+                    adjust?.Invoke(o);
+                });
                 builder.Services.AddHostStubs();
             },
             app =>

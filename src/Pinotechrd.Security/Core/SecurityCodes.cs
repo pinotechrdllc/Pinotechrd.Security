@@ -54,6 +54,64 @@ internal static class SecurityCodes
         normalized = string.Empty;
         return false;
     }
+
+    /// <summary>
+    /// Normalises a module code: a valid code without a dot. A permission code is split at its first dot, so a module
+    /// code with a dot would be read as another module by every path but the one that names it directly.
+    /// </summary>
+    public static bool TryNormalizeModule(string? code, out string normalized)
+    {
+        if (TryNormalize(code, out normalized) && !normalized.Contains('.')) return true;
+        normalized = string.Empty;
+        return false;
+    }
+
+    /// <summary>
+    /// Normalises a permission code: <c>MODULE.PERMISSION</c>, split at the first dot, each part a valid code of its
+    /// own, as <c>CanAccessAsync(module, permission)</c> builds the code it looks for. A code without a dot, with an
+    /// empty part, or with spaces around the dot is not a permission code: no path can grant it. Each part may be up to
+    /// <see cref="MaxLength"/> characters; a code to store must also be a valid code as a whole
+    /// (<see cref="TryNormalizeStoredPermission"/>).
+    /// </summary>
+    /// <param name="code">The code to normalise.</param>
+    /// <param name="normalized">The normalised code, <c>MODULE.PERMISSION</c>.</param>
+    /// <param name="moduleCode">The normalised module part.</param>
+    public static bool TryNormalizePermission(string? code, out string normalized, out string moduleCode)
+    {
+        normalized = string.Empty;
+        moduleCode = string.Empty;
+        var trimmed = code?.Trim();
+        if (string.IsNullOrEmpty(trimmed)) return false;
+
+        var separator = trimmed.IndexOf('.');
+        if (separator < 0) return false;
+
+        // Only the whole code is trimmed, as the write paths do: spaces around the dot ("SALES . VIEW") make it invalid.
+        var modulePart = trimmed[..separator];
+        var permissionPart = trimmed[(separator + 1)..];
+        if (modulePart.Length != modulePart.Trim().Length || permissionPart.Length != permissionPart.Trim().Length
+            || !TryNormalize(modulePart, out var module)
+            || !TryNormalize(permissionPart, out var permission))
+        {
+            return false;
+        }
+
+        moduleCode = module;
+        normalized = module + "." + permission;
+        return true;
+    }
+
+    public static bool TryNormalizePermission(string? code, out string normalized) =>
+        TryNormalizePermission(code, out normalized, out _);
+
+    /// <summary>A permission code to store: a valid code as a whole (at most <see cref="MaxLength"/> characters) and
+    /// <c>MODULE.PERMISSION</c>.</summary>
+    public static bool TryNormalizeStoredPermission(string? code, out string normalized, out string moduleCode)
+    {
+        if (IsValid(code)) return TryNormalizePermission(code, out normalized, out moduleCode);
+        normalized = moduleCode = string.Empty;
+        return false;
+    }
 }
 
 /// <summary>
@@ -96,4 +154,12 @@ public static class SecurityModuleId
         bytes[8] = (byte)((bytes[8] & 0x3F) | 0x80); // RFC variant
         return new Guid(bytes, bigEndian: true);
     }
+
+    /// <summary>
+    /// Whether <paramref name="id"/> is the id of <paramref name="code"/>. A plan names its modules by id, so a module row
+    /// counts for a plan only when its id and its code agree; a row whose code was changed after it was created, or one
+    /// with a random id from before deterministic ids, does not. Never throws: an invalid code matches no id.
+    /// </summary>
+    internal static bool IsIdOf(Guid id, string? code) =>
+        SecurityCodes.TryNormalize(code, out var normalized) && FromCode(normalized) == id;
 }

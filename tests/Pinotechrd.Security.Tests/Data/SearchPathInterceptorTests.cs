@@ -57,6 +57,8 @@ public sealed class SearchPathInterceptorTests : IDisposable
             {
                 lock (Gate) return name == "search_path" ? CurrentSettingOverride ?? Path : null;
             });
+            // A non-PostgreSQL stand-in has no server process id; SQLite exposes no ProcessID either, so no pooler check.
+            Connection.CreateFunction<long?>("pg_backend_pid", () => null);
         }
 
         public object Gate { get; } = new();

@@ -1,0 +1,44 @@
+# Disposable multi-node validation environment for Pinotechrd.Security. Synthetic data only; nothing here is production.
+# PostgreSQL behind PgBouncer (session mode), Redis as the shared distributed cache. The two application nodes run as
+# separate processes on the host (see run.ps1), each with its own memory, sharing only what real nodes would share.
+name: pinotechrd-multinode
+
+services:
+  pg:
+    image: postgres:17.7
+    environment:
+      POSTGRES_DB: sec
+      POSTGRES_USER: sec_owner
+      POSTGRES_PASSWORD: owner-pass
+    ports:
+      - "57432:5432"
+    volumes:
+      - ./infra/01-roles.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sec_owner -d sec"]
+      interval: 2s
+      retries: 30
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.26.0-p0
+    depends_on:
+      pg:
+        condition: service_healthy
+    ports:
+      - "57433:5432"
+    volumes:
+      - ./infra/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./infra/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 5432"]
+      interval: 2s
+      retries: 30
+
+  redis:
+    image: redis:7.4.1-alpine
+    ports:
+      - "57379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30

@@ -8,15 +8,24 @@ namespace Pinotechrd.Security.Interfaces;
 /// Provides administrative management operations for users and roles.
 /// Encapsulates Identity infrastructure to prevent leakage into application business logic.
 /// </summary>
+/// <remarks>
+/// Every member is administrative: it acts on the user, role or tenant the caller names and does not ask who the caller
+/// is. The host must authorize the caller for the action and the object before calling (for example, only a tenant
+/// administrator may manage that tenant's users, and nobody may grant a role or permission they do not hold). What the
+/// library does guarantee is the tenant boundary of the data: users, roles and permissions are read and written in the
+/// request's tenant schema, so an identifier from another tenant is not found. For actions of the authenticated user on
+/// itself, use the self-service methods of <c>IPinotechrdAuthManager</c>.
+/// </remarks>
 /// <typeparam name="TUser">The identity user type.</typeparam>
 /// <typeparam name="TRole">The identity role type.</typeparam>
-public interface IPinotechrdSecurityManager<TUser, TRole> 
-    where TUser : class 
+public interface IPinotechrdSecurityManager<TUser, TRole>
+    where TUser : class
     where TRole : class
 {
     /// <summary>
     /// Returns all registered users.
     /// </summary>
+    /// <remarks>Administrative: the caller must be authorized to list this tenant's users.</remarks>
     Task<IEnumerable<TUser>> GetUsersAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -28,12 +37,14 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// <summary>
     /// Gets a user by email address.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
     Task<TUser?> GetUserByEmailAsync(string email, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates a user and optionally assigns roles.
     /// </summary>
     /// <remarks>
+    /// <para>Administrative: the caller must be authorized to create users in this tenant and to grant the roles it assigns.</para>
     /// <para>
     /// Every role in <paramref name="roles"/> must exist, and no name may be empty; otherwise no user is created and
     /// the method returns <c>false</c>. Repeated names are assigned once. If creating the user or assigning a role
@@ -56,8 +67,13 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     Task<bool> CreateUserAsync(TUser user, string password, IEnumerable<string>? roles = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Persists updates for an existing user.
+    /// Persists updates for an existing user. When the update deactivates the user (<c>IsActive</c> set to
+    /// <see langword="false"/>), its sessions are ended as by <see cref="SetUserActiveStatusAsync"/>: its refresh tokens
+    /// are revoked and its security stamp renewed.
     /// </summary>
+    /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
+    /// <returns><see langword="false"/> when the update failed, or when it deactivated the user but renewing the security
+    /// stamp failed: the user is then stored inactive and its refresh tokens are revoked.</returns>
     Task<bool> UpdateUserAsync(TUser user, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -80,7 +96,7 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
 
     /// <summary>
     /// Signs a user out of every session: revokes all of its refresh tokens and renews its security stamp.
-    /// Access tokens already issued stay valid until they expire.
+    /// Access tokens already issued stop working at once with <c>JwtSettings.ValidateSecurityStamp</c> on (the default) and a user store that keeps security stamps; otherwise when they expire.
     /// </summary>
     /// <remarks>Administrative: the caller must authorize acting on this user.</remarks>
     /// <returns><see langword="false"/>, with nothing changed, when the user is not found or no refresh token store is
@@ -103,31 +119,37 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// <summary>
     /// Returns all registered roles.
     /// </summary>
+    /// <remarks>Administrative: the caller must be authorized to manage this tenant's roles.</remarks>
     Task<IEnumerable<TRole>> GetRolesAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets a role by unique identifier.
     /// </summary>
+    /// <remarks>Administrative: the caller must be authorized to manage this tenant's roles.</remarks>
     Task<TRole?> GetRoleByIdAsync(string roleId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets a role by its display name.
     /// </summary>
+    /// <remarks>Administrative: the caller must be authorized to manage this tenant's roles.</remarks>
     Task<TRole?> GetRoleByNameAsync(string roleName, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates a role with an optional description.
     /// </summary>
+    /// <remarks>Administrative: the caller must be authorized to manage this tenant's roles.</remarks>
     Task<bool> CreateRoleAsync(TRole role, string? description = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Persists updates for an existing role.
     /// </summary>
+    /// <remarks>Administrative: the caller must be authorized to manage this tenant's roles.</remarks>
     Task<bool> UpdateRoleAsync(TRole role, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Deletes a role by identifier.
     /// </summary>
+    /// <remarks>Administrative: the caller must be authorized to manage this tenant's roles.</remarks>
     Task<bool> DeleteRoleAsync(string roleId, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -151,17 +173,20 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// <summary>
     /// Gets all available security permissions defined in the system.
     /// </summary>
+    /// <remarks>Administrative: the caller must be authorized to read this tenant's permission catalog.</remarks>
     Task<IEnumerable<Pinotechrd.Security.Entities.SecurityPermission>> GetPermissionsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the permission codes assigned to a specific role.
     /// </summary>
+    /// <remarks>Administrative: the caller must be authorized to manage this tenant's roles.</remarks>
     Task<IEnumerable<string>> GetRolePermissionsAsync(string roleId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Replaces the permissions assigned to a role with <paramref name="permissionCodes"/>. An empty list clears them.
     /// </summary>
     /// <remarks>
+    /// <para>Administrative: the caller must be authorized to manage this tenant's roles, and should not grant permissions it does not hold itself.</para>
     /// The replace is atomic: a failure leaves the previous assignments intact. Concurrent replaces for the same role
     /// run one after the other, so the final assignments are exactly one of the requested sets. Outside a transaction, a
     /// <c>DbUpdateException</c> from saving the new rows is retried up to five times; any other error, and the last
@@ -183,6 +208,7 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// Returns the modules on the tenant's active plan, each with its active permissions.
     /// A module that the plan does not include is absent.
     /// </summary>
+    /// <remarks>Administrative: the caller must be authorized to read this tenant's plan. <paramref name="tenantId"/> is not checked against the request's tenant: pass the resolved tenant (<c>TenantContext.TenantId</c>), never a value from the client.</remarks>
     Task<IReadOnlyList<Pinotechrd.Security.Entities.SecurityModule>> GetActiveCatalogAsync(string tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -210,8 +236,9 @@ public interface IPinotechrdSecurityManager<TUser, TRole>
     /// The context has pending changes (save or discard them first), or its provider is not relational.
     /// </exception>
     /// <returns>
-    /// <see langword="false"/>, with nothing changed, when the user id is not a guid, the user does not exist, or a
-    /// code is invalid or names a permission that does not exist.
+    /// <see langword="false"/>, with nothing changed, when the user id is not a guid, the user does not exist, an item is
+    /// <see langword="null"/>, or a code is null, empty or invalid (an empty code is refused, not skipped) or names a
+    /// permission that does not exist.
     /// </returns>
     Task<bool> ReplaceUserOverridesAsync(string userId, IEnumerable<Pinotechrd.Security.Models.UserPermissionOverride> overrides, CancellationToken cancellationToken = default);
 }

@@ -35,7 +35,14 @@ internal sealed class PostgresLikeSession : IDisposable
         {
             lock (_gate) return name == "search_path" ? Path : name == "standard_conforming_strings" ? ConformingStrings : null;
         });
+        Connection.CreateFunction("pg_backend_pid", () =>
+        {
+            lock (_gate) return ServerProcessId;
+        });
     }
+
+    /// <summary>What pg_backend_pid() answers; null (the default) is what a non-PostgreSQL stand-in gives, which skips the pooler check.</summary>
+    public long? ServerProcessId { get; set; }
 
     /// <summary>The emulated server-side search_path of this session.</summary>
     public string Path { get; private set; } = DefaultPath;

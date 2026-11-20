@@ -1,0 +1,16 @@
+# Local PostgreSQL for the sample. Synthetic data only; the passwords below are for this local container.
+services:
+  postgres:
+    image: postgres:17.7
+    environment:
+      POSTGRES_DB: sample
+      POSTGRES_USER: sample_owner
+      POSTGRES_PASSWORD: sample-owner-pass
+    ports:
+      - "55440:5432"
+    volumes:
+      - ./init-roles.sql:/docker-entrypoint-initdb.d/init-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sample_owner -d sample"]
+      interval: 2s
+      retries: 30

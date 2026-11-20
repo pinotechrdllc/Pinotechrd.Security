@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Pinotechrd.Security.Authorization;
@@ -49,9 +50,20 @@ public static class SecurityExtensions
     /// Bearer options: in a <c>PostConfigure</c> step, which runs after every <c>Configure</c>, the library sets on
     /// the final <see cref="TokenValidationParameters"/> (creating it if the application set it to null):
     /// issuer, audience, lifetime and signing-key validation on; signed tokens and expiration required; the
-    /// configured issuer, audience and key; HMAC-SHA256 as the only algorithm. Every other property the
-    /// application configures, even by replacing the whole object, is kept. Only a <c>PostConfigure</c>
-    /// registered after this call could change these settings.
+    /// configured issuer, audience and key; HMAC-SHA256 as the only algorithm; a <c>ClockSkew</c> no larger than
+    /// <see cref="JwtSettings.MaximumClockSkew"/> (a larger one is lowered to it). It also clears what would widen
+    /// those checks: <c>ValidIssuers</c>, <c>ValidAudiences</c>, the issuer, audience, lifetime and algorithm
+    /// validator delegates, and every other source of keys or signature validation. Every other property the
+    /// application configures, even by replacing the whole object, is kept.
+    /// </para>
+    /// <para>
+    /// The final bearer options are then validated against that policy, after every <c>Configure</c> and
+    /// <c>PostConfigure</c>: a <c>PostConfigure</c> registered after this call that changes any of these settings or sets a
+    /// <c>ClockSkew</c> above <see cref="JwtSettings.MaximumClockSkew"/>, fails the host at start with an <see cref="OptionsValidationException"/>
+    /// that names the setting. So do custom token handlers, a <see cref="TokenValidationParameters"/> subclass, a token
+    /// reader or pre-signature transform, and forwarding the bearer scheme's authentication to another scheme. The check
+    /// covers the options as configured; code the application runs during authentication (for example event handlers
+    /// that set a result) and other authentication schemes are the application's responsibility.
     /// </para>
     /// <para>
     /// Tenant resolution: <c>UseTenantResolution</c> also checks, right before each endpoint runs, that an
@@ -76,6 +88,9 @@ public static class SecurityExtensions
             {
                 o.Jwt = options.Jwt;
                 o.AllowUnverifiedTenantMembership = options.AllowUnverifiedTenantMembership;
+                // Opt-outs are kept once set, by an earlier Configure, configuration binding or another call.
+                o.AllowInMemoryStores |= options.AllowInMemoryStores;
+                o.AllowUnpersistedDataProtectionKeys |= options.AllowUnpersistedDataProtectionKeys;
                 o.TenantCacheExpiration = options.TenantCacheExpiration;
                 o.SetDefaultAuthenticationSchemes = options.SetDefaultAuthenticationSchemes;
                 // Keep IOptions<PinotechrdSecurityOptions>.Value.Tenancy equal to the registered TenantResolutionOptions.
@@ -103,7 +118,8 @@ public static class SecurityExtensions
         services.AddScoped(sp => new TenantCacheStore(
             sp.GetRequiredService<DbSecurityStore>(),
             sp.GetRequiredService<IDistributedCache>(),
-            sp.GetRequiredService<IOptions<PinotechrdSecurityOptions>>()));
+            sp.GetRequiredService<IOptions<PinotechrdSecurityOptions>>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()));
         services.AddScoped<ISecurityStore>(sp => sp.GetRequiredService<TenantCacheStore>());
         services.AddScoped<ISecurityCacheInvalidator>(sp => sp.GetRequiredService<TenantCacheStore>());
 
@@ -124,13 +140,22 @@ public static class SecurityExtensions
         .AddDefaultTokenProviders();
 
         services.AddScoped<ITokenProvider, JwtTokenProvider>();
+        // Run by UseTenantResolution before each endpoint (JwtSettings.ValidateSecurityStamp).
+        services.TryAddScoped<IAccessTokenSessionCheck, SecurityStampSessionCheck<TUser>>();
         // TryAdd: a store registered before this call (for example a persistent one) is kept, so the order of the
         // registrations cannot silently fall back to the in-memory default.
         services.TryAddSingleton<IRefreshTokenStore, InMemoryRefreshTokenStore>();
         services.TryAddSingleton<ITwoFactorAttemptStore, InMemoryTwoFactorAttemptStore>();
-        // Two-factor tokens need Data Protection keys shared by every instance: warn when they are not persisted.
-        services.AddHostedService<DataProtectionKeyCheck>();
+        // Outside Development, in-memory stores and unpersisted Data Protection keys (two-factor tokens) fail the start
+        // unless allowed. The registrations are read when the host starts, so a store registered after this call counts.
+        services.TryAddSingleton(new SecurityServiceRegistrations(services));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, DurableStateCheck>());
         services.AddScoped<IPinotechrdAuthManager<TUser>, PinotechrdAuthManager<TUser>>();
+        // The default data provider: the user of the request's library access token, the resolved tenant, and roles and
+        // permissions from the tenant's tables. An ISecurityDataProvider the application registers, before or after
+        // this call, replaces it.
+        services.AddHttpContextAccessor();
+        services.TryAddScoped<ISecurityDataProvider, DefaultSecurityDataProvider<TContext, TUser, TRole>>();
         services.AddScoped<ISecurityDbContext>(sp => sp.GetRequiredService<TContext>() as ISecurityDbContext ?? throw new InvalidOperationException("DbContext does not implement ISecurityDbContext"));
         services.AddScoped<IPinotechrdSecurityManager<TUser, TRole>, PinotechrdSecurityManager<TUser, TRole>>();
 
@@ -164,6 +189,23 @@ public static class SecurityExtensions
                 parameters.ValidIssuer = settings.Issuer;
                 parameters.ValidAudience = settings.Audience;
                 parameters.ValidAlgorithms = [SecurityAlgorithms.HmacSha256];
+                // A smaller skew the application chose is kept; a larger one (the framework default is 5 minutes) is
+                // lowered, so an expired token is not accepted for longer than the configured maximum.
+                if (parameters.ClockSkew > settings.MaximumClockSkew)
+                {
+                    parameters.ClockSkew = settings.MaximumClockSkew;
+                }
+
+                // Every other way to widen what those settings accept is cleared: an issuer or audience list (accepted
+                // in addition to the single value), and validator delegates, which replace the built-in issuer,
+                // audience, lifetime and algorithm checks instead of adding to them.
+                parameters.ValidIssuers = null;
+                parameters.ValidAudiences = null;
+                parameters.IssuerValidator = null;
+                parameters.IssuerValidatorUsingConfiguration = null;
+                parameters.AudienceValidator = null;
+                parameters.LifetimeValidator = null;
+                parameters.AlgorithmValidator = null;
                 // Only the configured secrets are accepted: the current one first, then the previous ones
                 // (validation only). Every other way to supply a key or skip the signature check is cleared: a key,
                 // resolver or signature validator the application set, and keys from OpenID Connect metadata
@@ -178,7 +220,32 @@ public static class SecurityExtensions
                 parameters.ConfigurationManager = null;
                 jwt.Configuration = null;
                 jwt.ConfigurationManager = null;
+
+                // Records the user id and stamp of every token this scheme validates, from the handler's own principal,
+                // before the application's handler and any claims transformation run, for the security-stamp check
+                // (JwtSettings.ValidateSecurityStamp). The application's own OnTokenValidated still runs after it.
+                var events = jwt.Events ??= new JwtBearerEvents();
+                var onTokenValidated = events.OnTokenValidated;
+                events.OnTokenValidated = async context =>
+                {
+                    // Captured before the application's handler can change the principal, kept only if that handler
+                    // did not fail or discard the authentication.
+                    var token = ValidatedAccessToken.Capture(context.Principal);
+                    await onTokenValidated(context);
+                    if (token != null && (context.Result == null || context.Result.Succeeded))
+                    {
+                        ValidatedAccessToken.Store(context.HttpContext, token);
+                    }
+                };
             });
+
+        // The PostConfigure above runs after every Configure, but a PostConfigure registered after this call runs after
+        // it. Validation runs once all of them have run: it checks the final options, so a later change that weakens
+        // the policy fails the host at start (and the first use of the options) instead of accepting tokens.
+        // Checked at start by a hosted service rather than ValidateOnStart: hosted services start after the options
+        // marked ValidateOnStart are validated, so invalid security options still fail with their own single error.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<JwtBearerOptions>, JwtBearerPolicyValidator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, JwtBearerPolicyStartupCheck>());
 
         services.AddAuthorization();
         services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();
@@ -195,7 +262,9 @@ public static class SecurityExtensions
     /// Order: after <c>UseAuthentication()</c>, before <c>UseAuthorization()</c> and <c>UseOutputCache()</c>.
     /// The middleware also installs an endpoint feature that wraps every endpoint set on the request, by routing
     /// before or after it or by a re-execution, so that after authorization and before the endpoint runs an
-    /// authenticated user's tenant claim must equal the resolved tenant (<c>400 tenant_invalid</c> otherwise). This
+    /// authenticated user's tenant claim must equal the resolved tenant (<c>400 tenant_invalid</c> otherwise), and the
+    /// library's access token must still belong to a live session (<c>401 session_revoked</c> otherwise, see
+    /// <see cref="JwtSettings.ValidateSecurityStamp"/>). This
     /// covers minimal APIs, MVC, Razor Pages and fallback endpoints, including endpoints that authenticate with
     /// their own schemes, and does not depend on where <c>UseRouting()</c> is. Skip paths are not checked.
     /// </para>

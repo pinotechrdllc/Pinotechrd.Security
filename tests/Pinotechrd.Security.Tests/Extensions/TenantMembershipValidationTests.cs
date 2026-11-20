@@ -47,6 +47,7 @@ public class TenantMembershipValidationTests
     private static async Task StartAsync(Action<IServiceCollection> configure)
     {
         var builder = Host.CreateApplicationBuilder();
+        builder.Services.AllowEphemeralSecurityState();
         builder.Logging.ClearProviders();
         configure(builder.Services);
         using var host = builder.Build();
@@ -241,5 +242,144 @@ public class TenantMembershipValidationTests
         var manager = scope.ServiceProvider.GetRequiredService<IPinotechrdAuthManager<HostUser>>();
 
         manager.Should().NotBeNull();
+    }
+
+    // ---- Options that depend on the request's tenant (one database role per tenant) ----------------------------
+
+    private static void AddOverTenantDependentContext(IServiceCollection services, bool provesMembership)
+    {
+        var database = Guid.NewGuid().ToString("N");
+        services.AddScoped<ISchemaProvider>(sp => new DbSchemaProvider(sp.GetRequiredService<TenantContext>()));
+        // As README "Database roles and poolers": scoped options built from the resolved tenant, refusing without one.
+        services.AddDbContext<SecDb>((sp, o) =>
+        {
+            var tenant = sp.GetRequiredService<TenantContext>().TenantId
+                ?? throw new InvalidOperationException("No tenant is resolved.");
+            o.UseInMemoryDatabase(database + "-" + tenant);
+            // Leaving the search path to the application is a setup that does not prove membership.
+            o.UsePinotechrdSecurity(m =>
+            {
+                m.TenantSchemaMode = provesMembership ? TenantSchemaMode.SchemaPerTenantInModel : TenantSchemaMode.SearchPath;
+                m.ApplicationTakesResponsibilityForSearchPath = !provesMembership;
+            });
+        }, contextLifetime: ServiceLifetime.Scoped, optionsLifetime: ServiceLifetime.Scoped);
+        services.AddPinotechrdSecurity<SecDb, HostUser, HostRole>(ConfigureJwt);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Start_ShouldSucceed_WhenTheContextsOptionsCannotBeBuiltWithoutATenant(bool provesMembership)
+    {
+        // Nothing can be read without a tenant, so the check moves to token issuance (see the tests below).
+        var act = () => StartAsync(services => AddOverTenantDependentContext(services, provesMembership));
+
+        await act.Should().NotThrowAsync();
+    }
+
+    private sealed class Rig(ServiceProvider provider, IServiceScope scope) : IAsyncDisposable
+    {
+        public IServiceProvider Services => scope.ServiceProvider;
+
+        public IPinotechrdAuthManager<HostUser> Auth => Services.GetRequiredService<IPinotechrdAuthManager<HostUser>>();
+
+        public Task<Pinotechrd.Security.Models.AuthResult> SignInAsync() => Auth.LoginAsync("u@a.test", "Passw0rd!x", "tenant-a");
+
+        public async ValueTask DisposeAsync()
+        {
+            scope.Dispose();
+            await provider.DisposeAsync();
+        }
+    }
+
+    private static async Task<Rig> RigAsync(bool provesMembership, Action<IServiceCollection>? after = null, Action<PinotechrdSecurityOptions>? options = null)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AllowEphemeralSecurityState();
+        AddOverTenantDependentContext(services, provesMembership);
+        if (options != null) services.Configure(options);
+        services.AddHostStubs();
+        after?.Invoke(services);
+        var provider = services.BuildServiceProvider();
+        var scope = provider.CreateScope();
+        scope.ServiceProvider.GetRequiredService<TenantContext>().SetTenant("tenant-a");
+        var users = scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<HostUser>>();
+        (await users.CreateAsync(new HostUser { UserName = "u@a.test", Email = "u@a.test" }, "Passw0rd!x")).Succeeded.Should().BeTrue();
+        return new Rig(provider, scope);
+    }
+
+    private static async Task ShouldRefuseAsync(Func<Task> act) =>
+        (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Message
+            .Should().Contain("ApplicationTakesResponsibilityForSearchPath").And.Contain("IIdentityValidator").And.Contain("AllowUnverifiedTenantMembership");
+
+    [Fact]
+    public async Task SignIn_ShouldIssueTokens_WhenTheTenantsContextProvesMembership()
+    {
+        await using var rig = await RigAsync(provesMembership: true);
+
+        (await rig.SignInAsync()).Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task SignIn_ShouldRefuseToIssueTokens_WhenTheTenantsContextDoesNotProveMembership()
+    {
+        await using var rig = await RigAsync(provesMembership: false);
+
+        await ShouldRefuseAsync(rig.SignInAsync);
+    }
+
+    [Fact]
+    public async Task RefreshAndTwoFactor_ShouldBeRefused_BeforeAnythingIsReadOrChanged()
+    {
+        var store = Substitute.For<IRefreshTokenStore>();
+        await using var rig = await RigAsync(provesMembership: false, after: s => s.AddSingleton(store));
+
+        await ShouldRefuseAsync(() => rig.Auth.RefreshAsync("some-refresh-token"));
+        await ShouldRefuseAsync(() => rig.Auth.VerifyTwoFactorCodeAsync("some-two-factor-token", "Email", "123456", "tenant-a"));
+
+        await store.DidNotReceiveWithAnyArgs().ConsumeAsync(default!, default!);
+    }
+
+    [Fact]
+    public async Task SignIn_ShouldIssueTokens_WhenTheApplicationChecksMembershipItself()
+    {
+        var validator = Substitute.For<IIdentityValidator<HostUser>>();
+        validator.ValidateAsync(Arg.Any<HostUser>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(IdentityValidationResult.Success("U"));
+        await using (var rig = await RigAsync(provesMembership: false, after: s => s.AddScoped(_ => validator)))
+        {
+            (await rig.SignInAsync()).Succeeded.Should().BeTrue("an IIdentityValidator checks membership");
+        }
+
+        await using (var rig = await RigAsync(provesMembership: false, options: o => o.AllowUnverifiedTenantMembership = true))
+        {
+            (await rig.SignInAsync()).Succeeded.Should().BeTrue("membership is allowed unverified");
+        }
+    }
+
+    [Fact]
+    public async Task SignIn_ShouldStillBeChecked_WhenTheHostReplacesISecurityDbContext()
+    {
+        // The users are read through the user store's context; replacing ISecurityDbContext must not hide it.
+        await using var rig = await RigAsync(provesMembership: false, after: s => s.AddScoped(_ => Substitute.For<ISecurityDbContext>()));
+
+        await ShouldRefuseAsync(rig.SignInAsync);
+    }
+
+    [Fact]
+    public async Task Start_ShouldLogTheDeferral_WhenTheOptionsCannotBeBuiltWithoutATenant()
+    {
+        var logs = new CapturedLogs();
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AllowEphemeralSecurityState();
+        builder.Logging.ClearProviders();
+        builder.Logging.AddProvider(logs);
+        AddOverTenantDependentContext(builder.Services, provesMembership: true);
+        using var host = builder.Build();
+        await host.StartAsync();
+        await host.StopAsync();
+
+        logs.Events(4103).Should().ContainSingle().Which.Message.Should().Contain("No tenant is resolved");
     }
 }

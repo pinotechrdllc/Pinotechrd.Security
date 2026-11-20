@@ -58,74 +58,34 @@ public class JwtTokenProviderTests
     }
 
     [Fact]
-    public void GetPrincipalFromExpiredToken_ShouldReturnPrincipalFromValidSignedToken()
+    public void GenerateAccessToken_ShouldBeValidOnlyForTheConfiguredIssuerAudienceAndSecret()
     {
-        var provider = CreateProvider();
-        var token = provider.GenerateAccessToken(new[]
-        {
-            new Claim("id", "user-123"),
-            new Claim("tenant_id", "tenant-a")
-        });
+        var token = CreateProvider().GenerateAccessToken([new Claim("id", "user-123"), new Claim("tenant_id", "tenant-a")]);
 
-        var principal = provider.GetPrincipalFromExpiredToken(token);
-
-        principal.FindFirst("id")?.Value.Should().Be("user-123");
-        principal.FindFirst("tenant_id")?.Value.Should().Be("tenant-a");
+        Validate(token, "pinotechrd-tests", "pinotechrd-clients", "super-secret-key-with-minimum-length-32")
+            .FindFirst("id")?.Value.Should().Be("user-123");
+        ((Action)(() => Validate(token, "different-issuer", "pinotechrd-clients", "super-secret-key-with-minimum-length-32")))
+            .Should().Throw<SecurityTokenException>();
+        ((Action)(() => Validate(token, "pinotechrd-tests", "different-audience", "super-secret-key-with-minimum-length-32")))
+            .Should().Throw<SecurityTokenException>();
+        ((Action)(() => Validate(token, "pinotechrd-tests", "pinotechrd-clients", "another-secret-key-with-minimum-length-32")))
+            .Should().Throw<SecurityTokenException>();
     }
 
     [Fact]
-    public void GetPrincipalFromExpiredToken_ShouldThrow_WhenIssuerDoesNotMatch()
+    public void ITokenProvider_ShouldNotOfferToReadExpiredTokens()
     {
-        var sourceProvider = CreateProvider();
-        var token = sourceProvider.GenerateAccessToken(new[]
-        {
-            new Claim("id", "user-123"),
-            new Claim("tenant_id", "tenant-a")
-        });
-
-        var options = new PinotechrdSecurityOptions
-        {
-            Jwt = new JwtSettings
-            {
-                Secret = "super-secret-key-with-minimum-length-32",
-                Issuer = "different-issuer",
-                Audience = "pinotechrd-clients",
-                ExpiryMinutes = 5
-            }
-        };
-
-        var provider = new JwtTokenProvider(Microsoft.Extensions.Options.Options.Create(options));
-
-        var act = () => provider.GetPrincipalFromExpiredToken(token);
-
-        act.Should().Throw<SecurityTokenException>();
+        // Sessions are renewed with opaque refresh tokens; reading an expired access token at any age bypassed revocation.
+        typeof(Pinotechrd.Security.Interfaces.ITokenProvider).GetMethod("GetPrincipalFromExpiredToken").Should().BeNull();
+        typeof(JwtTokenProvider).GetMethod("GetPrincipalFromExpiredToken").Should().BeNull();
     }
 
-    [Fact]
-    public void GetPrincipalFromExpiredToken_ShouldThrow_WhenAudienceDoesNotMatch()
-    {
-        var sourceProvider = CreateProvider();
-        var token = sourceProvider.GenerateAccessToken(new[]
+    private static ClaimsPrincipal Validate(string token, string issuer, string audience, string secret) =>
+        new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ValidateToken(token, new TokenValidationParameters
         {
-            new Claim("id", "user-123"),
-            new Claim("tenant_id", "tenant-a")
-        });
-
-        var options = new PinotechrdSecurityOptions
-        {
-            Jwt = new JwtSettings
-            {
-                Secret = "super-secret-key-with-minimum-length-32",
-                Issuer = "pinotechrd-tests",
-                Audience = "different-audience",
-                ExpiryMinutes = 5
-            }
-        };
-
-        var provider = new JwtTokenProvider(Microsoft.Extensions.Options.Options.Create(options));
-
-        var act = () => provider.GetPrincipalFromExpiredToken(token);
-
-        act.Should().Throw<SecurityTokenException>();
-    }
+            ValidIssuer = issuer,
+            ValidAudience = audience,
+            IssuerSigningKey = new SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(secret)),
+            ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
+        }, out _);
 }

@@ -6,6 +6,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Pinotechrd.Security.Tenancy;
 using Microsoft.EntityFrameworkCore.Storage;
 using Pinotechrd.Security.Entities;
 using Pinotechrd.Security.Enums;
@@ -34,19 +36,32 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// </summary>
     /// <remarks>
     /// Without <paramref name="refreshTokenStore"/>, deactivating a user cannot revoke its refresh tokens;
-    /// refresh still fails for an inactive user. <c>AddPinotechrdSecurity</c> registers the store.
+    /// refresh still fails for an inactive user. <c>AddPinotechrdSecurity</c> registers the store. Without
+    /// <paramref name="loggerFactory"/> no security events are logged; <paramref name="tenantContext"/> names the tenant
+    /// in them. With <paramref name="userStore"/> (the store <paramref name="userManager"/> uses), the security stamp
+    /// renewal and the deletion that end a session cannot be cancelled by the request once the revocation started.
     /// </remarks>
     public PinotechrdSecurityManager(
         UserManager<TUser> userManager,
         RoleManager<TRole> roleManager,
         ISecurityDbContext securityDb,
-        IRefreshTokenStore? refreshTokenStore = null)
+        IRefreshTokenStore? refreshTokenStore = null,
+        ILoggerFactory? loggerFactory = null,
+        TenantContext? tenantContext = null,
+        IUserStore<TUser>? userStore = null)
     {
         _userManager = userManager;
+        _userStore = userStore;
         _roleManager = roleManager;
         _securityDb = securityDb;
         _refreshTokenStore = refreshTokenStore;
+        _events = SecurityLog.Create(loggerFactory);
+        _tenantContext = tenantContext;
     }
+
+    private readonly ILogger? _events;
+    private readonly TenantContext? _tenantContext;
+    private readonly IUserStore<TUser>? _userStore;
 
     #region User Management
 
@@ -252,18 +267,63 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// Sessions are ended when the update deactivates the user: the entity was stored active (read from the context's
+    /// change tracker), and is stored inactive now. Editing a user that was already inactive changes nothing else, so
+    /// pending reset or confirmation links keep working. When the entity is not tracked by the security context (a
+    /// detached instance), its stored state is unknown and every update that stores it inactive ends its sessions.
+    /// </para>
+    /// <para>
+    /// Returns <see langword="false"/> when the update fails or, after a deactivation, when renewing the security stamp
+    /// fails (the user is then stored inactive and its refresh tokens are revoked). Once the update is stored, the
+    /// revocation runs to the end even if the request is cancelled. If another request updated the user in the
+    /// meantime, the stamp renewal reloads the tracked instance and retries, so the instance passed in may hold that
+    /// request's changes afterwards.
+    /// </para>
+    /// </remarks>
     public async Task<bool> UpdateUserAsync(TUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var wasActive = WasStoredActive(user);
         var result = await _userManager.UpdateAsync(user);
-        return result.Succeeded;
+        if (!result.Succeeded) return false;
+        if (user is not BaseSecurityUser { IsActive: false } || !wasActive) return true;
+
+        return await EndSessionsOfInactiveUserAsync(user);
+    }
+
+    /// <summary>
+    /// Whether the user was stored active before this update: the original value the security context tracks, or
+    /// <see langword="true"/> when the entity is not tracked (unknown, so the safe answer ends sessions).
+    /// </summary>
+    private bool WasStoredActive(TUser user)
+    {
+        if (user is not BaseSecurityUser || _securityDb is not DbContext context) return true;
+        var entry = context.ChangeTracker.Entries<TUser>().FirstOrDefault(e => ReferenceEquals(e.Entity, user));
+        return entry == null || entry.Property(nameof(BaseSecurityUser.IsActive)).OriginalValue is not false;
+    }
+
+    private async Task<bool> EndSessionsOfInactiveUserAsync(TUser user)
+    {
+        if (_refreshTokenStore != null)
+        {
+            var storedId = await _userManager.GetUserIdAsync(user);
+            await _refreshTokenStore.RevokeAllForUserAsync(storedId, CancellationToken.None);
+            SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, storedId, "Deactivated");
+        }
+
+        if (!_userManager.SupportsUserSecurityStamp) return true;
+        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user, _securityDb as DbContext);
+        return stampResult.Succeeded;
     }
 
     /// <inheritdoc />
     /// <remarks>
     /// The user's refresh tokens are revoked before the user is deleted. If revocation throws, the exception
     /// propagates and the user is not deleted. If the delete then fails, the method returns <c>false</c> and the
-    /// tokens stay revoked. Access tokens already issued stay valid until they expire.
+    /// tokens stay revoked. Access tokens already issued stop working once the user is deleted, with
+    /// <c>JwtSettings.ValidateSecurityStamp</c> on (the default); otherwise when they expire.
     /// </remarks>
     public async Task<bool> DeleteUserAsync(string userId, CancellationToken cancellationToken = default)
     {
@@ -276,16 +336,22 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         // Last cancellation point: once revocation starts, it and the delete run to the end, so a cancelled request
         // cannot leave the tokens half revoked.
         cancellationToken.ThrowIfCancellationRequested();
-        if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), CancellationToken.None);
+        var storedId = await _userManager.GetUserIdAsync(user);
+        if (_refreshTokenStore != null)
+        {
+            await _refreshTokenStore.RevokeAllForUserAsync(storedId, CancellationToken.None);
+            SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, storedId, "Deleted");
+        }
 
-        var result = await _userManager.DeleteAsync(user);
+        var result = await UncancellableUserWrites.DeleteAsync(_userManager, _userStore, user);
         return result.Succeeded;
     }
 
     /// <inheritdoc />
     /// <remarks>
     /// Deactivating a user also revokes all its refresh tokens and renews its security stamp, which invalidates
-    /// pending two-factor, reset and confirmation tokens. Access tokens already issued stay valid until they expire.
+    /// pending two-factor, reset and confirmation tokens. Access tokens already issued stop working at once with
+    /// <c>JwtSettings.ValidateSecurityStamp</c> on (the default); otherwise when they expire.
     /// </remarks>
     public async Task<bool> SetUserActiveStatusAsync(string userId, bool isActive, CancellationToken cancellationToken = default)
     {
@@ -304,12 +370,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
             if (!isActive)
             {
                 // The user is already stored inactive: finish the revocation even if the request is cancelled.
-                if (_refreshTokenStore != null) await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), CancellationToken.None);
-                if (_userManager.SupportsUserSecurityStamp)
-                {
-                    var stampResult = await _userManager.UpdateSecurityStampAsync(user);
-                    if (!stampResult.Succeeded) return false;
-                }
+                return await EndSessionsOfInactiveUserAsync(user);
             }
 
             return true;
@@ -330,10 +391,12 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         // Revoke under the stored id: FindByIdAsync also accepts other spellings of the same id.
         // Last cancellation point: the revocation and the stamp renewal then run to the end.
         cancellationToken.ThrowIfCancellationRequested();
-        await _refreshTokenStore.RevokeAllForUserAsync(await _userManager.GetUserIdAsync(user), CancellationToken.None);
+        var revokedId = await _userManager.GetUserIdAsync(user);
+        await _refreshTokenStore.RevokeAllForUserAsync(revokedId, CancellationToken.None);
+        SecurityLog.SessionsEnded(_events, _tenantContext?.TenantId, revokedId, "Revoked");
         if (!_userManager.SupportsUserSecurityStamp) return true;
 
-        var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+        var stampResult = await UncancellableUserWrites.RenewSecurityStampAsync(_userManager, _userStore, user, _securityDb as DbContext);
         return stampResult.Succeeded;
     }
 
@@ -501,7 +564,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         var wanted = new HashSet<string>(StringComparer.Ordinal);
         foreach (var code in permissionCodes ?? [])
         {
-            if (!SecurityCodes.TryNormalize(code, out var normalized)) return false;
+            if (!SecurityCodes.TryNormalizeStoredPermission(code, out var normalized, out _)) return false;
             wanted.Add(normalized);
         }
 
@@ -529,24 +592,16 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
     /// <inheritdoc />
     public async Task<IReadOnlyList<SecurityModule>> GetActiveCatalogAsync(string tenantId, CancellationToken cancellationToken = default)
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var codes = await (from sub in _securityDb.SystemSubscriptions
-                           join map in _securityDb.SubscriptionPlanModules on sub.PlanId equals map.PlanId
-                           join mod in _securityDb.Modules on map.ModuleId equals mod.Id
-                           where sub.TenantName == tenantId
-                                 && sub.IsActive
-                                 && sub.StartDate <= today
-                                 && (!sub.EndDate.HasValue || sub.EndDate >= today)
-                                 && mod.IsActive
-                           select mod.Code).ToListAsync(cancellationToken);
+        // Same rule as DbSecurityStore: a plan names modules by id, so a row counts only when its code belongs to its id.
+        var ids = (await DbSecurityStore.PlanModulesAsync(_securityDb, tenantId, cancellationToken)).Select(module => module.Id).ToList();
 
-        if (codes.Count == 0)
+        if (ids.Count == 0)
         {
             return [];
         }
 
         var modules = await _securityDb.Modules
-            .Where(module => module.IsActive && codes.Contains(module.Code))
+            .Where(module => module.IsActive && ids.Contains(module.Id))
             .OrderBy(module => module.DisplayOrder)
             .ToListAsync(cancellationToken);
         var moduleIds = modules.Select(module => module.Id).ToList();
@@ -593,12 +648,9 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         var byCode = new Dictionary<string, PermissionAccessType>(StringComparer.Ordinal);
         foreach (var item in overrides ?? [])
         {
-            if (string.IsNullOrWhiteSpace(item.Code))
-            {
-                continue;
-            }
-
-            if (!SecurityCodes.TryNormalize(item.Code, out var code))
+            // An empty code is invalid like any other: refusing it, instead of skipping it, keeps a Deny the caller meant
+            // to write from being reported as written.
+            if (item is null || !SecurityCodes.TryNormalizeStoredPermission(item.Code, out var code, out _))
             {
                 return false;
             }

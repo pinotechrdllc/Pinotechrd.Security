@@ -145,7 +145,9 @@ public class InMemoryRefreshTokenStoreTests
         await store.SaveAsync("user-1", "tenant-a", "other-family", expires, "family-2");
 
         (await store.ConsumeAsync("a", "tenant-a")).Status.Should().Be(RefreshTokenConsumeStatus.Consumed);
-        (await store.ConsumeAsync("a", "tenant-a")).Status.Should().Be(RefreshTokenConsumeStatus.Reused);
+        var reused = await store.ConsumeAsync("a", "tenant-a");
+        reused.Status.Should().Be(RefreshTokenConsumeStatus.Reused);
+        (reused.UserId, reused.TenantId, reused.FamilyId).Should().Be(("user-1", "tenant-a", "family-1"));
         // A token saved after the reuse is born revoked.
         await store.SaveAsync("user-1", "tenant-a", "c", expires, "family-1");
 

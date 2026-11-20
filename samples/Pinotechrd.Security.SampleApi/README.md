@@ -1,78 +1,72 @@
 # Pinotechrd.Security.SampleApi
 
-Minimal executable sample for consuming `Pinotechrd.Security` in an ASP.NET Core API.
+A runnable API on the setup the library recommends, meant to be copied:
 
-It uses `PinotechrdSecurityDbContext` with `UsePinotechrdSecurity()`, one in-memory database per tenant (standing in for one schema per tenant), and one demo user per tenant: `alice@tenant-a.test` in `tenant-a` and `bob@tenant-b.test` in `tenant-b`, both with the password `Sample-Passw0rd`. Demo only: never ship fixed credentials.
+- **PostgreSQL**, one schema per tenant (`SearchPath` mode). The application logs in as `sample_app`, which is not a superuser and cannot create anything; the owner role only provisions.
+- **The library's defaults**: `AddPinotechrdCatalogTenantStore` (active tenants from the catalog) and the default `ISecurityDataProvider` (the user of the library's token, the resolved tenant, roles and permissions from the tenant's tables). The real subscription and module checks.
+- **Durable session state**: refresh tokens and two-factor attempts in each tenant's schema, Data Protection keys persisted.
+- **Configuration**, not code, for secrets: the JWT secret, connection strings and key folder.
+
+It starts outside Development too: the library refuses in-memory stores and unpersisted keys there, and this setup has neither.
 
 ## Run
 
-```bash
-dotnet run --project samples/Pinotechrd.Security.SampleApi/Pinotechrd.Security.SampleApi.csproj
-```
-
-## Endpoints
-
-- `GET /health`
-  - No tenant required
-- `POST /api/auth/login`
-  - Anonymous. Logs in through `IPinotechrdAuthManager` for the tenant in the `TenantId` header (`tenant-a`, `tenant-b`, case-exact).
-- `POST /api/auth/refresh`
-  - Anonymous. Refreshes through `IPinotechrdAuthManager`: the token is consumed atomically for the tenant in the `TenantId` header; presenting a used token again revokes its whole family.
-- `GET /api/tenant`
-  - Shows the resolved tenant. An authenticated user's tenant always comes from its token; the `TenantId` header is used only when no user is authenticated, and a user authenticated later by an endpoint-specific scheme must match it.
-- `GET /api/secure`
-  - Protected endpoint (`[Authorize]`) to validate middleware order and auth setup
-- `GET /api/reports`
-  - Permission-protected endpoint (`Sample.Read`): the token's tenant must match the resolved tenant.
-
-## Quick Test
+Requires Docker and the .NET 10 SDK.
 
 ```bash
-curl -H "TenantId: tenant-a" http://localhost:5000/api/tenant
+cd samples/Pinotechrd.Security.SampleApi
+docker compose up -d          # PostgreSQL 17.7 on localhost:55440, roles from init-roles.sql
+dotnet run                    # Development: provisions two tenants on first start
 ```
 
-## Hardened Flow Smoke Test
+`appsettings.Development.json` holds local, development-only values. Outside Development, set them from a secret store:
+`ConnectionStrings__Security`, `Security__JwtSecret` (at least 32 random bytes), `Security__KeysPath` (storage every instance shares), and provision with your deployment pipeline instead of at start.
 
-1. Log in:
+`docker compose down -v` removes the database; delete the `.keys` folder to start over.
+
+## What is provisioned (Development)
+
+| Tenant (`TenantId` header) | User | Role | Notes |
+|---|---|---|---|
+| `tenant-a` | `alice@tenant-a.test` | seller (`SALES.VIEW`) | |
+| `tenant-a` | `carol@tenant-a.test` | none | gets `403` on `/api/sales` |
+| `tenant-a` | `mfa@tenant-a.test` | seller | two-factor by email; the code is written to the log |
+| `tenant-b` | `bob@tenant-b.test` | seller | |
+
+Password: `Sample-Passw0rd!` (demo only). Each tenant's plan includes the `SALES` module.
+
+## Walk-through
 
 ```bash
-curl -X POST http://localhost:5000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -H "TenantId: tenant-a" \
-  -d '{"email":"alice@tenant-a.test","password":"Sample-Passw0rd"}'
+# Sign in (the tenant must exist and be active in the catalog)
+curl -s -X POST http://localhost:5000/api/auth/login -H "TenantId: tenant-a" -H "Content-Type: application/json" \
+  -d '{"email":"alice@tenant-a.test","password":"Sample-Passw0rd!"}'
+
+# Permission-protected: plan has SALES and the role grants SALES.VIEW -> 200; carol -> 403
+curl -s http://localhost:5000/api/sales -H "TenantId: tenant-a" -H "Authorization: Bearer <accessToken>"
+curl -s http://localhost:5000/api/permissions -H "TenantId: tenant-a" -H "Authorization: Bearer <accessToken>"
+
+# A user of tenant-b naming tenant-a -> 401; an unknown tenant -> 400
+curl -s -X POST http://localhost:5000/api/auth/login -H "TenantId: tenant-a" -H "Content-Type: application/json" \
+  -d '{"email":"bob@tenant-b.test","password":"Sample-Passw0rd!"}'
+
+# Two-factor: login returns twoFactorToken; send the code, read it in the log, verify
+curl -s -X POST http://localhost:5000/api/auth/2fa/send -H "TenantId: tenant-a" -H "Content-Type: application/json" \
+  -d '{"token":"<twoFactorToken>","provider":"Email"}'
+curl -s -X POST http://localhost:5000/api/auth/2fa/verify -H "TenantId: tenant-a" -H "Content-Type: application/json" \
+  -d '{"token":"<twoFactorToken>","provider":"Email","code":"<code>"}'
+
+# Refresh (single use: replaying a used refresh token revokes its family)
+curl -s -X POST http://localhost:5000/api/auth/refresh -H "TenantId: tenant-a" -H "Content-Type: application/json" \
+  -d '{"refreshToken":"<refreshToken>"}'
+
+# Sign out: every session ends; the same access token now gets 401 session_revoked
+curl -s -X POST http://localhost:5000/api/auth/logout -H "TenantId: tenant-a" -H "Authorization: Bearer <accessToken>"
+curl -s http://localhost:5000/api/me -H "TenantId: tenant-a" -H "Authorization: Bearer <accessToken>"
 ```
 
-1. The same user naming another tenant is refused (`401`): she does not exist in `tenant-b`'s database.
+## Going further
 
-```bash
-curl -X POST http://localhost:5000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -H "TenantId: tenant-b" \
-  -d '{"email":"alice@tenant-a.test","password":"Sample-Passw0rd"}'
-```
-
-1. Access protected endpoints:
-
-```bash
-curl http://localhost:5000/api/secure -H "Authorization: Bearer <access-token>"
-curl http://localhost:5000/api/reports -H "Authorization: Bearer <access-token>"
-```
-
-1. Rotate refresh token:
-
-```bash
-curl -X POST http://localhost:5000/api/auth/refresh \
-  -H "Content-Type: application/json" \
-  -H "TenantId: tenant-a" \
-  -d '{"refreshToken":"<refresh-token>"}'
-```
-
-1. Prove tenant claim precedence over conflicting header:
-
-```bash
-curl http://localhost:5000/api/tenant \
-  -H "Authorization: Bearer <access-token>" \
-  -H "TenantId: tenant-b"
-```
-
-Expected result: `tenant-a` is returned because the header is never read for an authenticated user.
+- **One database role per tenant** for isolation against hostile SQL, and **poolers**: library README, "Database roles and poolers".
+- **Several instances**: register a shared `IDistributedCache` (for example Redis) and store the Data Protection keys where every instance reads them.
+- **Rate limiting** of sign-in, two-factor and refresh is the host's: library README, "For operators".
