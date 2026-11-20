@@ -151,6 +151,7 @@ public class TenantCacheRegistrationTests
     public async Task HostStart_ShouldFailWithOptionsValidationException_WhenTheCacheExpirationIsNotPositive(int seconds)
     {
         var builder = Host.CreateApplicationBuilder();
+        builder.Services.AllowEphemeralSecurityState();
         builder.Logging.ClearProviders();
         builder.Services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(Guid.NewGuid().ToString()));
         AddSecurity(builder.Services, o => o.TenantCacheExpiration = TimeSpan.FromSeconds(seconds));
@@ -166,6 +167,7 @@ public class TenantCacheRegistrationTests
     public async Task HostStart_ShouldSucceed_WhenTheCacheExpirationIsPositive()
     {
         var builder = Host.CreateApplicationBuilder();
+        builder.Services.AllowEphemeralSecurityState();
         builder.Logging.ClearProviders();
         builder.Services.AddDbContext<HostSecurityDbContext>(o => o.UseInMemoryDatabase(Guid.NewGuid().ToString()));
         AddSecurity(builder.Services, o => o.TenantCacheExpiration = TimeSpan.FromSeconds(1));

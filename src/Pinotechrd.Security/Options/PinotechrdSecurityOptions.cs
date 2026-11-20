@@ -41,6 +41,37 @@ public class PinotechrdSecurityOptions
     public bool AllowUnverifiedTenantMembership { get; set; }
 
     /// <summary>
+    /// Lets the host start outside Development with the in-memory <c>IRefreshTokenStore</c> or
+    /// <c>ITwoFactorAttemptStore</c>. Default <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// The in-memory stores are per instance and lost on restart: refresh tokens stop working, replay detection forgets
+    /// used tokens, and every instance counts its own two-factor attempts. Outside Development the host fails to start
+    /// with them unless this is set; use <c>AddPinotechrdEfRefreshTokenStore</c> and
+    /// <c>AddPinotechrdEfTwoFactorAttemptStore</c>, or register your own stores. Set it only for a single instance whose
+    /// sessions may be lost; a warning is then logged at start (event <c>4102</c>).
+    /// The stores are recognised from the service registrations: a factory, decorator or keyed registration, or a store
+    /// registered in another container, is trusted as the application's own. Once set to <see langword="true"/> (in the
+    /// <c>AddPinotechrdSecurity</c> delegate, a <c>Configure</c> or configuration binding), another
+    /// <c>AddPinotechrdSecurity</c> call does not reset it.
+    /// </remarks>
+    public bool AllowInMemoryStores { get; set; }
+
+    /// <summary>
+    /// Lets the host start outside Development when no Data Protection key repository is configured. Default
+    /// <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// Two-factor tokens are protected with Data Protection. Without a key repository shared by every instance
+    /// (<c>AddDataProtection().PersistKeysTo...()</c>), a token issued by one instance cannot be read by another or after
+    /// a restart that loses the key folder. Outside Development the host fails to start in that case unless this is set;
+    /// with it set, a warning is logged (event <c>4101</c>). Set it when the default key folder is already shared (for
+    /// example Azure App Service) or for a single instance whose key folder survives restarts. Once set to
+    /// <see langword="true"/>, another <c>AddPinotechrdSecurity</c> call does not reset it.
+    /// </remarks>
+    public bool AllowUnpersistedDataProtectionKeys { get; set; }
+
+    /// <summary>
     /// How long a tenant's subscription state and active module codes stay in the distributed cache. Default
     /// 5 minutes. Must be positive.
     /// </summary>

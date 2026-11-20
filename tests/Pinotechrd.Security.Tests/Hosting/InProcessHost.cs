@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Pinotechrd.Security.Entities;
 using NSubstitute;
 using Pinotechrd.Security.Interfaces;
+using Pinotechrd.Security.Options;
 
 namespace Pinotechrd.Security.Tests.Hosting;
 
@@ -31,11 +32,18 @@ internal sealed class InProcessHost : IAsyncDisposable
 
     public static async Task<InProcessHost> StartAsync(
         Action<WebApplicationBuilder> configureServices,
-        Action<WebApplication> configurePipeline)
+        Action<WebApplication> configurePipeline,
+        bool allowEphemeralState = true)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = Environments.Production });
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Logging.ClearProviders();
+        if (allowEphemeralState)
+        {
+            // Test hosts run as Production on purpose but keep sessions in memory, like a single ephemeral instance.
+            builder.Services.AllowEphemeralSecurityState();
+        }
+
         configureServices(builder);
 
         var app = builder.Build();
@@ -91,6 +99,17 @@ public sealed class FixedTenantStore : ITenantStore
 
 internal static class HostStubs
 {
+    /// <summary>
+    /// Lets a test host run as Production with the in-memory session stores and unpersisted Data Protection keys, like a
+    /// single ephemeral instance.
+    /// </summary>
+    public static IServiceCollection AllowEphemeralSecurityState(this IServiceCollection services) =>
+        services.PostConfigure<PinotechrdSecurityOptions>(o =>
+        {
+            o.AllowInMemoryStores = true;
+            o.AllowUnpersistedDataProtectionKeys = true;
+        });
+
     /// <summary>
     /// Registers what the host application owns: the tenant store, the security data provider, and a security engine
     /// that returns a fixed permission list. Call it after AddPinotechrdSecurity so it replaces the defaults.
