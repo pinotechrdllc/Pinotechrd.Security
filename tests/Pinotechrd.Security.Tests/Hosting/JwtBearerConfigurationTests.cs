@@ -25,7 +25,10 @@ public class JwtBearerConfigurationTests
 {
     private const string Secret = "jwt-bearer-config-test-secret-key-32-bytes!";
 
-    private static JwtBearerOptions Resolve(Action<IServiceCollection>? before = null, Action<IServiceCollection>? after = null)
+    private static JwtBearerOptions Resolve(
+        Action<IServiceCollection>? before = null,
+        Action<IServiceCollection>? after = null,
+        TimeSpan? maximumClockSkew = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -36,6 +39,7 @@ public class JwtBearerConfigurationTests
             o.Jwt.Secret = Secret;
             o.Jwt.Issuer = "the-issuer";
             o.Jwt.Audience = "the-audience";
+            if (maximumClockSkew is { } skew) o.Jwt.MaximumClockSkew = skew;
             o.AllowUnverifiedTenantMembership = true;
         });
         after?.Invoke(services);
@@ -187,7 +191,8 @@ public class JwtBearerConfigurationTests
         { "ForwardAuthenticate", o => o.ForwardAuthenticate = "other" },
         { "ForwardDefaultSelector", o => o.ForwardDefaultSelector = _ => "other" },
         { "ClockSkew", o => o.TokenValidationParameters.ClockSkew = TimeSpan.FromDays(365) },
-        { "ClockSkew", o => o.TokenValidationParameters.ClockSkew = TimeSpan.FromMinutes(5) + TimeSpan.FromTicks(1) },
+        { "ClockSkew", o => o.TokenValidationParameters.ClockSkew = TimeSpan.FromMinutes(1) + TimeSpan.FromTicks(1) },
+        { "ClockSkew", o => o.TokenValidationParameters.ClockSkew = TimeSpan.FromMinutes(5) },
     };
 
     [Theory]
@@ -209,12 +214,45 @@ public class JwtBearerConfigurationTests
     }
 
     [Fact]
-    public void ClockSkewOfExactlyFiveMinutes_ShouldBeAccepted()
+    public void ClockSkewOfExactlyTheMaximum_ShouldBeAccepted()
     {
         var options = Resolve(after: services => services.PostConfigure<JwtBearerOptions>(
-            JwtBearerDefaults.AuthenticationScheme, o => o.TokenValidationParameters.ClockSkew = TimeSpan.FromMinutes(5)));
+            JwtBearerDefaults.AuthenticationScheme, o => o.TokenValidationParameters.ClockSkew = TimeSpan.FromMinutes(1)));
 
-        options.TokenValidationParameters.ClockSkew.Should().Be(TimeSpan.FromMinutes(5));
+        options.TokenValidationParameters.ClockSkew.Should().Be(TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    public void FrameworkDefaultClockSkew_ShouldBeLoweredToTheConfiguredMaximum()
+    {
+        new TokenValidationParameters().ClockSkew.Should().Be(TimeSpan.FromMinutes(5), "that is the framework default this guards against");
+
+        Resolve().TokenValidationParameters.ClockSkew.Should().Be(TimeSpan.FromMinutes(1));
+        Resolve(maximumClockSkew: TimeSpan.FromSeconds(10)).TokenValidationParameters.ClockSkew.Should().Be(TimeSpan.FromSeconds(10));
+        Resolve(maximumClockSkew: TimeSpan.Zero).TokenValidationParameters.ClockSkew.Should().Be(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public void ALargerConsumerClockSkew_ShouldBeLowered_WhenConfiguredBeforeThePolicyRuns()
+    {
+        var options = Resolve(before: services => services.Configure<JwtBearerOptions>(
+            JwtBearerDefaults.AuthenticationScheme, o => o.TokenValidationParameters.ClockSkew = TimeSpan.FromMinutes(4)));
+
+        options.TokenValidationParameters.ClockSkew.Should().Be(TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    public void ARaisedMaximum_ShouldAllowTheFrameworkDefault_ButALaterLargerSkewShouldFail()
+    {
+        Resolve(maximumClockSkew: TimeSpan.FromMinutes(5)).TokenValidationParameters.ClockSkew.Should().Be(TimeSpan.FromMinutes(5));
+
+        var act = () => Resolve(
+            after: services => services.PostConfigure<JwtBearerOptions>(
+                JwtBearerDefaults.AuthenticationScheme, o => o.TokenValidationParameters.ClockSkew = TimeSpan.FromMinutes(3)),
+            maximumClockSkew: TimeSpan.FromMinutes(2));
+
+        act.Should().Throw<OptionsValidationException>()
+            .WithMessage("*ClockSkew must be between zero and PinotechrdSecurityOptions.Jwt.MaximumClockSkew*");
     }
 
     [Fact]
