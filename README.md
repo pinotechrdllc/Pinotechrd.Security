@@ -435,6 +435,8 @@ With migrations, run `db.Database.MigrateAsync()` in the same way, once per tena
 - In `SchemaPerTenantInModel` mode EF Core builds one model per tenant schema and keeps a bounded number of them, measured at roughly 40 to 50. Beyond that, models are evicted and rebuilt (tens of milliseconds of CPU each), and requests that rotate through many valid tenants force rebuilds.
 - Above about 40 active tenants, use `SearchPath` mode, which has one model for all tenants. The library does not offer a larger model cache.
 
+**Context pooling.** `AddDbContextPool` and `AddPooledDbContextFactory` are not supported: the context takes the tenant's `ISchemaProvider` in its constructor, so EF Core cannot create it with options alone, and a pooled instance would keep one tenant's schema across requests. Register it with `AddDbContext` (scoped).
+
 **Pre-built and compiled models.** `UseModel(...)`, including compiled models, is not supported in `SchemaPerTenantInModel` mode: such a model holds one schema, so the context throws in its constructor. It works in `SearchPath` mode, where the model has no tenant schema.
 
 **Membership.** The library does not check that a user belongs to a tenant. In the two setups above, the user is looked up in the tenant's own tables, so finding the user is what proves membership. In any other setup (a shared schema, a context of your own, or `ApplicationTakesResponsibilityForSearchPath` with a binding that does not hold), a user of one tenant can log in naming another tenant and get a token for it, unless you check membership in an `IIdentityValidator<TUser>`, which receives the user and the tenant id at login, two-factor completion and refresh.
