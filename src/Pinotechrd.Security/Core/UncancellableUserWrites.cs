@@ -37,6 +37,13 @@ internal static class UncancellableUserWrites
     /// and tries again, up to <see cref="MaxConcurrencyAttempts"/> times, so a concurrent sign-in cannot keep the old
     /// stamp alive. <paramref name="context"/> is the context that tracks the user, when there is one.
     /// </summary>
+    /// <remarks>
+    /// The reload overwrites the tracked instance with the stored values, including the other request's changes, so the
+    /// instance the caller holds is current afterwards. Without a tracking context the user is looked up again and the
+    /// caller's instance keeps its old concurrency stamp. A user deleted in between ends the retries with the failure.
+    /// If the store tracks the user in another context than <paramref name="context"/>, the lookup returns the same
+    /// stale instance and every attempt fails, as without the retry.
+    /// </remarks>
     public static async Task<IdentityResult> RenewSecurityStampAsync<TUser>(
         UserManager<TUser> userManager, IUserStore<TUser>? store, TUser user, DbContext? context = null)
         where TUser : class
@@ -59,15 +66,13 @@ internal static class UncancellableUserWrites
     private static async Task<TUser?> ReloadAsync<TUser>(UserManager<TUser> userManager, IUserStore<TUser>? store, TUser user, DbContext? context)
         where TUser : class
     {
-        // An EF Core store returns the tracked (stale) instance from a lookup, so the entry itself is reloaded.
-        if (context != null)
+        // An EF Core store returns the tracked (stale) instance from a lookup, so the entry itself is reloaded. It is
+        // found among the tracked entries, which works even for a context whose model does not map the user type.
+        var entry = context?.ChangeTracker.Entries<TUser>().FirstOrDefault(e => ReferenceEquals(e.Entity, user));
+        if (entry != null)
         {
-            var entry = context.Entry(user);
-            if (entry.State != EntityState.Detached)
-            {
-                await entry.ReloadAsync(CancellationToken.None);
-                return entry.State == EntityState.Detached ? null : user;
-            }
+            await entry.ReloadAsync(CancellationToken.None);
+            return entry.State == EntityState.Detached ? null : user;
         }
 
         if (store == null) return await userManager.FindByIdAsync(await userManager.GetUserIdAsync(user));

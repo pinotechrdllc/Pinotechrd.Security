@@ -12,4 +12,16 @@ public class StampRenewalConcurrencyTests
 
         await StampRenewalConcurrency.RevokeShouldRenewTheStampAsync(api, "user@a.test");
     }
+
+    [Theory]
+    [InlineData("Deactivate")]
+    [InlineData("UpdateUser")]
+    public async Task Deactivation_ShouldRenewTheStamp_WhenAnotherRequestEditsTheUserBeforeTheRenewal(string action)
+    {
+        await using var api = await TenantDatabaseApi.StartAsync(
+            new Dictionary<string, string[]> { ["a"] = ["user@a.test"] },
+            configureBuilder: StampRenewalConcurrency.Configure);
+
+        await StampRenewalConcurrency.EndingShouldRenewTheStampAsync(api, "user@a.test", action);
+    }
 }

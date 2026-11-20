@@ -26,4 +26,24 @@ public class PostgresStampRenewalConcurrencyTests(PostgresFixture postgres)
         await StampRenewalConcurrency.RevokeShouldRenewTheStampAsync(api, "user@a.test");
         Npgsql.NpgsqlConnection.ClearAllPools();
     }
+
+    public static IEnumerable<object[]> ModesAndActions() =>
+        PgProvisioning.Modes.SelectMany(mode => new[] { "Deactivate", "UpdateUser" }.Select(action => new object[] { mode, action }));
+
+    [Theory]
+    [MemberData(nameof(ModesAndActions))]
+    public async Task Deactivation_ShouldRenewTheStamp_WhenAnotherRequestEditsTheUserBeforeTheRenewal(TenantSchemaMode mode, string action)
+    {
+        var cs = await postgres.CreateDatabaseAsync();
+        await PgProvisioning.ProvisionAsync(cs, mode, "a");
+        await using var api = await TenantDatabaseApi.StartAsync(
+            new Dictionary<string, string[]> { ["a"] = ["user@a.test"] },
+            mode,
+            useDatabase: (options, _) => options.UseNpgsql(cs),
+            provision: false,
+            configureBuilder: StampRenewalConcurrency.Configure);
+
+        await StampRenewalConcurrency.EndingShouldRenewTheStampAsync(api, "user@a.test", action);
+        Npgsql.NpgsqlConnection.ClearAllPools();
+    }
 }
