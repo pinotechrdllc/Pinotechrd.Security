@@ -27,6 +27,8 @@ public class PinotechrdSecurityManagerOverrideTests
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
+    [InlineData("EXPORT")]
+    [InlineData("SALES.")]
     public async Task ReplaceUserOverridesAsync_ShouldRefuseAnEmptyCode_AndKeepTheStoredOverrides(string? code)
     {
         await using var rig = await SqliteSecurityManagerRig.CreateAsync();

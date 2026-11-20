@@ -135,6 +135,59 @@ public class SecurityCodesTests
         permissions.Should().OnlyContain(p => p.ModuleId == module.Id);
     }
 
+    [Theory]
+    [InlineData("VIEW")]
+    [InlineData("INVENTORY.VIEW")]
+    [InlineData("SALES.")]
+    [InlineData(".VIEW")]
+    public async Task SeedModuleAsync_ShouldRefuseAPermissionThatIsNotItsModulesCode_AndWriteNothing(string code)
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        await using var db = NewDb(connection);
+
+        var act = () => new SecuritySeeder(db).SeedModuleAsync("Sales", "sales", null, 1, [("Bad", code, null)]);
+
+        (await act.Should().ThrowAsync<ArgumentException>()).Which.Message.Should().Contain("SALES.<PERMISSION>");
+        (await db.SecurityPermissions.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task SeedModuleAsync_ShouldLeaveNothingPending_WhenALaterPermissionIsRefused()
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        await using var db = NewDb(connection);
+
+        var act = () => new SecuritySeeder(db).SeedModuleAsync("Sales", "sales", null, 1, [("View", "SALES.VIEW", null), ("Bad", "EXPORT", null)]);
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        db.ChangeTracker.HasChanges().Should().BeFalse("a refused call must not leave a half-seeded module to a later SaveChanges");
+        (await db.SecurityModules.CountAsync()).Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("sales.eu")]
+    [InlineData("")]
+    public async Task SeedModuleAsync_ShouldRefuseAModuleCodeWithADotOrInvalid(string code)
+    {
+        using var connection = SecDbFactory.OpenMemory();
+        await using var db = NewDb(connection);
+
+        var act = () => new SecuritySeeder(db).SeedModuleAsync("Sales EU", code, null, 1, [("View", code + ".VIEW", null)]);
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        db.ChangeTracker.HasChanges().Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("SALES", true)]
+    [InlineData(" sales ", true)]
+    [InlineData("SALES.EU", false)]
+    [InlineData("", false)]
+    public void TryNormalizeModule_ShouldRefuseADot(string code, bool valid)
+    {
+        SecurityCodes.TryNormalizeModule(code, out _).Should().Be(valid);
+    }
+
     [Fact]
     public async Task SeedModuleAsync_ShouldNotViolateForeignKeys_OnARelationalProvider()
     {
@@ -197,5 +250,31 @@ public class SecurityCodesTests
         await new SecuritySeeder(db).SeedModuleAsync("Sales", "sales", null, 1, SalesPermissions);
 
         (await db.SecurityPermissions.SingleAsync(p => p.Code == "SALES.VIEW")).ModuleId.Should().Be(other.Id);
+    }
+
+    [Theory]
+    [InlineData("SALES.VIEW", true, "SALES.VIEW", "SALES")]
+    [InlineData(" sales.view ", true, "SALES.VIEW", "SALES")]
+    [InlineData("SALES.REPORTS.VIEW", true, "SALES.REPORTS.VIEW", "SALES")]
+    [InlineData("VIEW", false, "", "")]
+    [InlineData(".VIEW", false, "", "")]
+    [InlineData("SALES.", false, "", "")]
+    [InlineData("SALES . VIEW", false, "", "")]
+    [InlineData(null, false, "", "")]
+    public void TryNormalizePermission_ShouldRequireModuleDotPermission(string? code, bool valid, string normalized, string module)
+    {
+        SecurityCodes.TryNormalizePermission(code, out var actual, out var actualModule).Should().Be(valid);
+        actual.Should().Be(normalized);
+        actualModule.Should().Be(module);
+    }
+
+    [Fact]
+    public void TryNormalizeStoredPermission_ShouldAlsoLimitTheWholeCode()
+    {
+        var part = new string('M', 60);
+        SecurityCodes.TryNormalizePermission(part + "." + part, out _).Should().BeTrue("each part is a valid code");
+        SecurityCodes.TryNormalizeStoredPermission(part + "." + part, out _, out _).Should().BeFalse("a stored code is at most 100 characters");
+        SecurityCodes.TryNormalizeStoredPermission("SALES.VIEW", out var stored, out var module).Should().BeTrue();
+        (stored, module).Should().Be(("SALES.VIEW", "SALES"));
     }
 }

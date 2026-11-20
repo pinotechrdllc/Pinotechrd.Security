@@ -214,6 +214,47 @@ public class PostgresPermissionReplaceTests(PostgresFixture postgres) : IAsyncLi
 
     [Theory]
     [MemberData(nameof(Modes))]
+    public async Task SeedModuleAsync_ShouldRefuseAForeignOrBarePermission_AndWriteNothing_OnPostgres(TenantSchemaMode mode)
+    {
+        await using (var db = Db(mode))
+        {
+            var act = () => new SecuritySeeder(db).SeedModuleAsync("Reports", "reports", null, 2,
+                [("View", "REPORTS.VIEW", null), ("Foreign", "CONC.VIEW", null)]);
+            await act.Should().ThrowAsync<ArgumentException>();
+            db.ChangeTracker.HasChanges().Should().BeFalse();
+        }
+
+        await using var read = Db(mode);
+        (await read.SecurityModules.AnyAsync(m => m.Code == "REPORTS")).Should().BeFalse();
+        (await read.SecurityPermissions.AnyAsync(p => p.Code == "REPORTS.VIEW")).Should().BeFalse();
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task BothWritePaths_ShouldRefuseACodeThatIsNotModuleDotPermission_AndKeepThePreviousSet_OnPostgres(TenantSchemaMode mode)
+    {
+        var (roleId, userId) = (_owners[mode].Role, _owners[mode].User);
+        await using (var db = Db(mode))
+        {
+            (await Manager(db).AssignPermissionsToRoleAsync(roleId.ToString(), SetOf(0))).Should().BeTrue();
+            (await Manager(db).ReplaceUserOverridesAsync(userId.ToString(), [new UserPermissionOverride(Code(1), PermissionAccessType.Deny)])).Should().BeTrue();
+        }
+
+        await using (var db = Db(mode))
+        {
+            (await Manager(db).AssignPermissionsToRoleAsync(roleId.ToString(), [Code(5), "CONCP05"])).Should().BeFalse();
+            (await Manager(db).ReplaceUserOverridesAsync(userId.ToString(), [new UserPermissionOverride("EXPORT", PermissionAccessType.Allow)])).Should().BeFalse();
+        }
+
+        await using var read = Db(mode);
+        (await read.RolePermissions.Where(rp => rp.RoleId == roleId).Select(rp => rp.Permission.Code).ToListAsync())
+            .Should().BeEquivalentTo(SetOf(0));
+        (await read.UserModulePermissions.Where(r => r.UserId == userId).Select(r => r.Permission.Code).ToListAsync())
+            .Should().Equal(Code(1));
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
     public async Task AssignPermissionsToRoleAsync_ShouldKeepCallerRowsAndItsOwnRows_WhenItSucceedsInsideACallerTransaction(TenantSchemaMode mode)
     {
         var roleId = _owners[mode].Role;

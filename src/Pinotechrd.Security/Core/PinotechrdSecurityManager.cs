@@ -564,7 +564,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         var wanted = new HashSet<string>(StringComparer.Ordinal);
         foreach (var code in permissionCodes ?? [])
         {
-            if (!SecurityCodes.TryNormalize(code, out var normalized)) return false;
+            if (!SecurityCodes.TryNormalizeStoredPermission(code, out var normalized, out _)) return false;
             wanted.Add(normalized);
         }
 
@@ -650,7 +650,7 @@ public class PinotechrdSecurityManager<TUser, TRole> : IPinotechrdSecurityManage
         {
             // An empty code is invalid like any other: refusing it, instead of skipping it, keeps a Deny the caller meant
             // to write from being reported as written.
-            if (item is null || !SecurityCodes.TryNormalize(item.Code, out var code))
+            if (item is null || !SecurityCodes.TryNormalizeStoredPermission(item.Code, out var code, out _))
             {
                 return false;
             }
