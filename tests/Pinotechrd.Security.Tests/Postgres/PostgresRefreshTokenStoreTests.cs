@@ -76,6 +76,44 @@ public class PostgresRefreshTokenStoreTests(PostgresFixture postgres) : IAsyncLi
 
     [Theory]
     [MemberData(nameof(Modes))]
+    public async Task RotateAsync_ShouldStoreIntoALiveFamily_AndRefuseEveryOther(TenantSchemaMode mode)
+    {
+        var store = Store(mode);
+        var (first, revokedFirst) = (NewToken(), NewToken());
+        await store.SaveAsync("rot-user", TenantA, first, In(TimeSpan.FromMinutes(10)));
+        await store.SaveAsync("rot-revoked", TenantA, revokedFirst, In(TimeSpan.FromMinutes(10)));
+        var family = (await store.ConsumeAsync(first, TenantA)).FamilyId!;
+        var revokedFamily = (await store.ConsumeAsync(revokedFirst, TenantA)).FamilyId!;
+        await store.RevokeAllForUserAsync("rot-revoked");
+
+        var next = NewToken();
+        (await store.RotateAsync(family, "rot-user", TenantA, next, In(TimeSpan.FromMinutes(10)))).Should().BeTrue();
+        (await store.ConsumeAsync(next, TenantA)).FamilyId.Should().Be(family);
+
+        var refused = NewToken();
+        (await store.RotateAsync("never-issued", "rot-user", TenantA, refused, In(TimeSpan.FromMinutes(10)))).Should().BeFalse();
+        (await store.RotateAsync(family, "someone-else", TenantA, refused, In(TimeSpan.FromMinutes(10)))).Should().BeFalse();
+        (await store.RotateAsync(revokedFamily, "rot-revoked", TenantA, refused, In(TimeSpan.FromMinutes(10)))).Should().BeFalse();
+        (await store.ValidateAsync(refused)).IsValid.Should().BeFalse("a refused rotation stores nothing");
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task RotateAsync_ShouldRefuse_AFamilyWhoseTokensHaveAllExpired(TenantSchemaMode mode)
+    {
+        var start = DateTimeOffset.UtcNow;
+        var time = new Pinotechrd.Security.Tests.Core.FakeTimeProvider(start);
+        var store = Store(mode, time: time);
+        var first = NewToken();
+        await store.SaveAsync("rot-expired", TenantA, first, start.UtcDateTime.AddMinutes(10));
+        var family = (await store.ConsumeAsync(first, TenantA)).FamilyId!;
+        time.Advance(TimeSpan.FromMinutes(11));
+
+        (await store.RotateAsync(family, "rot-expired", TenantA, NewToken(), time.GetUtcNow().UtcDateTime.AddMinutes(10))).Should().BeFalse();
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
     public async Task ValidateAsync_ShouldReturnContext_WhenTokenIsValid(TenantSchemaMode mode)
     {
         var store = Store(mode);

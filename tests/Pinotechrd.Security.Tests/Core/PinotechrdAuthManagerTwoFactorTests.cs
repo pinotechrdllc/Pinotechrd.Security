@@ -264,7 +264,7 @@ public class PinotechrdAuthManagerTwoFactorTests
         issuedClaims.Should().Contain(c => c.Type == "tenant_id" && c.Value == Tenant);
         await kit.RefreshStore.Received(1).SaveAsync(
             user.Id.ToString(), Tenant, "refresh-token", Arg.Any<DateTime>(),
-            Arg.Is<string?>(f => !string.IsNullOrEmpty(f)), Arg.Is<string?>(st => st == kit.StampOf(user)), Arg.Any<CancellationToken>());
+            Arg.Is<string?>(f => f == null), Arg.Is<string?>(st => st == kit.StampOf(user)), Arg.Any<CancellationToken>());
         await kit.UserManager.Received(1).UpdateSecurityStampAsync(user);
         kit.StampOf(user).Should().NotBe(stampBefore);
         await kit.UserManager.Received(1).ResetAccessFailedCountAsync(user);
