@@ -297,3 +297,4 @@ static readonly Pinotechrd.Security.Core.SecurityEvents.TwoFactorChallengeExhaus
 static readonly Pinotechrd.Security.Core.SecurityEvents.TwoFactorCodeFailed -> Microsoft.Extensions.Logging.EventId
 Pinotechrd.Security.Extensions.CatalogTenantStoreExtensions
 static Pinotechrd.Security.Extensions.CatalogTenantStoreExtensions.AddPinotechrdCatalogTenantStore(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Microsoft.EntityFrameworkCore.DbContextOptionsBuilder!>! configureCatalog, string? catalogSchema = "public") -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Pinotechrd.Security.Core.InMemoryRefreshTokenStore.RotateAsync(string! familyId, string! userId, string! tenantId, string! refreshToken, System.DateTime expiresAtUtc, string? securityStamp = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!

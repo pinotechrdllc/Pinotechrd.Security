@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -72,6 +73,44 @@ public class PostgresRefreshTokenStoreTests(PostgresFixture postgres) : IAsyncLi
         Convert.ToInt64(await PgProvisioning.ScalarAsync(_databases[mode], sql));
 
     // ---- Contract parity with InMemoryRefreshTokenStore --------------------------------------
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task RotateAsync_ShouldStoreIntoALiveFamily_AndRefuseEveryOther(TenantSchemaMode mode)
+    {
+        var store = Store(mode);
+        var (first, revokedFirst) = (NewToken(), NewToken());
+        await store.SaveAsync("rot-user", TenantA, first, In(TimeSpan.FromMinutes(10)));
+        await store.SaveAsync("rot-revoked", TenantA, revokedFirst, In(TimeSpan.FromMinutes(10)));
+        var family = (await store.ConsumeAsync(first, TenantA)).FamilyId!;
+        var revokedFamily = (await store.ConsumeAsync(revokedFirst, TenantA)).FamilyId!;
+        await store.RevokeAllForUserAsync("rot-revoked");
+
+        var next = NewToken();
+        (await store.RotateAsync(family, "rot-user", TenantA, next, In(TimeSpan.FromMinutes(10)))).Should().BeTrue();
+        (await store.ConsumeAsync(next, TenantA)).FamilyId.Should().Be(family);
+
+        var refused = NewToken();
+        (await store.RotateAsync("never-issued", "rot-user", TenantA, refused, In(TimeSpan.FromMinutes(10)))).Should().BeFalse();
+        (await store.RotateAsync(family, "someone-else", TenantA, refused, In(TimeSpan.FromMinutes(10)))).Should().BeFalse();
+        (await store.RotateAsync(revokedFamily, "rot-revoked", TenantA, refused, In(TimeSpan.FromMinutes(10)))).Should().BeFalse();
+        (await store.ValidateAsync(refused)).IsValid.Should().BeFalse("a refused rotation stores nothing");
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task RotateAsync_ShouldRefuse_AFamilyWhoseTokensHaveAllExpired(TenantSchemaMode mode)
+    {
+        var start = DateTimeOffset.UtcNow;
+        var time = new Pinotechrd.Security.Tests.Core.FakeTimeProvider(start);
+        var store = Store(mode, time: time);
+        var first = NewToken();
+        await store.SaveAsync("rot-expired", TenantA, first, start.UtcDateTime.AddMinutes(10));
+        var family = (await store.ConsumeAsync(first, TenantA)).FamilyId!;
+        time.Advance(TimeSpan.FromMinutes(11));
+
+        (await store.RotateAsync(family, "rot-expired", TenantA, NewToken(), time.GetUtcNow().UtcDateTime.AddMinutes(10))).Should().BeFalse();
+    }
 
     [Theory]
     [MemberData(nameof(Modes))]
@@ -616,6 +655,32 @@ public class PostgresRefreshTokenStoreTests(PostgresFixture postgres) : IAsyncLi
         replay.Should().Be(HttpStatusCode.Unauthorized);
         afterReplayOnA.Should().Be(HttpStatusCode.Unauthorized, "the replay on B revoked the family the new token belongs to");
         afterReplayOnB.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task Refresh_ShouldBeRefusedWithoutConsumingTheToken_WhileTheUserIsLockedOut(TenantSchemaMode mode)
+    {
+        await using var api = await StartHostAsync(mode, withUser: true);
+        var (_, refresh) = await api.LoginAsync(Email, TenantA);
+
+        Task<bool> SetLockoutAsync(DateTimeOffset? end) => api.InTenantAsync(TenantA, async sp =>
+        {
+            var users = sp.GetRequiredService<UserManager<HostUser>>();
+            return (await users.SetLockoutEndDateAsync((await users.FindByEmailAsync(Email))!, end)).Succeeded;
+        });
+
+        (await SetLockoutAsync(DateTimeOffset.UtcNow.AddMinutes(10))).Should().BeTrue();
+        var (locked, _) = await RefreshAsync(api, refresh);
+        var stillValid = await api.InTenantAsync(TenantA, async sp => (await sp.GetRequiredService<IRefreshTokenStore>().ValidateAsync(refresh)).IsValid);
+
+        (await SetLockoutAsync(null)).Should().BeTrue();
+        var (afterLockout, next) = await RefreshAsync(api, refresh);
+
+        locked.Should().Be(HttpStatusCode.Unauthorized);
+        stillValid.Should().BeTrue("the refused refresh left the token unconsumed");
+        afterLockout.Should().Be(HttpStatusCode.OK, "the session survived the lockout");
+        next.Should().NotBe(refresh);
     }
 
     [Theory]

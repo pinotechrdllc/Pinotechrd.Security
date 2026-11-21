@@ -7,6 +7,65 @@ namespace Pinotechrd.Security.Tests.Core;
 
 public class InMemoryRefreshTokenStoreTests
 {
+    private static async Task<string> FamilyOfAsync(InMemoryRefreshTokenStore store, string token) =>
+        (await store.ConsumeAsync(token, "tenant-a")).FamilyId!;
+
+    [Fact]
+    public async Task RotateAsync_ShouldStoreIntoTheFamily_WhileItIsLive()
+    {
+        var store = new InMemoryRefreshTokenStore();
+        await store.SaveAsync("user-1", "tenant-a", "rot-1", DateTime.UtcNow.AddMinutes(10));
+        var family = await FamilyOfAsync(store, "rot-1");
+
+        (await store.RotateAsync(family, "user-1", "tenant-a", "rot-2", DateTime.UtcNow.AddMinutes(10))).Should().BeTrue();
+
+        (await store.ConsumeAsync("rot-2", "tenant-a")).FamilyId.Should().Be(family);
+    }
+
+    [Fact]
+    public async Task RotateAsync_ShouldRefuse_AFamilyTheStoreNeverIssued()
+    {
+        var store = new InMemoryRefreshTokenStore();
+
+        (await store.RotateAsync("made-up", "user-1", "tenant-a", "rot-x", DateTime.UtcNow.AddMinutes(10))).Should().BeFalse();
+        (await store.ValidateAsync("rot-x")).IsValid.Should().BeFalse("nothing was stored");
+    }
+
+    [Theory]
+    [InlineData("user-2", "tenant-a")]
+    [InlineData("user-1", "tenant-b")]
+    public async Task RotateAsync_ShouldRefuse_AFamilyOfAnotherUserOrTenant(string user, string tenant)
+    {
+        var store = new InMemoryRefreshTokenStore();
+        await store.SaveAsync("user-1", "tenant-a", "own-1", DateTime.UtcNow.AddMinutes(10));
+        var family = await FamilyOfAsync(store, "own-1");
+
+        (await store.RotateAsync(family, user, tenant, "own-2", DateTime.UtcNow.AddMinutes(10))).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RotateAsync_ShouldRefuse_ARevokedFamily()
+    {
+        var store = new InMemoryRefreshTokenStore();
+        await store.SaveAsync("user-1", "tenant-a", "rev-1", DateTime.UtcNow.AddMinutes(10));
+        var family = await FamilyOfAsync(store, "rev-1");
+        await store.RevokeAllForUserAsync("user-1");
+
+        (await store.RotateAsync(family, "user-1", "tenant-a", "rev-2", DateTime.UtcNow.AddMinutes(10))).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RotateAsync_ShouldRefuse_AFamilyWhoseTokensHaveAllExpired()
+    {
+        var time = new Pinotechrd.Security.Tests.Core.FakeTimeProvider(DateTimeOffset.UtcNow);
+        var store = new InMemoryRefreshTokenStore(time);
+        await store.SaveAsync("user-1", "tenant-a", "exp-1", time.GetUtcNow().UtcDateTime.AddMinutes(10));
+        var family = await FamilyOfAsync(store, "exp-1");
+        time.Advance(TimeSpan.FromMinutes(11));
+
+        (await store.RotateAsync(family, "user-1", "tenant-a", "exp-2", time.GetUtcNow().UtcDateTime.AddMinutes(10))).Should().BeFalse();
+    }
+
     [Fact]
     public async Task ValidateAsync_ShouldReturnContext_WhenTokenIsValid()
     {

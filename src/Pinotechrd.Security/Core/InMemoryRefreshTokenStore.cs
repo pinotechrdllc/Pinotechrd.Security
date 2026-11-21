@@ -40,6 +40,8 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
     // Family id -> latest expiry of any token saved into it. A token is kept until its whole family has expired,
     // so replaying an old, consumed token is still recognised as reuse while the family has live tokens.
     private readonly ConcurrentDictionary<string, DateTime> _familyExpiry = new();
+    // Family id -> the user and tenant that started it, kept as long as _familyExpiry keeps the family.
+    private readonly ConcurrentDictionary<string, (string UserId, string TenantId)> _familyOwners = new();
     private readonly TimeProvider _timeProvider;
     private readonly object _purgeLock = new();
     private int _purgeThreshold = MinimumPurgeThreshold;
@@ -73,8 +75,12 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
         CancellationToken cancellationToken = default)
     {
         PurgeIfLarge();
+        Insert(userId, tenantId, refreshToken, expiresAtUtc, familyId ?? Guid.NewGuid().ToString("N"), securityStamp);
+        return Task.CompletedTask;
+    }
 
-        var family = familyId ?? Guid.NewGuid().ToString("N");
+    private void Insert(string userId, string tenantId, string refreshToken, DateTime expiresAtUtc, string family, string? securityStamp)
+    {
         var entry = new RefreshTokenEntry
         {
             UserId = userId,
@@ -89,6 +95,7 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
             throw new InvalidOperationException("This refresh token is already stored.");
         }
 
+        _familyOwners.TryAdd(family, (userId, tenantId));
         _familyExpiry.AddOrUpdate(family, expiresAtUtc, (_, existing) => existing > expiresAtUtc ? existing : expiresAtUtc);
 
         // A token saved into a family revoked meanwhile (for example by a concurrent reuse) is born revoked.
@@ -101,8 +108,38 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
 
             _revokedFamilies[family] = familyExpiry > expiresAtUtc ? familyExpiry : expiresAtUtc;
         }
+    }
 
-        return Task.CompletedTask;
+    /// <inheritdoc />
+    /// <remarks>
+    /// The family must have been started by <paramref name="userId"/> in <paramref name="tenantId"/>, still have a token
+    /// that has not expired, and not be revoked; a purged family is never recreated.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The token value is already stored.</exception>
+    public Task<bool> RotateAsync(
+        string familyId,
+        string userId,
+        string tenantId,
+        string refreshToken,
+        DateTime expiresAtUtc,
+        string? securityStamp = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(familyId);
+        // Purge first: a purge between the check and the insert could drop the family and let the insert recreate it.
+        PurgeIfLarge();
+        if (!_familyOwners.TryGetValue(familyId, out var owner)
+            || !string.Equals(owner.UserId, userId, StringComparison.Ordinal)
+            || !string.Equals(owner.TenantId, tenantId, StringComparison.Ordinal)
+            || !_familyExpiry.TryGetValue(familyId, out var latest)
+            || latest <= UtcNow
+            || _revokedFamilies.ContainsKey(familyId))
+        {
+            return Task.FromResult(false);
+        }
+
+        Insert(userId, tenantId, refreshToken, expiresAtUtc, familyId, securityStamp);
+        return Task.FromResult(true);
     }
 
     /// <inheritdoc />
@@ -248,7 +285,7 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
 
             foreach (var (family, expiry) in _familyExpiry)
             {
-                if (expiry <= now) _familyExpiry.TryRemove(family, out _);
+                if (expiry <= now && _familyExpiry.TryRemove(family, out _)) _familyOwners.TryRemove(family, out _);
             }
 
             foreach (var (family, expiry) in _revokedFamilies)

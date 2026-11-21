@@ -46,9 +46,22 @@ public class PinotechrdAuthManagerTests
         result.Token!.AccessToken.Should().Be("access-2");
         result.Token.RefreshToken.Should().Be("refresh-2");
         await kit.RefreshStore.Received(1).ConsumeAsync("refresh-1", Tenant, Arg.Any<CancellationToken>());
-        await kit.RefreshStore.Received(1).SaveAsync(
-            user.Id.ToString(), Tenant, "refresh-2", Arg.Any<DateTime>(),
-            "family-9", kit.StampOf(user), Arg.Any<CancellationToken>());
+        await kit.RefreshStore.Received(1).RotateAsync(
+            "family-9", user.Id.ToString(), Tenant, "refresh-2", Arg.Any<DateTime>(),
+            kit.StampOf(user), Arg.Any<CancellationToken>());
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_ShouldFailWithInvalidToken_WhenTheStoreNoLongerHasTheFamily()
+    {
+        var (kit, user) = NewKit();
+        Consumes(kit, "refresh-1", Consumed(user, kit.StampOf(user), "family-gone"));
+        kit.RefreshStore.RotateAsync("family-gone", default!, default!, default!, default).ReturnsForAnyArgs(Task.FromResult(false));
+
+        (await kit.Manager.RefreshAsync("refresh-1")).Should().Be(InvalidToken);
+
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
     }
 
     [Fact]
@@ -101,6 +114,7 @@ public class PinotechrdAuthManagerTests
         result.Should().Be(InvalidToken);
         kit.TokenProvider.DidNotReceiveWithAnyArgs().GenerateAccessToken(default!);
         await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().RotateAsync(default!, default!, default!, default!, default);
     }
 
     [Fact]
@@ -132,6 +146,37 @@ public class PinotechrdAuthManagerTests
 
         (await kit.Manager.RefreshAsync("refresh-1")).Should().Be(InvalidToken);
         await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().RotateAsync(default!, default!, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_ShouldNotConsumeTheToken_WhenTheUserIsLockedOut()
+    {
+        var (kit, user) = NewKit();
+        kit.RefreshStore.ValidateAsync("refresh-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new RefreshTokenValidationResult(true, user.Id.ToString(), Tenant)));
+        Consumes(kit, "refresh-1", Consumed(user, kit.StampOf(user)));
+        kit.LockOut(user);
+
+        (await kit.Manager.RefreshAsync("refresh-1")).Should().Be(InvalidToken);
+
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().ConsumeAsync(default!, default!, default);
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().RotateAsync(default!, default!, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_ShouldKeepTheSessionThroughALockout_WithTheRealStore()
+    {
+        var store = new InMemoryRefreshTokenStore();
+        var kit = new AuthManagerTestKit<RefreshUser>(tenant: Tenant, refreshStore: store);
+        kit.TokenProvider.GenerateRefreshToken().Returns(_ => Guid.NewGuid().ToString("N"));
+        var user = kit.AddUser("alice@x.test");
+        var token = (await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<RefreshUser>.Password, Tenant)).Token!.RefreshToken;
+
+        kit.LockOut(user);
+        (await kit.Manager.RefreshAsync(token)).Should().Be(InvalidToken);
+        (await store.ValidateAsync(token)).IsValid.Should().BeTrue("the refused refresh did not consume the token");
     }
 
     [Fact]
@@ -143,6 +188,7 @@ public class PinotechrdAuthManagerTests
 
         (await kit.Manager.RefreshAsync("refresh-1")).Should().Be(InvalidToken);
         await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().RotateAsync(default!, default!, default!, default!, default);
     }
 
     [Fact]
@@ -154,6 +200,7 @@ public class PinotechrdAuthManagerTests
 
         (await kit.Manager.RefreshAsync("refresh-1")).Should().Be(InvalidToken);
         await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().RotateAsync(default!, default!, default!, default!, default);
     }
 
     [Fact]
@@ -164,6 +211,7 @@ public class PinotechrdAuthManagerTests
 
         (await kit.Manager.RefreshAsync("refresh-1")).Should().Be(InvalidToken);
         await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().RotateAsync(default!, default!, default!, default!, default);
     }
 
     [Fact]
@@ -468,6 +516,7 @@ public class PinotechrdAuthManagerTests
         result.Should().Be(InvalidToken);
         await validator.Received(1).ValidateAsync(user, Tenant);
         await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().RotateAsync(default!, default!, default!, default!, default);
     }
 
     [Fact]

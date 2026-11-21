@@ -264,7 +264,7 @@ public class PinotechrdAuthManagerTwoFactorTests
         issuedClaims.Should().Contain(c => c.Type == "tenant_id" && c.Value == Tenant);
         await kit.RefreshStore.Received(1).SaveAsync(
             user.Id.ToString(), Tenant, "refresh-token", Arg.Any<DateTime>(),
-            Arg.Is<string?>(f => !string.IsNullOrEmpty(f)), Arg.Is<string?>(st => st == kit.StampOf(user)), Arg.Any<CancellationToken>());
+            Arg.Is<string?>(f => f == null), Arg.Is<string?>(st => st == kit.StampOf(user)), Arg.Any<CancellationToken>());
         await kit.UserManager.Received(1).UpdateSecurityStampAsync(user);
         kit.StampOf(user).Should().NotBe(stampBefore);
         await kit.UserManager.Received(1).ResetAccessFailedCountAsync(user);
@@ -742,7 +742,7 @@ public class PinotechrdAuthManagerTwoFactorTests
         right.Succeeded.Should().BeFalse("a failure that could not be recorded spends the challenge");
         right.ErrorMessage.Should().Be(InvalidCode);
         VerifyCalls(kit).Should().Be(verifiesAfterFirst, "the code of a spent challenge is not verified");
-        Calls(kit, nameof(UserManager<TfUser>.AccessFailedAsync)).Should().BeGreaterThan(1).And.BeLessThanOrEqualTo(20);
+        Calls(kit, nameof(UserManager<TfUser>.AccessFailedAsync)).Should().BeGreaterThan(1).And.BeLessThanOrEqualTo(100);
         await AssertNoTokensIssued(kit);
     }
 

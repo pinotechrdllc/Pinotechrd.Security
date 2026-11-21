@@ -148,15 +148,42 @@ public class PinotechrdAuthManagerLoginTests
     }
 
     [Fact]
-    public async Task LoginAsync_ShouldRequestLockoutOnFailure_WhenCheckingThePassword()
+    public async Task LoginAsync_ShouldCountTheFailureItself_WhenCheckingThePassword()
     {
+        // Identity's lockoutOnFailure drops the count on a concurrency conflict; the manager counts it, with retries.
         var kit = new AuthManagerTestKit<LockoutRequestUser>();
         var user = kit.AddUser("alice@x.test");
 
         await kit.Manager.LoginAsync("alice@x.test", "wrong", "tenant-a");
 
-        await kit.SignInManager.Received(1).CheckPasswordSignInAsync(user, "wrong", true);
-        await kit.SignInManager.DidNotReceive().CheckPasswordSignInAsync(user, Arg.Any<string>(), false);
+        await kit.SignInManager.Received(1).CheckPasswordSignInAsync(user, "wrong", false);
+        await kit.UserManager.Received(1).AccessFailedAsync(user);
+    }
+
+    [Fact]
+    public async Task LoginAsync_ShouldRetryTheCount_WhenAConcurrentFailureUpdatedTheUserFirst()
+    {
+        var kit = new AuthManagerTestKit<LockoutRequestUser>();
+        var user = kit.AddUser("alice@x.test");
+        var calls = 0;
+        kit.UserManager.AccessFailedAsync(user).Returns(_ => Task.FromResult(++calls < 3
+            ? IdentityResult.Failed(new IdentityErrorDescriber().ConcurrencyFailure())
+            : IdentityResult.Success));
+
+        (await kit.Manager.LoginAsync("alice@x.test", "wrong", "tenant-a")).Succeeded.Should().BeFalse();
+
+        calls.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task LoginAsync_ShouldNotCountTheFailure_WhenTheCorrectPasswordIsGiven()
+    {
+        var kit = new AuthManagerTestKit<LockoutRequestUser>();
+        var user = kit.AddUser("alice@x.test");
+
+        (await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<LockoutRequestUser>.Password, "tenant-a")).Succeeded.Should().BeTrue();
+
+        await kit.UserManager.DidNotReceive().AccessFailedAsync(user);
     }
 
     [Fact]
@@ -194,7 +221,7 @@ public class PinotechrdAuthManagerLoginTests
         result.Token!.AccessToken.Should().Be("access-token");
         await kit.RefreshStore.Received(1).SaveAsync(
             user.Id.ToString(), "tenant-a", "refresh-token", Arg.Any<DateTime>(),
-            Arg.Is<string?>(f => !string.IsNullOrEmpty(f)), Arg.Is<string?>(st => st == kit.StampOf(user)), Arg.Any<CancellationToken>());
+            Arg.Is<string?>(f => f == null), Arg.Is<string?>(st => st == kit.StampOf(user)), Arg.Any<CancellationToken>());
         kit.Hasher.Verifications.Should().BeEmpty();
     }
 

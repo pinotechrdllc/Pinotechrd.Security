@@ -141,7 +141,10 @@ public static class SecurityExtensions
 
         services.AddScoped<ITokenProvider, JwtTokenProvider>();
         // Run by UseTenantResolution before each endpoint (JwtSettings.ValidateSecurityStamp).
-        services.TryAddScoped<IAccessTokenSessionCheck, SecurityStampSessionCheck<TUser>>();
+        services.TryAddScoped<SecurityStampSessionCheck<TUser>>();
+        services.TryAddScoped<IAccessTokenSessionCheck>(sp => sp.GetRequiredService<SecurityStampSessionCheck<TUser>>());
+        // The same check for hosts that resolve the tenant without UseTenantResolution.
+        services.TryAddScoped<IAccessTokenSessionValidator>(sp => sp.GetRequiredService<SecurityStampSessionCheck<TUser>>());
         // TryAdd: a store registered before this call (for example a persistent one) is kept, so the order of the
         // registrations cannot silently fall back to the in-memory default.
         services.TryAddSingleton<IRefreshTokenStore, InMemoryRefreshTokenStore>();

@@ -89,7 +89,14 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
         SignInManager = CreateSignInManager(UserManager);
         Engine = Substitute.For<ISecurityEngine>();
         TokenProvider = Substitute.For<ITokenProvider>();
-        RefreshStore = refreshStore ?? Substitute.For<IRefreshTokenStore>();
+        if (refreshStore == null)
+        {
+            refreshStore = Substitute.For<IRefreshTokenStore>();
+            // A rotation into the consumed token's family is stored, as a real store does while it has the family.
+            refreshStore.RotateAsync(default!, default!, default!, default!, default).ReturnsForAnyArgs(Task.FromResult(true));
+        }
+
+        RefreshStore = refreshStore;
         DataProtection = withDataProtection ? new EphemeralDataProtectionProvider() : null;
 
         UserManager.SupportsUserLockout.Returns(true);
@@ -114,6 +121,7 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
         UserManager.VerifyTwoFactorTokenAsync(Arg.Any<TUser>(), Arg.Any<string>(), Arg.Any<string>()).Returns(ci =>
             Task.FromResult(ci.ArgAt<string>(2) == CodeFor(ci.Arg<TUser>())));
         UserManager.AccessFailedAsync(Arg.Any<TUser>()).Returns(Task.FromResult(IdentityResult.Success));
+        UserManager.GetLockoutEnabledAsync(Arg.Any<TUser>()).Returns(Task.FromResult(true));
         UserManager.ResetAccessFailedCountAsync(Arg.Any<TUser>()).Returns(Task.FromResult(IdentityResult.Success));
         UserManager.GenerateTwoFactorTokenAsync(Arg.Any<TUser>(), Arg.Any<string>()).Returns(ci =>
             Task.FromResult(CodeFor(ci.Arg<TUser>())));
