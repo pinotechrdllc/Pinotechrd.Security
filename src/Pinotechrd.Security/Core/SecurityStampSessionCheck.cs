@@ -7,7 +7,9 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
 using Pinotechrd.Security.Entities;
+using Pinotechrd.Security.Interfaces;
 using Pinotechrd.Security.Options;
+using Pinotechrd.Security.Tenancy;
 
 namespace Pinotechrd.Security.Core;
 
@@ -63,6 +65,16 @@ internal sealed record ValidatedAccessToken(IReadOnlyList<string> UserIds, IRead
     public static ValidatedAccessToken From(ClaimsIdentity identity) => new(
         identity.FindAll(SecurityStampClaim.UserIdType).Select(c => c.Value).ToList(),
         identity.FindAll(SecurityStampClaim.Type).Select(c => c.Value).ToList());
+
+    /// <summary>The user id and stamp claims of <paramref name="identity"/> that <paramref name="issuer"/> issued.</summary>
+    public static ValidatedAccessToken From(ClaimsIdentity identity, string issuer) => new(
+        IssuedBy(identity, SecurityStampClaim.UserIdType, issuer),
+        IssuedBy(identity, SecurityStampClaim.Type, issuer));
+
+    public static List<string> IssuedBy(ClaimsIdentity identity, string type, string issuer) =>
+        identity.FindAll(c => string.Equals(c.Type, type, StringComparison.Ordinal) && string.Equals(c.Issuer, issuer, StringComparison.Ordinal))
+            .Select(c => c.Value)
+            .ToList();
 }
 
 /// <summary>
@@ -85,8 +97,9 @@ internal interface IAccessTokenSessionCheck
 /// nothing was recorded (the application replaced the bearer events), every authenticated identity with a claim issued
 /// by <see cref="JwtSettings.Issuer"/> is checked instead. With <see cref="JwtSettings.SecurityStampValidationInterval"/>
 /// above zero, the answer for a tenant and user is kept in <see cref="IDistributedCache"/> for that long.
+/// <see cref="IsSessionActiveAsync"/> is the public form of the same check, for hosts without <c>UseTenantResolution</c>.
 /// </remarks>
-internal sealed class SecurityStampSessionCheck<TUser> : IAccessTokenSessionCheck
+internal sealed class SecurityStampSessionCheck<TUser> : IAccessTokenSessionCheck, IAccessTokenSessionValidator
     where TUser : BaseSecurityUser
 {
     private const string CachePrefix = "pinotechrd:session:";
@@ -96,12 +109,18 @@ internal sealed class SecurityStampSessionCheck<TUser> : IAccessTokenSessionChec
     private readonly UserManager<TUser> _userManager;
     private readonly IDistributedCache _cache;
     private readonly IOptions<PinotechrdSecurityOptions> _options;
+    private readonly TenantContext? _tenantContext;
 
-    public SecurityStampSessionCheck(UserManager<TUser> userManager, IDistributedCache cache, IOptions<PinotechrdSecurityOptions> options)
+    public SecurityStampSessionCheck(
+        UserManager<TUser> userManager,
+        IDistributedCache cache,
+        IOptions<PinotechrdSecurityOptions> options,
+        TenantContext? tenantContext = null)
     {
         _userManager = userManager;
         _cache = cache;
         _options = options;
+        _tenantContext = tenantContext;
     }
 
     public async Task<bool> IsCurrentAsync(HttpContext context, string tenantId, CancellationToken cancellationToken)
@@ -117,6 +136,41 @@ internal sealed class SecurityStampSessionCheck<TUser> : IAccessTokenSessionChec
         return true;
     }
 
+    /// <inheritdoc />
+    public async Task<bool> IsSessionActiveAsync(ClaimsPrincipal principal, string tenantId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(principal);
+        if (string.IsNullOrEmpty(tenantId)) return false;
+        // The user is read through the scoped context, which follows TenantContext: when it names another tenant, the
+        // answer would come from that tenant's tables and be cached under tenantId.
+        if (_tenantContext?.TenantId is { } resolved && !string.Equals(resolved, tenantId, StringComparison.Ordinal)) return false;
+
+        var options = _options.Value;
+        var issuer = options.Jwt.Issuer;
+        if (string.IsNullOrEmpty(issuer)) return false;
+        var tenantClaimType = options.Tenancy.ClaimType;
+        var checkedAny = false;
+        foreach (var identity in principal.Identities)
+        {
+            if (!IsLibraryIdentity(identity, issuer)) continue;
+            checkedAny = true;
+
+            // Only the library's own claims count, so a claims transformation that adds an id or tenant claim of its
+            // own does not change the answer.
+            var tenants = ValidatedAccessToken.IssuedBy(identity, tenantClaimType, issuer);
+            if (tenants.Count != 1 || !string.Equals(tenants[0], tenantId, StringComparison.Ordinal)) return false;
+            if (!await IsCurrentAsync(ValidatedAccessToken.From(identity, issuer), tenantId, options.Jwt.SecurityStampValidationInterval, cancellationToken))
+                return false;
+        }
+
+        return checkedAny;
+    }
+
+    private static bool IsLibraryIdentity(ClaimsIdentity identity, string? issuer) =>
+        identity.IsAuthenticated
+        && !string.IsNullOrEmpty(issuer)
+        && identity.Claims.Any(c => string.Equals(c.Issuer, issuer, StringComparison.Ordinal));
+
     private static IEnumerable<ValidatedAccessToken> TokensOf(HttpContext context, string? issuer)
     {
         if (ValidatedAccessToken.Read(context) is { } recorded)
@@ -127,7 +181,7 @@ internal sealed class SecurityStampSessionCheck<TUser> : IAccessTokenSessionChec
 
         foreach (var identity in context.User.Identities)
         {
-            if (identity.IsAuthenticated && issuer != null && identity.Claims.Any(c => string.Equals(c.Issuer, issuer, StringComparison.Ordinal)))
+            if (IsLibraryIdentity(identity, issuer))
             {
                 yield return ValidatedAccessToken.From(identity);
             }

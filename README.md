@@ -506,9 +506,33 @@ Protect the keys at rest as well (`ProtectKeysWith*`). Outside Development, the 
   - Cost: one user lookup per authenticated request; in `SearchPath` mode that also opens a connection and binds and verifies the path, even for endpoints that otherwise use no database. `SecurityStampValidationInterval` reuses the answer for a tenant and user through `IDistributedCache`, and a change then takes up to that long to apply, also for the library's own sign-out and revocation (the cached answer is not cleared). The default distributed cache is in memory and per instance: with several instances, register a shared one. A cache or database error gives `500`, never an accepted token.
   - Order: the check runs right before the endpoint, after authorization, so a revoked token without a required permission gets `403` first. An endpoint that allows anonymous access (`[AllowAnonymous]`, such as sign-in and refresh) runs as anonymous instead of being refused, so a client that still sends its ended token can sign in again.
   - The token checked is the one the bearer scheme recorded in its `OnTokenValidated` event, before claims transformations; your own `OnTokenValidated` still runs. If you replace `JwtBearerOptions.Events` after `AddPinotechrdSecurity` or set `EventsType`, the record is lost and the check falls back to identities whose claims keep the issuer `Jwt.Issuer`, which a claims transformation that re-creates claims does not.
-  - Not covered: skip paths of the tenant middleware, requests that run no endpoint (terminal middleware such as `app.Run`, output-cache hits), long-lived connections after they connect (for example SignalR), identities of other authentication schemes, and hosts that do not call `UseTenantResolution`.
+  - Not covered: skip paths of the tenant middleware, requests that run no endpoint (terminal middleware such as `app.Run`, output-cache hits), long-lived connections after they connect (for example SignalR), identities of other authentication schemes, and hosts that do not call `UseTenantResolution` (see below).
   - A token without the `sstamp` claim is refused while the user store keeps security stamps. Access tokens you issue yourself with `ITokenProvider.GenerateAccessToken` lack it: issue them through `IPinotechrdAuthManager` instead, or turn the check off.
   - With `ValidateSecurityStamp` off, an access token already issued stays valid until it expires (`ExpiryMinutes`, 15 by default, plus at most `MaximumClockSkew`): JWT validation alone does not ask the server.
+- **Hosts that resolve the tenant without `UseTenantResolution`** run the same check through `IAccessTokenSessionValidator`, which `AddPinotechrdSecurity` registers as a scoped service. Call it after authentication, once your scoped data access points at the tenant you resolved, and answer `false` with `401`:
+
+  ```csharp
+  app.Use(async (context, next) =>
+  {
+      // ... authenticate, resolve the tenant and point the scoped context at it ...
+      // Any authenticated identity, not only the first. A principal that has no library token (for example one
+      // authenticated only by another scheme) gets false: skip the check for those endpoints yourself.
+      if (context.User.Identities.Any(i => i.IsAuthenticated))
+      {
+          var sessions = context.RequestServices.GetRequiredService<IAccessTokenSessionValidator>();
+          if (!await sessions.IsSessionActiveAsync(context.User, tenantId, context.RequestAborted))
+          {
+              context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+              context.Response.Headers.WWWAuthenticate = "Bearer error=\"invalid_token\"";
+              return;
+          }
+      }
+
+      await next(context);
+  });
+  ```
+
+  `IsSessionActiveAsync(principal, tenantId)` returns `true` only when every authenticated identity of the principal with claims issued by `Jwt.Issuer` carries one user id and one tenant claim equal to `tenantId` (only claims with that issuer are read), and its user exists in that tenant, is active and still has the session the token was issued for. It returns `false` after sign-out, `RevokeUserSessionsAsync`, a password change or reset, deactivation (`SetUserActiveStatusAsync(id, false)` or `UpdateUserAsync` with `IsActive = false`), deletion, and the other stamp renewals listed above; for a principal with no such identity; and for tokens that do not carry the session (issued before 1.2.0-preview.5 or built with `ITokenProvider.GenerateAccessToken`). It also returns `false` when the request's `TenantContext` is set to another tenant. It always checks, whatever `ValidateSecurityStamp` says, and honours `SecurityStampValidationInterval`. Resolve it per request, never in a singleton. How the token carries its session is not part of the contract: do not compare the token's claims yourself.
 - The default `InMemoryRefreshTokenStore` loses tokens on restart and does not share them between instances. It refuses a token value that is already stored. Above 10,000 entries it drops the tokens of families whose tokens have all expired, and expired revoked families. A used token is kept while its family has a live token, so replaying it is still detected; memory therefore grows with the number of refreshes per session lifetime, which is one more reason to rate limit refresh. For production use `AddPinotechrdEfRefreshTokenStore` (below), or register your own `IRefreshTokenStore` before or after `AddPinotechrdSecurity`; the default is only added when none is registered.
 
 ### Self-service vs administrative APIs

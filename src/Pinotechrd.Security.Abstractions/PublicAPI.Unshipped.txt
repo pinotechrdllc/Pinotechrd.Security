@@ -435,3 +435,5 @@ Pinotechrd.Security.Interfaces.ITwoFactorAttemptStore.ExhaustAsync(string! chall
 Pinotechrd.Security.Interfaces.ISecurityCacheInvalidator
 Pinotechrd.Security.Interfaces.ISecurityCacheInvalidator.InvalidateTenantAsync(string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Pinotechrd.Security.Interfaces.IPinotechrdSecurityManager<TUser, TRole>.RevokeUserSessionsAsync(string! userId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Pinotechrd.Security.Interfaces.IAccessTokenSessionValidator
+Pinotechrd.Security.Interfaces.IAccessTokenSessionValidator.IsSessionActiveAsync(System.Security.Claims.ClaimsPrincipal! principal, string! tenantId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
