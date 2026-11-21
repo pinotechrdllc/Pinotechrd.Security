@@ -10,6 +10,10 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 - **`IAccessTokenSessionValidator`**, a public form of the check that refuses access tokens of ended sessions, for hosts that resolve the tenant without `UseTenantResolution`. `AddPinotechrdSecurity` registers it as a scoped service. `IsSessionActiveAsync(principal, tenantId, cancellationToken)` returns `true` only when every authenticated identity of the principal with claims issued by `Jwt.Issuer` names that tenant and its user exists there, is active and still has the session the token was issued for; it returns `false` after sign-out, `RevokeUserSessionsAsync`, a password change or reset, deactivation or deletion, and for a principal without such an identity. It always checks, whatever `Jwt.ValidateSecurityStamp` says, and honours `Jwt.SecurityStampValidationInterval`. Call it once the request's data access points at the resolved tenant. See README, "Refresh tokens and sign-out".
 
+### Fixed
+
+- `RefreshAsync` refuses a locked-out user before consuming the refresh token: it looks the token up with `IRefreshTokenStore.ValidateAsync` and checks the owner's lockout first. Before, the token was consumed and then refused, so a lockout (which anyone who knows the user name can cause with wrong passwords) ended the user's sessions. The refresh is still refused during the lockout, and the same token works once it ends. A lockout that starts between the lookup and the consume still spends the token. A lockout set by an administrator (`SetLockoutEndDateAsync`) no longer ends sessions either: to disable an account, use `SetUserActiveStatusAsync(userId, false)` or `RevokeUserSessionsAsync(userId)`. `RefreshAsync` now calls `ValidateAsync` on every refresh when lockout is enabled; a store that throws `NotImplementedException` or `NotSupportedException` there keeps the old behaviour. Custom stores must keep `ValidateAsync` consistent with `ConsumeAsync` (a token `ValidateAsync` reports valid must belong to the tenant and user it returns).
+
 ## [1.2.0-preview.5] - 2026-11-20
 
 ### Added

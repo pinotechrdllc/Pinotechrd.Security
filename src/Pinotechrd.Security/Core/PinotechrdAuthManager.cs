@@ -65,7 +65,10 @@ namespace Pinotechrd.Security.Core;
 /// </para>
 /// <para>
 /// Refresh: the presented token is consumed atomically through <see cref="IRefreshTokenStore.ConsumeAsync"/>.
-/// A token of another tenant is refused without being consumed. Reusing a consumed token revokes its family.
+/// A token of another tenant is refused without being consumed, and so is the token of a locked-out user (read first
+/// with <see cref="IRefreshTokenStore.ValidateAsync"/>), so a lockout does not end the session: the token works again
+/// once the lockout ends. To disable an account, deactivate it or end its sessions instead of only locking it out.
+/// Reusing a consumed token revokes its family.
 /// The user must still exist, be active, not locked out, allowed to sign in, and have the security stamp
 /// captured when the token was issued. Every refresh failure returns <c>Invalid token</c>.
 /// </para>
@@ -613,6 +616,11 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         if (string.IsNullOrEmpty(tenantId) || string.IsNullOrEmpty(refreshToken))
             return AuthResult.Failure(InvalidRefreshToken);
 
+        // A locked-out user is refused before the token is consumed, so the session survives the lockout. Wrong
+        // passwords typed by anyone who knows the user name lock the account, and must not end the user's sessions.
+        if (_userManager.SupportsUserLockout && await LockedOutOwnerAsync(refreshToken, tenantId, cancellationToken) is { } lockedOutId)
+            return RefreshRefused(lockedOutId, "LockedOut");
+
         // Atomic: of two concurrent refreshes with one token, only one gets past this line.
         var consumed = await _refreshTokenStore.ConsumeAsync(refreshToken, tenantId, cancellationToken);
         if (consumed is not { Succeeded: true } || string.IsNullOrEmpty(consumed.UserId))
@@ -642,6 +650,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         if (user == null || IsInactive(user))
             return RefreshRefused(consumed.UserId, user == null ? "UnknownUser" : "Inactive");
 
+        // A lockout that started after the check above: the token is spent.
         if (_userManager.SupportsUserLockout && await _userManager.IsLockedOutAsync(user))
             return RefreshRefused(consumed.UserId, "LockedOut");
 
@@ -664,6 +673,44 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             SecurityLog.RefreshRefused(_events, tenantId, userId, reason);
             return AuthResult.Failure(InvalidRefreshToken);
         }
+    }
+
+    /// <summary>
+    /// The user id of a live refresh token of <paramref name="tenantId"/> whose user is locked out, read without
+    /// consuming the token (<see cref="IRefreshTokenStore.ValidateAsync"/>); otherwise <see langword="null"/>, and the
+    /// consume decides as usual.
+    /// </summary>
+    private async Task<string?> LockedOutOwnerAsync(string refreshToken, string tenantId, CancellationToken cancellationToken)
+    {
+        RefreshTokenValidationResult? peek;
+        try
+        {
+            peek = await _refreshTokenStore.ValidateAsync(refreshToken, cancellationToken);
+        }
+        catch (Exception e) when (e is NotImplementedException or NotSupportedException)
+        {
+            // A store without a lookup: the consume below decides, and a lockout spends the token as before.
+            return null;
+        }
+
+        if (peek is not { IsValid: true, UserId: { Length: > 0 } userId }
+            || !string.Equals(peek.TenantId, tenantId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        TUser? owner;
+        try
+        {
+            owner = await _userManager.FindByIdAsync(userId);
+        }
+        catch (Exception e) when (e is FormatException or NotSupportedException or ArgumentException)
+        {
+            return null;
+        }
+
+        return owner != null && await _userManager.IsLockedOutAsync(owner) ? userId : null;
     }
 
     /// <inheritdoc />
