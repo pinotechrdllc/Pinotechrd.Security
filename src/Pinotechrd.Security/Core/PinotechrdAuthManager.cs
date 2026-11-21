@@ -102,6 +102,8 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     private readonly ILogger? _events;
     private readonly IUserStore<TUser>? _userStore;
     private const int MaxFailedCountRetries = 10;
+    // Every concurrent failure but one loses each round, so this bounds how many parallel failures all count.
+    private const int MaxFailedAttemptRetries = 100;
     private const string ByPassword = "Password";
     private const string ByTwoFactor = "TwoFactor";
     private const string ByRefresh = "Refresh";
@@ -187,8 +189,14 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         cancellationToken.ThrowIfCancellationRequested();
         // Read from the loaded entity (no query), so the lockout this attempt causes can be told from an earlier one.
         var wasLockedOut = _userManager.SupportsUserLockout && await _userManager.IsLockedOutAsync(user);
-        // 2. Check password (lockout semantics are Identity's: lockoutOnFailure stays on)
-        var result = await _signInManager.CheckPasswordSignInAsync(user, password, lockoutOnFailure: true);
+        // 2. Check password. The failure is counted here rather than by Identity (lockoutOnFailure), which drops the
+        // count when a concurrent failure updated the user first: parallel wrong passwords would then never lock it.
+        var result = await _signInManager.CheckPasswordSignInAsync(user, password, lockoutOnFailure: false);
+        if (!result.Succeeded && !result.IsLockedOut && !result.IsNotAllowed && _userManager.SupportsUserLockout)
+        {
+            var recorded = await RecordFailedAttemptAsync(user);
+            if (recorded != null && await _userManager.IsLockedOutAsync(recorded)) result = SignInResult.LockedOut;
+        }
 
         if (!result.Succeeded)
         {
@@ -526,13 +534,33 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     }
 
     /// <summary>
-    /// Increments the Identity failed-access count. Concurrent wrong codes make the update fail on the concurrency
-    /// stamp; the user is then reloaded and the increment retried, a bounded number of times.
+    /// Increments the Identity failed-access count (and locks the account at the limit). Concurrent wrong passwords or
+    /// codes make the update fail on the concurrency stamp; the user is then reloaded and the increment retried after
+    /// a short random delay, up to <see cref="MaxFailedAttemptRetries"/> times, so every failure counts. Once a
+    /// concurrent failure has locked the account, the lockout already applies and nothing more is written.
     /// </summary>
-    /// <returns><see langword="true"/> when the failure was recorded.</returns>
-    /// <returns>The (possibly reloaded) user once the failure is recorded; <see langword="null"/> when it could not be.</returns>
-    private Task<TUser?> RecordFailedAttemptAsync(TUser user)
-        => RetryOnConcurrencyAsync(user, u => _userManager.AccessFailedAsync(u));
+    /// <returns>The (possibly reloaded) user once the failure is recorded or the account is locked out;
+    /// <see langword="null"/> when it could not be recorded.</returns>
+    private async Task<TUser?> RecordFailedAttemptAsync(TUser user)
+    {
+        for (var attempt = 0; attempt < MaxFailedAttemptRetries; attempt++)
+        {
+            var result = await _userManager.AccessFailedAsync(user);
+            if (result?.Succeeded == true) return user;
+            if (!IsConcurrencyFailure(result)) return null;
+
+            await Task.Delay(Random.Shared.Next(1, 2 + Math.Min(attempt, 20) * 2));
+            var reloaded = await ReloadUserAsync(user);
+            if (reloaded == null) return null;
+            user = reloaded;
+            if (await _userManager.IsLockedOutAsync(user)) return user;
+        }
+
+        return null;
+    }
+
+    private static bool IsConcurrencyFailure(IdentityResult? result) =>
+        result?.Errors.Any(e => e.Code == nameof(IdentityErrorDescriber.ConcurrencyFailure)) == true;
 
     /// <summary>
     /// Runs a user update; on a concurrency conflict, reloads the user and, if <paramref name="stillValid"/>
@@ -549,8 +577,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             var result = await update(user);
             if (result?.Succeeded == true) return user;
 
-            var concurrency = result?.Errors.Any(e => e.Code == nameof(IdentityErrorDescriber.ConcurrencyFailure)) == true;
-            if (!concurrency) return null;
+            if (!IsConcurrencyFailure(result)) return null;
 
             var reloaded = await ReloadUserAsync(user);
             if (reloaded == null) return null;
@@ -563,8 +590,9 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
 
     private async Task<TUser?> ReloadUserAsync(TUser user)
     {
-        // An EF Core store keeps returning the tracked (stale) instance from FindByIdAsync, so reload the entry.
-        if (_securityDbContext is DbContext context)
+        // An EF Core store keeps returning the tracked (stale) instance from FindByIdAsync, so reload the entry, in the
+        // context the users are read from.
+        if ((UserStoreContext(_userStore) ?? _securityDbContext as DbContext) is { } context)
         {
             var entry = context.Entry(user);
             if (entry.State != EntityState.Detached)
