@@ -135,6 +135,35 @@ public class PinotechrdAuthManagerTests
     }
 
     [Fact]
+    public async Task RefreshAsync_ShouldNotConsumeTheToken_WhenTheUserIsLockedOut()
+    {
+        var (kit, user) = NewKit();
+        kit.RefreshStore.ValidateAsync("refresh-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new RefreshTokenValidationResult(true, user.Id.ToString(), Tenant)));
+        Consumes(kit, "refresh-1", Consumed(user, kit.StampOf(user)));
+        kit.LockOut(user);
+
+        (await kit.Manager.RefreshAsync("refresh-1")).Should().Be(InvalidToken);
+
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().ConsumeAsync(default!, default!, default);
+        await kit.RefreshStore.DidNotReceiveWithAnyArgs().SaveAsync(default!, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_ShouldKeepTheSessionThroughALockout_WithTheRealStore()
+    {
+        var store = new InMemoryRefreshTokenStore();
+        var kit = new AuthManagerTestKit<RefreshUser>(tenant: Tenant, refreshStore: store);
+        kit.TokenProvider.GenerateRefreshToken().Returns(_ => Guid.NewGuid().ToString("N"));
+        var user = kit.AddUser("alice@x.test");
+        var token = (await kit.Manager.LoginAsync("alice@x.test", AuthManagerTestKit<RefreshUser>.Password, Tenant)).Token!.RefreshToken;
+
+        kit.LockOut(user);
+        (await kit.Manager.RefreshAsync(token)).Should().Be(InvalidToken);
+        (await store.ValidateAsync(token)).IsValid.Should().BeTrue("the refused refresh did not consume the token");
+    }
+
+    [Fact]
     public async Task RefreshAsync_ShouldFailWithInvalidToken_WhenTheUserCannotSignIn()
     {
         var (kit, user) = NewKit();

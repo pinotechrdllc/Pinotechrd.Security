@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -616,6 +617,32 @@ public class PostgresRefreshTokenStoreTests(PostgresFixture postgres) : IAsyncLi
         replay.Should().Be(HttpStatusCode.Unauthorized);
         afterReplayOnA.Should().Be(HttpStatusCode.Unauthorized, "the replay on B revoked the family the new token belongs to");
         afterReplayOnB.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public async Task Refresh_ShouldBeRefusedWithoutConsumingTheToken_WhileTheUserIsLockedOut(TenantSchemaMode mode)
+    {
+        await using var api = await StartHostAsync(mode, withUser: true);
+        var (_, refresh) = await api.LoginAsync(Email, TenantA);
+
+        Task<bool> SetLockoutAsync(DateTimeOffset? end) => api.InTenantAsync(TenantA, async sp =>
+        {
+            var users = sp.GetRequiredService<UserManager<HostUser>>();
+            return (await users.SetLockoutEndDateAsync((await users.FindByEmailAsync(Email))!, end)).Succeeded;
+        });
+
+        (await SetLockoutAsync(DateTimeOffset.UtcNow.AddMinutes(10))).Should().BeTrue();
+        var (locked, _) = await RefreshAsync(api, refresh);
+        var stillValid = await api.InTenantAsync(TenantA, async sp => (await sp.GetRequiredService<IRefreshTokenStore>().ValidateAsync(refresh)).IsValid);
+
+        (await SetLockoutAsync(null)).Should().BeTrue();
+        var (afterLockout, next) = await RefreshAsync(api, refresh);
+
+        locked.Should().Be(HttpStatusCode.Unauthorized);
+        stillValid.Should().BeTrue("the refused refresh left the token unconsumed");
+        afterLockout.Should().Be(HttpStatusCode.OK, "the session survived the lockout");
+        next.Should().NotBe(refresh);
     }
 
     [Theory]
