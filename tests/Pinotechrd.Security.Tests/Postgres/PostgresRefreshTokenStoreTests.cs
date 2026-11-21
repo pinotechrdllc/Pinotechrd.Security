@@ -586,16 +586,22 @@ public class PostgresRefreshTokenStoreTests(PostgresFixture postgres) : IAsyncLi
 
     [Theory]
     [MemberData(nameof(Modes))]
-    public async Task Refresh_ShouldSucceedForExactlyOneClient_When32ClientsRefreshTheSameTokenOverHttp(TenantSchemaMode mode)
+    public async Task Refresh_ShouldIssueAtMostOneUsableSession_When32ClientsRefreshTheSameTokenOverHttp(TenantSchemaMode mode)
     {
+        // Exactly one refresh consumes the token; the other 31 replay a consumed token, which revokes the family. The
+        // winner's rotation then fails if a replay revoked the family first (fail closed), so at most one gets 200, and
+        // whatever it got is already dead.
         await using var api = await StartHostAsync(mode, withUser: true);
         var (_, refresh) = await api.LoginAsync(Email, TenantA);
 
-        var statuses = await Task.WhenAll(Enumerable.Range(0, 32).Select(_ => Task.Run(async () =>
-            (await api.PostAsync("/api/auth/refresh", new RefreshRequest(refresh), TenantA)).StatusCode)));
+        var results = await Task.WhenAll(Enumerable.Range(0, 32).Select(_ => Task.Run(() => RefreshAsync(api, refresh))));
 
-        statuses.Count(s => s == HttpStatusCode.OK).Should().Be(1);
-        statuses.Count(s => s == HttpStatusCode.Unauthorized).Should().Be(31);
+        results.Count(r => r.Status == HttpStatusCode.OK).Should().BeLessThanOrEqualTo(1);
+        results.Should().OnlyContain(r => r.Status == HttpStatusCode.OK || r.Status == HttpStatusCode.Unauthorized);
+        foreach (var (_, issued) in results.Where(r => r.Status == HttpStatusCode.OK))
+        {
+            (await RefreshAsync(api, issued!)).Status.Should().Be(HttpStatusCode.Unauthorized, "the replays revoked the family");
+        }
     }
 
     // ---- Restart and several hosts -----------------------------------------------------------
