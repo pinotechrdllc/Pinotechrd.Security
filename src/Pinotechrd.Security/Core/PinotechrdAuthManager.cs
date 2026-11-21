@@ -192,10 +192,12 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         // 2. Check password. The failure is counted here rather than by Identity (lockoutOnFailure), which drops the
         // count when a concurrent failure updated the user first: parallel wrong passwords would then never lock it.
         var result = await _signInManager.CheckPasswordSignInAsync(user, password, lockoutOnFailure: false);
+        var causedLockout = false;
         if (!result.Succeeded && !result.IsLockedOut && !result.IsNotAllowed && _userManager.SupportsUserLockout)
         {
             var recorded = await RecordFailedAttemptAsync(user);
-            if (recorded != null && await _userManager.IsLockedOutAsync(recorded)) result = SignInResult.LockedOut;
+            causedLockout = recorded.CausedLockout;
+            if (recorded.User != null && await _userManager.IsLockedOutAsync(recorded.User)) result = SignInResult.LockedOut;
         }
 
         if (!result.Succeeded)
@@ -212,7 +214,7 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
                 : !hasPassword ? "NoPassword"
                 : "WrongPassword";
             SecurityLog.SignInFailed(_events, tenantId, userId, reason);
-            if (result.IsLockedOut && !wasLockedOut) SecurityLog.AccountLockedOut(_events, tenantId, userId);
+            if (causedLockout) SecurityLog.AccountLockedOut(_events, tenantId, userId);
             return AuthResult.Failure(InvalidCredentials);
         }
 
@@ -432,12 +434,12 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
             if (_userManager.SupportsUserLockout)
             {
                 var recorded = await RecordFailedAttemptAsync(user);
-                if (recorded == null)
+                if (recorded.User == null)
                 {
                     await _twoFactorAttempts!.ExhaustAsync(ticket.ChallengeId, ticket.ExpiresAt, CancellationToken.None);
                     exhausted = true;
                 }
-                else if (await _userManager.IsLockedOutAsync(recorded))
+                else if (recorded.CausedLockout)
                 {
                     // Wrong codes count toward the Identity lockout too.
                     SecurityLog.AccountLockedOut(_events, ticket.TenantId, userId);
@@ -537,26 +539,32 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// Increments the Identity failed-access count (and locks the account at the limit). Concurrent wrong passwords or
     /// codes make the update fail on the concurrency stamp; the user is then reloaded and the increment retried after
     /// a short random delay, up to <see cref="MaxFailedAttemptRetries"/> times, so every failure counts. Once a
-    /// concurrent failure has locked the account, the lockout already applies and nothing more is written.
+    /// concurrent failure has locked the account, the lockout already applies and nothing more is written. A user
+    /// whose lockout is disabled is not counted (the count could lock nothing), so parallel failures cost no retries.
+    /// The count is written to the end even if the request is cancelled: a client that disconnects must not escape it.
     /// </summary>
-    /// <returns>The (possibly reloaded) user once the failure is recorded or the account is locked out;
-    /// <see langword="null"/> when it could not be recorded.</returns>
-    private async Task<TUser?> RecordFailedAttemptAsync(TUser user)
+    /// <returns>The (possibly reloaded) user once the failure is recorded, the account is locked out, or lockout is
+    /// disabled for it, or no user when it could not be recorded; and whether this call's increment locked it.</returns>
+    private async Task<(TUser? User, bool CausedLockout)> RecordFailedAttemptAsync(TUser user)
     {
+        if (!await _userManager.GetLockoutEnabledAsync(user)) return (user, false);
+
         for (var attempt = 0; attempt < MaxFailedAttemptRetries; attempt++)
         {
             var result = await _userManager.AccessFailedAsync(user);
-            if (result?.Succeeded == true) return user;
-            if (!IsConcurrencyFailure(result)) return null;
+            if (result?.Succeeded == true) return (user, await _userManager.IsLockedOutAsync(user));
+            if (!IsConcurrencyFailure(result)) break;
 
             await Task.Delay(Random.Shared.Next(1, 2 + Math.Min(attempt, 20) * 2));
             var reloaded = await ReloadUserAsync(user);
-            if (reloaded == null) return null;
+            if (reloaded == null) return (null, false);
             user = reloaded;
-            if (await _userManager.IsLockedOutAsync(user)) return user;
+            if (await _userManager.IsLockedOutAsync(user)) return (user, false);
         }
 
-        return null;
+        // Not recorded: drop the pending increment, so a later save in this scope does not write it.
+        await ReloadUserAsync(user);
+        return (null, false);
     }
 
     private static bool IsConcurrencyFailure(IdentityResult? result) =>
