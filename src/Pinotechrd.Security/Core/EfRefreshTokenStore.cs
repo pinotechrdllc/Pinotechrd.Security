@@ -99,6 +99,32 @@ internal sealed class EfRefreshTokenStore<TContext> : IRefreshTokenStore
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The family must still have a token of <paramref name="userId"/> in <paramref name="tenantId"/> that has not
+    /// expired, and no revocation; a purged family has no tokens left, so it is never recreated.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The token value is already stored.</exception>
+    public async Task<bool> RotateAsync(
+        string familyId,
+        string userId,
+        string tenantId,
+        string refreshToken,
+        DateTime expiresAtUtc,
+        string? securityStamp = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(familyId);
+        var now = UtcNow;
+        var live = await Tokens.AnyAsync(
+            t => t.FamilyId == familyId && t.UserId == userId && t.TenantId == tenantId && t.ExpiresAt > now,
+            cancellationToken);
+        if (!live || await IsFamilyRevokedAsync(familyId, cancellationToken)) return false;
+
+        await SaveAsync(userId, tenantId, refreshToken, expiresAtUtc, familyId, securityStamp, cancellationToken);
+        return true;
+    }
+
+    /// <inheritdoc />
     public async Task<RefreshTokenValidationResult> ValidateAsync(string refreshToken, CancellationToken cancellationToken = default)
     {
         var token = await FindAsync(RefreshTokenHash.Compute(refreshToken), cancellationToken);

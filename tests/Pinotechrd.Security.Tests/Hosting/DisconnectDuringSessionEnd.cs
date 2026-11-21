@@ -62,6 +62,9 @@ internal static class DisconnectDuringSessionEnd
         public Task SaveAsync(string userId, string tenantId, string refreshToken, DateTime expiresAtUtc, string? familyId = null, string? securityStamp = null, CancellationToken cancellationToken = default)
             => _inner.SaveAsync(userId, tenantId, refreshToken, expiresAtUtc, familyId, securityStamp, cancellationToken);
 
+        public Task<bool> RotateAsync(string familyId, string userId, string tenantId, string refreshToken, DateTime expiresAtUtc, string? securityStamp = null, CancellationToken cancellationToken = default)
+            => _inner.RotateAsync(familyId, userId, tenantId, refreshToken, expiresAtUtc, securityStamp, cancellationToken);
+
         public Task<RefreshTokenValidationResult> ValidateAsync(string refreshToken, CancellationToken cancellationToken = default)
             => _inner.ValidateAsync(refreshToken, cancellationToken);
 

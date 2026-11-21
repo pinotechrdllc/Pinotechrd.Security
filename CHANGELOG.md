@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **`IRefreshTokenStore` tells a new family from a rotation.** The library used to call `SaveAsync` with a family id on every sign-in too (`Guid.NewGuid()` when there was none), so a store could not tell a sign-in from a rotation, nor refuse to recreate a family it had purged. Now a sign-in calls `SaveAsync(..., familyId: null, ...)` and the store chooses the id, and a refresh calls the new `Task<bool> RotateAsync(familyId, userId, tenantId, refreshToken, expiresAtUtc, securityStamp, cancellationToken)`. `RotateAsync` returns `false`, storing nothing, when the store no longer has that family for that user and tenant with an unexpired token (never issued, purged, expired) or the family is revoked; `RefreshAsync` then fails with `Invalid token` (event 4206, reason `FamilyEnded`) and the user signs in again. `InMemoryRefreshTokenStore` and the EF Core store implement it. Migration for a custom store:
+  - add `RotateAsync`: check that the family has a token of that user and tenant that has not expired, and no revocation; if not, return `false`; otherwise store the token in that family as `SaveAsync` would and return `true`;
+  - in `SaveAsync`, create a new family id when `familyId` is `null` (it always is when the library calls it);
+  - test doubles of `IRefreshTokenStore` (for example NSubstitute) return `false` from `RotateAsync` by default, so refreshes through them fail until it is set up.
+
 ### Added
 
 - **`IAccessTokenSessionValidator`**, a public form of the check that refuses access tokens of ended sessions, for hosts that resolve the tenant without `UseTenantResolution`. `AddPinotechrdSecurity` registers it as a scoped service. `IsSessionActiveAsync(principal, tenantId, cancellationToken)` returns `true` only when every authenticated identity of the principal with claims issued by `Jwt.Issuer` names that tenant and its user exists there, is active and still has the session the token was issued for; it returns `false` after sign-out, `RevokeUserSessionsAsync`, a password change or reset, deactivation or deletion, and for a principal without such an identity. It always checks, whatever `Jwt.ValidateSecurityStamp` says, and honours `Jwt.SecurityStampValidationInterval`. Call it once the request's data access points at the resolved tenant. See README, "Refresh tokens and sign-out".

@@ -221,7 +221,7 @@ public class PinotechrdAuthManagerLoginTests
         result.Token!.AccessToken.Should().Be("access-token");
         await kit.RefreshStore.Received(1).SaveAsync(
             user.Id.ToString(), "tenant-a", "refresh-token", Arg.Any<DateTime>(),
-            Arg.Is<string?>(f => !string.IsNullOrEmpty(f)), Arg.Is<string?>(st => st == kit.StampOf(user)), Arg.Any<CancellationToken>());
+            Arg.Is<string?>(f => f == null), Arg.Is<string?>(st => st == kit.StampOf(user)), Arg.Any<CancellationToken>());
         kit.Hasher.Verifications.Should().BeEmpty();
     }
 

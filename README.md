@@ -596,6 +596,7 @@ The margin (default one hour, `IPinotechrdSessionPurger.DefaultMargin`) keeps ro
 
 - `ConsumeAsync` must be atomic: a read followed by a write lets two concurrent refreshes through.
 - A revoked family stays revoked: a token saved into it later, including by a rotation that raced the revocation, must never be consumed.
+- `SaveAsync` starts a new family: the library passes `familyId: null` and the store chooses the id. A refresh saves the next token with `RotateAsync(familyId, userId, tenantId, ...)`, which must return `false`, storing nothing, unless the store still has that family for that user and tenant with a token that has not expired, and it is not revoked. So a family you purged (for example after an absolute session lifetime) is never recreated: the refresh fails and the user signs in again.
 - Order of the checks: unknown token is `NotFound`; another tenant is `TenantMismatch` and changes nothing; family revoked is `Revoked`; already consumed is `Reused` and revokes the family, even if the token has also expired or was revoked on its own; revoked is `Revoked`; expired is `Expired`; otherwise the token is consumed.
 - Expiry is decided by the store's clock against the expiry passed to `SaveAsync`: the built-in stores use the injected `TimeProvider` and pass it as a parameter to the database. A store that uses the database clock (`now()`) instead must keep the clocks synchronised.
 - Refuse a token value that already exists; never reset its state. Store a hash of the token, not the token.

@@ -7,8 +7,8 @@ namespace Pinotechrd.Security.Interfaces;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Tokens belong to a family: the first token of a sign-in starts one, and every token issued by rotating it
-/// joins the same family. Presenting a token that was already consumed is treated as theft (RFC 9700,
+/// Tokens belong to a family: the first token of a sign-in starts one (<see cref="SaveAsync"/>), and every token
+/// issued by rotating it joins the same family (<see cref="RotateAsync"/>). Presenting a token that was already consumed is treated as theft (RFC 9700,
 /// section 4.14.2): the store revokes the whole family. Implementations must make
 /// <see cref="ConsumeAsync"/> atomic, so that of two concurrent calls with the same token exactly one succeeds.
 /// </para>
@@ -26,6 +26,9 @@ namespace Pinotechrd.Security.Interfaces;
 /// <see cref="SaveAsync"/>. The built-in stores read an injected <see cref="TimeProvider"/> once per call and,
 /// in a database, send that instant as a parameter of the atomic consume. A store may use the database clock
 /// (<c>now()</c>) instead; then keep application and database clocks synchronised.</description></item>
+/// <item><description><see cref="RotateAsync"/> saves into a family only while the store still has it, for that user
+/// and tenant, with a token that has not expired, and it is not revoked; otherwise it returns <see langword="false"/>
+/// and stores nothing. A family the store purged or never issued is never recreated.</description></item>
 /// <item><description>Saving a token value that already exists must not reset its state; refuse it.</description></item>
 /// <item><description>Store a hash of the token (for example SHA-256), never the token itself.</description></item>
 /// </list>
@@ -44,13 +47,19 @@ namespace Pinotechrd.Security.Interfaces;
 public interface IRefreshTokenStore
 {
     /// <summary>
-    /// Persists a refresh token for later consumption.
+    /// Persists the first refresh token of a sign-in, starting a new family.
     /// </summary>
+    /// <remarks>
+    /// The library always passes <see langword="null"/> for <paramref name="familyId"/>, so the store chooses the id;
+    /// it calls <see cref="RotateAsync"/> for a token that replaces a consumed one. A store may refuse a non-null
+    /// <paramref name="familyId"/> (throw <see cref="NotSupportedException"/>).
+    /// </remarks>
     /// <param name="userId">Owner user identifier.</param>
     /// <param name="tenantId">Tenant identifier bound to this token.</param>
     /// <param name="refreshToken">Opaque refresh token value. Store a hash, not the value.</param>
     /// <param name="expiresAtUtc">Expiration date in UTC.</param>
-    /// <param name="familyId">Family the token joins. <see langword="null"/> starts a new family.</param>
+    /// <param name="familyId">Family id for the new family; <see langword="null"/> (what the library passes) lets the
+    /// store choose one.</param>
     /// <param name="securityStamp">Security stamp of the user when the token was issued, if the user store has one.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <exception cref="InvalidOperationException">The token value is already stored (implementations should refuse duplicates).</exception>
@@ -60,6 +69,35 @@ public interface IRefreshTokenStore
         string refreshToken,
         DateTime expiresAtUtc,
         string? familyId = null,
+        string? securityStamp = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Persists the refresh token that replaces a consumed one in its family (rotation).
+    /// </summary>
+    /// <remarks>
+    /// Called by <c>RefreshAsync</c> right after <see cref="ConsumeAsync"/> returned
+    /// <see cref="RefreshTokenConsumeStatus.Consumed"/> with <paramref name="familyId"/>. Return
+    /// <see langword="false"/>, storing nothing, when the family is not one the store still has for
+    /// <paramref name="userId"/> in <paramref name="tenantId"/> with an unexpired token (never issued, purged, or
+    /// expired), or when it is revoked; the refresh then fails and the user signs in again. A family revoked after this
+    /// check must still never be consumed (see the rules above).
+    /// </remarks>
+    /// <param name="familyId">Family of the consumed token.</param>
+    /// <param name="userId">Owner user identifier.</param>
+    /// <param name="tenantId">Tenant identifier bound to this token.</param>
+    /// <param name="refreshToken">Opaque refresh token value. Store a hash, not the value.</param>
+    /// <param name="expiresAtUtc">Expiration date in UTC.</param>
+    /// <param name="securityStamp">Security stamp of the user when the token was issued, if the user store has one.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when the token was stored in the family.</returns>
+    /// <exception cref="InvalidOperationException">The token value is already stored.</exception>
+    Task<bool> RotateAsync(
+        string familyId,
+        string userId,
+        string tenantId,
+        string refreshToken,
+        DateTime expiresAtUtc,
         string? securityStamp = null,
         CancellationToken cancellationToken = default);
 

@@ -89,7 +89,14 @@ internal sealed class AuthManagerTestKit<TUser> where TUser : BaseSecurityUser, 
         SignInManager = CreateSignInManager(UserManager);
         Engine = Substitute.For<ISecurityEngine>();
         TokenProvider = Substitute.For<ITokenProvider>();
-        RefreshStore = refreshStore ?? Substitute.For<IRefreshTokenStore>();
+        if (refreshStore == null)
+        {
+            refreshStore = Substitute.For<IRefreshTokenStore>();
+            // A rotation into the consumed token's family is stored, as a real store does while it has the family.
+            refreshStore.RotateAsync(default!, default!, default!, default!, default).ReturnsForAnyArgs(Task.FromResult(true));
+        }
+
+        RefreshStore = refreshStore;
         DataProtection = withDataProtection ? new EphemeralDataProtectionProvider() : null;
 
         UserManager.SupportsUserLockout.Returns(true);

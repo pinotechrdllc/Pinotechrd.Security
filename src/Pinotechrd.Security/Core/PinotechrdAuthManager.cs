@@ -332,14 +332,17 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
         var expiresAt = now.AddMinutes(_options.Jwt.ExpiryMinutes);
         var refreshTokenExpiresAt = now.AddDays(_options.Jwt.RefreshTokenExpiryDays);
 
-        await _refreshTokenStore.SaveAsync(
-            userId,
-            tenantId,
-            refreshToken,
-            refreshTokenExpiresAt,
-            familyId ?? Guid.NewGuid().ToString("N"),
-            securityStamp,
-            cancellationToken);
+        if (familyId == null)
+        {
+            // A sign-in starts a new family; the store chooses its id.
+            await _refreshTokenStore.SaveAsync(userId, tenantId, refreshToken, refreshTokenExpiresAt, null, securityStamp, cancellationToken);
+        }
+        else if (!await _refreshTokenStore.RotateAsync(familyId, userId, tenantId, refreshToken, refreshTokenExpiresAt, securityStamp, cancellationToken))
+        {
+            // The store no longer has the family (purged, expired or revoked meanwhile): it is not recreated.
+            SecurityLog.RefreshRefused(_events, tenantId, userId, "FamilyEnded");
+            return AuthResult.Failure(InvalidRefreshToken);
+        }
 
         SecurityLog.TokensIssued(_events, tenantId, userId, method);
         return AuthResult.Success(
