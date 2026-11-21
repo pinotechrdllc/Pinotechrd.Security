@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and this project uses Semantic Versionin
 
 ## [Unreleased]
 
+## [1.2.0-preview.6] - 2026-11-21
+
 ### Added
 
 - **`IAccessTokenSessionValidator`**, a public form of the check that refuses access tokens of ended sessions, for hosts that resolve the tenant without `UseTenantResolution`. `AddPinotechrdSecurity` registers it as a scoped service. `IsSessionActiveAsync(principal, tenantId, cancellationToken)` returns `true` only when every authenticated identity of the principal with claims issued by `Jwt.Issuer` names that tenant and its user exists there, is active and still has the session the token was issued for; it returns `false` after sign-out, `RevokeUserSessionsAsync`, a password change or reset, deactivation or deletion, and for a principal without such an identity. It always checks, whatever `Jwt.ValidateSecurityStamp` says, and honours `Jwt.SecurityStampValidationInterval`. Call it once the request's data access points at the resolved tenant. See README, "Refresh tokens and sign-out".

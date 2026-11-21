@@ -32,8 +32,10 @@ Only preview versions have been published so far. Security fixes are released as
 | `<= 1.2.0-preview.4` | `1.2.0-preview.5` | Bearer settings an application added (extra issuers or audiences, custom issuer, audience, lifetime or algorithm validators, a larger clock skew) silently widened the documented token validation policy. |
 | `<= 1.2.0-preview.4` | `1.2.0-preview.5` | `GetPrincipalFromExpiredToken` accepted signed access tokens of any age, so a session renewed through it bypassed refresh-token revocation. |
 | `<= 1.2.0-preview.4` | `1.2.0-preview.5` | Permissions of a module outside the tenant's plan could be granted: `CORE` was always active in the menu and in token permission claims, permissions without a module or seeded under another module's code were accepted, and permission listing without a resolved tenant skipped the plan filter. |
+| `<= 1.2.0-preview.5` | `1.2.0-preview.6` | Wrong passwords sent in parallel were not all counted toward the Identity lockout (a concurrency conflict dropped the count), so an attacker could try many more passwords than the lockout allows. |
+| `<= 1.2.0-preview.5` | `1.2.0-preview.6` | A refresh while the account was locked out spent the refresh token, so anyone who knows a user name could end that user's sessions by locking the account with wrong passwords. |
 
-Upgrade to `1.2.0-preview.5` or later; see the changelog for the breaking changes and the migration steps.
+Upgrade to `1.2.0-preview.6` or later; see the changelog for the breaking changes and the migration steps.
 
 ## Reporting a Vulnerability
 
