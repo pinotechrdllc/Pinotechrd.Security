@@ -27,7 +27,8 @@ namespace Pinotechrd.Security.Interfaces;
 /// in a database, send that instant as a parameter of the atomic consume. A store may use the database clock
 /// (<c>now()</c>) instead; then keep application and database clocks synchronised.</description></item>
 /// <item><description><see cref="RotateAsync"/> saves into a family only while the store still has it, for that user
-/// and tenant, with a token that has not expired, and it is not revoked; otherwise it returns <see langword="false"/>
+/// and tenant, with a token that has not expired (consumed tokens count: the one just consumed usually is the only
+/// one), and it is not revoked; otherwise it returns <see langword="false"/>
 /// and stores nothing. A family the store purged or never issued is never recreated.</description></item>
 /// <item><description>Saving a token value that already exists must not reset its state; refuse it.</description></item>
 /// <item><description>Store a hash of the token (for example SHA-256), never the token itself.</description></item>
@@ -80,8 +81,14 @@ public interface IRefreshTokenStore
     /// <see cref="RefreshTokenConsumeStatus.Consumed"/> with <paramref name="familyId"/>. Return
     /// <see langword="false"/>, storing nothing, when the family is not one the store still has for
     /// <paramref name="userId"/> in <paramref name="tenantId"/> with an unexpired token (never issued, purged, or
-    /// expired), or when it is revoked; the refresh then fails and the user signs in again. A family revoked after this
-    /// check must still never be consumed (see the rules above).
+    /// expired), or when it is revoked; the refresh then fails and the user signs in again. Consumed tokens count as the
+    /// family's tokens: the token <c>RefreshAsync</c> has just consumed is usually the only one. A family revoked after
+    /// this check must still never be consumed (see the rules above). PostgreSQL sketch of the check:
+    /// <code>
+    /// SELECT EXISTS (SELECT 1 FROM refresh_tokens t
+    ///                WHERE t.family_id = @family AND t.user_id = @user AND t.tenant_id = @tenant AND t.expires_at &gt; now())
+    ///    AND NOT EXISTS (SELECT 1 FROM refresh_token_families f WHERE f.family_id = @family AND f.revoked_at IS NOT NULL);
+    /// </code>
     /// </remarks>
     /// <param name="familyId">Family of the consumed token.</param>
     /// <param name="userId">Owner user identifier.</param>

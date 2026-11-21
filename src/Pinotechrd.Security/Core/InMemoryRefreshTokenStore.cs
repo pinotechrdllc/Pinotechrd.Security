@@ -75,8 +75,12 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
         CancellationToken cancellationToken = default)
     {
         PurgeIfLarge();
+        Insert(userId, tenantId, refreshToken, expiresAtUtc, familyId ?? Guid.NewGuid().ToString("N"), securityStamp);
+        return Task.CompletedTask;
+    }
 
-        var family = familyId ?? Guid.NewGuid().ToString("N");
+    private void Insert(string userId, string tenantId, string refreshToken, DateTime expiresAtUtc, string family, string? securityStamp)
+    {
         var entry = new RefreshTokenEntry
         {
             UserId = userId,
@@ -104,8 +108,6 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
 
             _revokedFamilies[family] = familyExpiry > expiresAtUtc ? familyExpiry : expiresAtUtc;
         }
-
-        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -114,7 +116,7 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
     /// that has not expired, and not be revoked; a purged family is never recreated.
     /// </remarks>
     /// <exception cref="InvalidOperationException">The token value is already stored.</exception>
-    public async Task<bool> RotateAsync(
+    public Task<bool> RotateAsync(
         string familyId,
         string userId,
         string tenantId,
@@ -124,6 +126,8 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(familyId);
+        // Purge first: a purge between the check and the insert could drop the family and let the insert recreate it.
+        PurgeIfLarge();
         if (!_familyOwners.TryGetValue(familyId, out var owner)
             || !string.Equals(owner.UserId, userId, StringComparison.Ordinal)
             || !string.Equals(owner.TenantId, tenantId, StringComparison.Ordinal)
@@ -131,11 +135,11 @@ public class InMemoryRefreshTokenStore : IRefreshTokenStore
             || latest <= UtcNow
             || _revokedFamilies.ContainsKey(familyId))
         {
-            return false;
+            return Task.FromResult(false);
         }
 
-        await SaveAsync(userId, tenantId, refreshToken, expiresAtUtc, familyId, securityStamp, cancellationToken);
-        return true;
+        Insert(userId, tenantId, refreshToken, expiresAtUtc, familyId, securityStamp);
+        return Task.FromResult(true);
     }
 
     /// <inheritdoc />
