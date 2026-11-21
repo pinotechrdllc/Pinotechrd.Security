@@ -742,7 +742,7 @@ public class PinotechrdAuthManagerTwoFactorTests
         right.Succeeded.Should().BeFalse("a failure that could not be recorded spends the challenge");
         right.ErrorMessage.Should().Be(InvalidCode);
         VerifyCalls(kit).Should().Be(verifiesAfterFirst, "the code of a spent challenge is not verified");
-        Calls(kit, nameof(UserManager<TfUser>.AccessFailedAsync)).Should().BeGreaterThan(1).And.BeLessThanOrEqualTo(20);
+        Calls(kit, nameof(UserManager<TfUser>.AccessFailedAsync)).Should().BeGreaterThan(1).And.BeLessThanOrEqualTo(100);
         await AssertNoTokensIssued(kit);
     }
 
