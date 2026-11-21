@@ -66,8 +66,9 @@ namespace Pinotechrd.Security.Core;
 /// <para>
 /// Refresh: the presented token is consumed atomically through <see cref="IRefreshTokenStore.ConsumeAsync"/>.
 /// A token of another tenant is refused without being consumed, and so is the token of a locked-out user (read first
-/// with <see cref="IRefreshTokenStore.ValidateAsync"/>), so a lockout does not end the session. Reusing a consumed
-/// token revokes its family.
+/// with <see cref="IRefreshTokenStore.ValidateAsync"/>), so a lockout does not end the session: the token works again
+/// once the lockout ends. To disable an account, deactivate it or end its sessions instead of only locking it out.
+/// Reusing a consumed token revokes its family.
 /// The user must still exist, be active, not locked out, allowed to sign in, and have the security stamp
 /// captured when the token was issued. Every refresh failure returns <c>Invalid token</c>.
 /// </para>
@@ -681,7 +682,17 @@ public class PinotechrdAuthManager<TUser> : IPinotechrdAuthManager<TUser> where 
     /// </summary>
     private async Task<string?> LockedOutOwnerAsync(string refreshToken, string tenantId, CancellationToken cancellationToken)
     {
-        var peek = await _refreshTokenStore.ValidateAsync(refreshToken, cancellationToken);
+        RefreshTokenValidationResult? peek;
+        try
+        {
+            peek = await _refreshTokenStore.ValidateAsync(refreshToken, cancellationToken);
+        }
+        catch (Exception e) when (e is NotImplementedException or NotSupportedException)
+        {
+            // A store without a lookup: the consume below decides, and a lockout spends the token as before.
+            return null;
+        }
+
         if (peek is not { IsValid: true, UserId: { Length: > 0 } userId }
             || !string.Equals(peek.TenantId, tenantId, StringComparison.Ordinal))
         {
