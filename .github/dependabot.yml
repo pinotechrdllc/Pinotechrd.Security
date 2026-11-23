@@ -8,6 +8,17 @@ updates:
       day: "monday"
       time: "06:00"
     open-pull-requests-limit: 10
+    # The packages follow the target framework (net10.0): their next major (11.x) comes with the move to the next
+    # framework, not as a weekly update.
+    ignore:
+      - dependency-name: "Microsoft.AspNetCore.*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "Microsoft.EntityFrameworkCore*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "Microsoft.Extensions.*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "Npgsql*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
